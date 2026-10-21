@@ -1,0 +1,8 @@
+#cloud-config
+hostname: rhizo-pristine
+ssh_pwauth: false
+disable_root: false
+users:
+  - name: root
+    ssh_authorized_keys:
+      - @VM_PUBKEY@

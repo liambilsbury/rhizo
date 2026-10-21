@@ -1,0 +1,4 @@
+#!/bin/sh
+# run the configure rhizo's install or upgrade scriptlet recorded
+. /usr/lib/rhizo/install/lib/pkg-lib.sh || exit 1
+pkg_configure_pending

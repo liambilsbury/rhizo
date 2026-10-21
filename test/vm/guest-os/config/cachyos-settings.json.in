@@ -1,0 +1,23 @@
+{
+    "install_type": "simple",
+    "headless_mode": true,
+    "device": "@DISK@",
+    "fs_name": "btrfs",
+    "subvolumes": "default",
+    "partitions": [
+        {"name": "@DISK@1", "mountpoint": "/boot", "size": "4G", "fs_name": "vfat", "type": "boot"},
+        {"name": "@DISK@2", "mountpoint": "/", "size": "100%", "type": "root"}
+    ],
+    "hostname": "rhizo-cachyos",
+    "locale": "en_US",
+    "xkbmap": "us",
+    "timezone": "UTC",
+    "user_name": "deskuser",
+    "user_pass": "vm",
+    "user_shell": "/usr/bin/fish",
+    "root_pass": "vm",
+    "kernel": "linux-cachyos",
+    "desktop": "kde",
+    "bootloader": "@BOOTLOADER@",
+    "post_install": "/run/rhizo-install/cachyos-post-install.sh @DISK@2 @BOOTLOADER@"
+}

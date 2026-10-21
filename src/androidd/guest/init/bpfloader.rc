@@ -1,0 +1,13 @@
+on early-init
+    restorecon @RHIZO_SUBST:NETBPFLOAD_PRELOAD_PATH@
+
+service bpfloader @RHIZO_SUBST:NETBPFLOAD_PRELOAD_PATH@
+    class core
+    capabilities CHOWN SYS_ADMIN NET_ADMIN SYSLOG
+    group root graphics network_stack net_admin net_bw_acct net_bw_stats net_raw system
+    user root
+    file /dev/kmsg w
+    rlimit memlock 1073741824 1073741824
+    oneshot
+    override
+    setenv LD_PRELOAD /system_ext/lib64/rhizo_bpf_preload.so

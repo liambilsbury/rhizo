@@ -1,0 +1,127 @@
+Rhizo
+Copyright 2026 Liam Bilsbury
+
+This product includes software developed as part of
+The Android Open Source Project (http://source.android.com).
+Copyright 2005-2008 The Android Open Source Project
+
+Uses Jimenez's MLAA. Copyright (C) 2010 by Jorge Jimenez, Belen Masia,
+Jose I. Echevarria, Fernando Navarro and Diego Gutierrez.
+
+App icon: Android robot by Google, CC BY 3.0
+(https://creativecommons.org/licenses/by/3.0/). The Android robot is
+reproduced or modified from work created and shared by Google and used
+according to terms described in the Creative Commons 3.0 Attribution License.
+
+Third-party software. License texts are in LICENSES/.
+
+Android Open Source Project            Apache-2.0 (Apache-2.0.txt)
+  Copyright 2005-2025 The Android Open Source Project
+  Copyright 2019 Google LLC (libcppbor)
+Android SELinux policy (sepolicy)      Public domain (public-domain-sepolicy.txt)
+  The Android Open Source Project
+abseil-cpp                             Apache-2.0 (Apache-2.0.txt)
+  Copyright 2017-2025 The Abseil Authors
+BLAKE3                                 Apache-2.0 (Apache-2.0.txt)
+  Copyright 2019 Jack O'Connor and Samuel Neves
+LLVM, libc++, compiler-rt              Apache-2.0 WITH LLVM-exception (Apache-2.0.txt, LLVM-exception.txt)
+  Copyright 2003-2019 University of Illinois at Urbana-Champaign
+  Copyright 2009-2019 the LLVM contributors listed in CREDITS.TXT
+Mesa                                   MIT (MIT-Mesa.txt)
+  Copyright Intel Corporation, VMware, Inc., Brian Paul, Advanced Micro
+  Devices, Inc., Valve Corporation, Red Hat, Inc., Collabora, Ltd.,
+  Google, Inc., Broadcom, Marek Olsak, LunarG, Inc., Chia-I Wu,
+  2020 Lag Free Games, LLC, 2022 Yonggang Luo, and the other holders
+  named in each source file
+libdrm                                 MIT (MIT-libdrm.txt)
+  Copyright 1999 Precision Insight, Inc.
+  Copyright 2000 VA Linux Systems, Inc.
+  Copyright 2007-2008 Tungsten Graphics, Inc., Dave Airlie, Jakob Bornecrantz
+wayland, wayland-protocols             MIT (MIT-wayland.txt)
+  Copyright 2008-2013 Kristian Høgsberg
+  Copyright 2010-2013 Intel Corporation
+  Copyright 2012-2016 Collabora, Ltd.
+  Copyright 2013 Jason Ekstrand
+  Copyright 2013 Rafael Antognolli
+  Copyright 2013 Jasper St. Pierre
+  Copyright 2014 Stephen "Lyude" Chandler Paul
+  Copyright 2015-2017 Samsung Electronics Co., Ltd
+  Copyright 2015-2017 Red Hat Inc.
+  Copyright 2018 The Chromium Authors
+  Copyright 2018, 2023 Simon Ser
+  Copyright 2018 Purism SPC
+  Copyright 2020 Aleix Pol Gonzalez
+  Copyright 2020 Carlos Garnacho
+  Copyright 2022 Kenny Levinsen
+wlr-protocols, ext-data-control        MIT (MIT-wayland.txt), HPND-sell-variant (HPND-sell-variant.txt)
+  Copyright 2017 Drew DeVault, 2018 Simon Ser, 2019 Ivan Molodetskikh,
+  2019 Josef Gajdusek, 2024 Neal Gompa
+libffi                                 MIT (MIT-libffi.txt)
+  Copyright 1996-2024 Anthony Green, Red Hat, Inc and others
+dlmalloc (in libffi)                   Public domain (public-domain-dlmalloc.txt)
+  Doug Lea
+expat                                  MIT (MIT-expat.txt)
+  Copyright 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper
+  Copyright 2001-2025 Expat maintainers
+fmt                                    MIT (MIT-fmt.txt)
+  Copyright 2012-2025 Victor Zverovich and {fmt} contributors
+utf8_range                             MIT (MIT-utf8-range.txt)
+  Copyright 2019 Yibo Cai
+  Copyright 2022 Google LLC
+protobuf                               BSD-3-Clause (BSD-3-Clause-protobuf.txt)
+  Copyright 2008 Google Inc.
+zlib                                   Zlib (Zlib.txt)
+  Copyright 1995-2024 Jean-loup Gailly and Mark Adler
+  Copyright 2013 Intel Corporation
+Chromium zlib optimizations            BSD-3-Clause (BSD-3-Clause-chromium-zlib.txt)
+  Copyright 2017-2018 The Chromium Authors
+libpng                                 libpng-2.0 (libpng-2.0.txt)
+  Copyright 1995-2025 The PNG Reference Library Authors
+  Copyright 2018-2025 Cosmin Truta
+  Copyright 2000-2018 Glenn Randers-Pehrson
+  Copyright 1996-1997 Andreas Dilger
+  Copyright 1995-1996 Guy Eric Schalnat, Group 42, Inc.
+bionic                                 BSD-2-Clause (BSD-2-Clause-bionic.txt)
+  Copyright 2012-2015 The Android Open Source Project
+xxHash                                 BSD-2-Clause (BSD-2-Clause-xxHash.txt)
+  Copyright 2012-2021 Yann Collet
+Berkeley SoftFloat                     BSD-3-Clause (BSD-3-Clause-SoftFloat.txt)
+  Copyright 2011-2018 The Regents of the University of California
+Jimenez's MLAA                         BSD-3-Clause (BSD-3-Clause-MLAA.txt)
+  Copyright 2010 Jorge Jimenez, Belen Masia, Jose I. Echevarria,
+  Fernando Navarro and Diego Gutierrez
+  Copyright 2011 Lauri Kasanen
+Henry Spencer's regex                  BSD-3-Clause (BSD-3-Clause-spencer-regex.txt)
+  Copyright 1992-1994 Henry Spencer
+  Copyright 1992-1994 The Regents of the University of California
+C11 time.h                             BSL-1.0 (BSL-1.0.txt)
+  Copyright 2012 yohhoy
+  Copyright 2022 Yonggang Luo
+strlcpy                                ISC (ISC-strlcpy.txt)
+  Copyright 1998 Todd C. Miller
+OCB (in keymaster)                     ISC (ISC-ocb.txt)
+  Copyright 2013 Ted Krovetz
+ConvertUTF                             Unicode-DFS-2015 (Unicode-DFS-2015.txt)
+  Copyright 1991-2015 Unicode, Inc.
+SHA-1                                  Public domain (public-domain-SHA-1.txt)
+  Steve Reid
+MD5                                    Public domain (public-domain-MD5.txt)
+  2001 Alexander Peslyak
+Android robot (app icon)               CC-BY-3.0 (CC-BY-3.0.txt)
+  Google LLC
+
+kernel/ is licensed GPL-2.0-only (LICENSES/GPL-2.0-only.txt). It builds the
+separate Rhizo kernel packages; the rhizo package carries none of it.
+
+Linux                                  GPL-2.0-only
+  v7.1-rc1, the base tree kernel/SOURCE pins
+  Copyright the Linux kernel contributors
+SELinux namespace series               GPL-2.0-only
+  Copyright 2020-2026 Stephen Smalley, 2025 Christian Göttsche,
+  2026 Daniel Durning, 2026 Thorsten Blum
+Fixes in kernel/fixes                  GPL-2.0-only
+  Copyright 2026 Liam Bilsbury
+  0003 is mainline commit 1aac65f3e651, Copyright 2026 Denis V. Lunev
+ashmem uapi header in kernel/fixes     (GPL-2.0 WITH Linux-syscall-note) OR Apache-2.0
+  include/uapi/linux/android/ashmem.h, Copyright 2008 Google Inc.
+  (LICENSES/Linux-syscall-note.txt)

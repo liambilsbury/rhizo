@@ -1,0 +1,6 @@
+#!/bin/bash
+[[ "${APT_CONFIG:-}" == "$STUB_APT_CONFIG" ]] || { echo "E: No packages found" >&2; exit 100; }
+echo "apt-get $*" >> "$STUB_LOG"
+[[ "$1" == download ]] || exit 9
+shift
+for p in "$@"; do [[ " ${STUB_MISSING:-} " == *" $p "* ]] || echo "$p" > "${p}_1.0_all.deb"; done

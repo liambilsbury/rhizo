@@ -1,0 +1,3 @@
+on post-fs-data
+    mkdir /data/rhizo_inbox 0755 root root encryption=None
+    restorecon /data/rhizo_inbox

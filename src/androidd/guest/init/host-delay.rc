@@ -1,0 +1,7 @@
+on early-init
+    restorecon /system_ext/bin/hw/rhizo-host-delay
+
+service rhizo_host_delay /system_ext/bin/hw/rhizo-host-delay
+    class core
+    user system
+    group system

@@ -1,0 +1,19 @@
+[Unit]
+Description=Rhizo host filesystem bridge
+ConditionPathExists=/etc/rhizo/hostfs.conf
+ConditionPathExists=/root/share/hostfs.py
+After=network.target androidd.service
+PartOf=androidd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+ExecStart=/usr/bin/python3 /root/share/hostfs.py attach \
+    --config /etc/rhizo/hostfs.conf --wait-for-storage 180
+
+ExecStop=-/usr/bin/python3 /root/share/hostfs.py detach --all
+
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,2 @@
+; let llvmpipe map its shaders executable when devices.dri is off
+(allow surfaceflinger self (process (execmem)))

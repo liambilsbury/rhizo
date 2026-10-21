@@ -1,0 +1,9 @@
+{
+  "src/install/bootstrap/bootstrap.sh": 2,
+  "src/install/cli/rhizo.sh": 2,
+  "src/install/prepare/prepare.sh": 2,
+  "src/androidd/boot.py": 1,
+  "test/checks/build/build-set.sh": 1,
+  "test/system/cts/verify-all-domains-enforcing.sh": 1,
+  "tools/build/services/wlbridge.sh": 1
+}

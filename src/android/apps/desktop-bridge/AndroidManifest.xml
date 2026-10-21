@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.rhizo.desktop"
+          android:versionCode="1">
+
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+
+    <application android:label="Rhizo Desktop Bridge"
+                 android:allowBackup="false">
+
+        <service android:name=".RhizoIme"
+                 android:permission="android.permission.BIND_INPUT_METHOD"
+                 android:exported="true">
+            <intent-filter>
+                <action android:name="android.view.InputMethod"/>
+            </intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/method"/>
+        </service>
+
+        <service android:name=".BridgeService" android:exported="false"/>
+
+        <provider android:name=".TokenProvider"
+                  android:authorities="com.rhizo.desktop.token"
+                  android:exported="true"/>
+
+        <provider android:name=".PasteProvider"
+                  android:authorities="com.rhizo.desktop.paste"
+                  android:exported="false"
+                  android:grantUriPermissions="true"/>
+
+        <service android:name=".NotifListener"
+                 android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+                 android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
+
+        <activity android:name=".LinkActivity"
+                  android:exported="true"
+                  android:theme="@android:style/Theme.NoDisplay"
+                  android:excludeFromRecents="true"
+                  android:noHistory="true">
+            <intent-filter android:priority="0">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="http"/>
+                <data android:scheme="https"/>
+            </intent-filter>
+            <intent-filter android:priority="-999">
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="*/*"/>
+            </intent-filter>
+        </activity>
+
+    </application>
+</manifest>

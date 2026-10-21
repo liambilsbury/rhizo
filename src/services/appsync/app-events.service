@@ -1,0 +1,21 @@
+[Unit]
+Description=Rhizo app events watcher
+StartLimitIntervalSec=0
+
+[Service]
+User=ubuntu
+Group=ubuntu
+Type=simple
+RuntimeDirectory=rhizo-app-events
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/tools/app-events.py /run/rhizo/data/app /run/rhizo-app-events/trigger
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+Environment=PYTHONNOUSERSITE=1
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

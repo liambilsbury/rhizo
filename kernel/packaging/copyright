@@ -1,0 +1,115 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: rhizo
+Source: https://github.com/liambilsbury/rhizo
+Comment: The packages carry Linux v7.1-rc1 (Copyright the Linux kernel contributors, GPL-2.0-only),
+ the SELinux namespace series in kernel/series and the fixes in kernel/fixes. kernel/SOURCE pins
+ the base tree and the series commit.
+
+Files: *
+Copyright: 2026 Liam Bilsbury
+License: GPL-2.0-only
+
+Files: kernel/series/0002-selinux-fix-sel_kill_sb.patch
+ kernel/series/0003-selinux-switch-two-allocations-to-use-kzalloc_objs.patch
+ kernel/series/0013-selinux-restore-passing-of-selinux_state.patch
+ kernel/series/0014-selinux-introduce-current_selinux_state.patch
+ kernel/series/0015-selinux-support-multiple-selinuxfs-instances.patch
+ kernel/series/0016-selinux-limit-selinux-netlink-notifications-to-init-.patch
+ kernel/series/0017-selinux-dynamically-allocate-selinux-namespace.patch
+ kernel/series/0018-selinux-support-per-cred-selinux-namespace.patch
+ kernel/series/0019-selinux-introduce-cred_selinux_state-and-use-it.patch
+ kernel/series/0020-selinux-refactor-selinux_state_create.patch
+ kernel/series/0021-selinux-init-inode-from-nearest-initialized-namespac.patch
+ kernel/series/0022-selinux-introduce-a-global-SID-table.patch
+ kernel/series/0023-selinux-wrap-security-server-interfaces-to-use-the-g.patch
+ kernel/series/0024-selinux-update-hook-functions-to-use-correct-selinux.patch
+ kernel/series/0025-selinux-introduce-cred_task_has_perm.patch
+ kernel/series/0026-selinux-introduce-cred_has_extended_perms.patch
+ kernel/series/0027-selinux-introduce-cred_self_has_perm.patch
+ kernel/series/0028-selinux-introduce-cred_has_perm.patch
+ kernel/series/0029-selinux-introduce-cred_ssid_has_perm-and-cred_other_.patch
+ kernel/series/0030-selinux-introduce-task_obj_has_perm.patch
+ kernel/series/0031-selinux-update-bprm-hooks-for-selinux-namespaces.patch
+ kernel/series/0032-selinux-add-kerneldoc-to-new-permission-checking-fun.patch
+ kernel/series/0033-selinux-convert-selinux_file_send_sigiotask-to-names.patch
+ kernel/series/0034-selinux-rename-cred_has_perm-to-cred_tsid_has_perm.patch
+ kernel/series/0035-selinux-update-cred_tsid_has_perm_noaudit-to-return-.patch
+ kernel/series/0036-selinux-convert-additional-checks-to-cred_ssid_has_p.patch
+ kernel/series/0037-selinux-introduce-selinux_state_has_perm.patch
+ kernel/series/0038-selinux-annotate-process-transition-permission-check.patch
+ kernel/series/0039-selinux-convert-xfrm-and-netlabel-permission-checks.patch
+ kernel/series/0040-selinux-switch-selinux_lsm_setattr-checks-to-current.patch
+ kernel/series/0041-selinux-make-open_perms-namespace-aware.patch
+ kernel/series/0042-selinux-split-cred_ssid_has_perm-into-two-cases.patch
+ kernel/series/0043-selinux-convert-nlmsg_sock_has_extended_perms-to-nam.patch
+ kernel/series/0044-selinux-add-limits-for-SELinux-namespaces.patch
+ kernel/series/0045-selinuxfs-restrict-write-operations-to-the-same-seli.patch
+ kernel/series/0046-selinux-annotate-selinuxfs-permission-checks.patch
+ kernel/series/0047-selinux-introduce-a-Kconfig-option-for-SELinux-names.patch
+ kernel/series/0048-selinux-eliminate-global-SID-table-if-CONFIG_SECURIT.patch
+ kernel/series/0049-selinux-maintain-a-small-cache-in-the-global-SID-tab.patch
+ kernel/series/0050-selinux-invalidate-entry-state-ss_sid.patch
+ kernel/series/0051-selinux-do-not-cache-sblabel-mount-flag-in-superbloc.patch
+ kernel/series/0052-selinux-do-not-cache-genfs-xattr-flag-in-superblock-.patch
+ kernel/series/0053-selinux-ignore-invalid-contexts-in-kernfs_init_secur.patch
+ kernel/series/0054-selinux-convert-bpf-token-checks-to-namespace-aware.patch
+ kernel/series/0056-selinuxfs-allow-mounting-in-a-user-namespace.patch
+ kernel/series/0057-lsm-uapi-introduce-LSM_ATTR_UNSHARE.patch
+ kernel/series/0058-selinux-implement-LSM_ATTR_UNSHARE.patch
+ kernel/series/0059-selinux-require-CAP_SYS_ADMIN-and-unshare_selinuxns-.patch
+Copyright: 2020-2026 Stephen Smalley
+License: GPL-2.0-only
+
+Files: kernel/series/0004-selinux-avoid-nontransitive-comparison.patch
+ kernel/series/0005-selinux-use-u16-for-security-classes.patch
+ kernel/series/0006-selinux-more-strict-policy-parsing.patch
+ kernel/series/0007-selinux-check-length-fields-in-policies.patch
+ kernel/series/0008-selinux-check-type-attr-map-overflows.patch
+ kernel/series/0009-selinux-reorder-policydb_index.patch
+ kernel/series/0010-selinux-beef-up-isvalid-checks.patch
+ kernel/series/0011-selinux-more-strict-bounds-check.patch
+ kernel/series/0012-selinux-check-for-simple-types.patch
+Copyright: 2025 Christian Göttsche
+License: GPL-2.0-only
+
+Files: kernel/series/0055-selinux-optimize-context-string-handling-and-global-.patch
+Copyright: 2026 Daniel Durning
+License: GPL-2.0-only
+
+Files: kernel/series/0001-selinux-use-QSTR-instead-of-QSTR_INIT-in-init_sel_fs.patch
+Copyright: 2026 Thorsten Blum
+License: GPL-2.0-only
+
+Files: kernel/fixes/*
+Copyright: 2026 Liam Bilsbury
+License: GPL-2.0-only
+
+Files: kernel/fixes/0003-*
+Copyright: 2026 Denis V. Lunev
+License: GPL-2.0-only
+ Mainline commit 1aac65f3e651.
+
+Files: kernel/fixes/0021-*
+Copyright: 2026 Liam Bilsbury
+ 2008 Google Inc.
+License: GPL-2.0-only and (GPL-2.0 with Linux-syscall-note exception or Apache-2.0)
+ The ashmem driver; its uapi header include/uapi/linux/android/ashmem.h is
+ (GPL-2.0 WITH Linux-syscall-note) OR Apache-2.0.
+
+License: GPL-2.0-only
+ This program is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License version 2 as published by the
+ Free Software Foundation.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ .
+ On Debian systems the full GPL-2.0 text is in /usr/share/common-licenses/GPL-2.
+
+License: GPL-2.0
+ On Debian systems the full GPL-2.0 text is in /usr/share/common-licenses/GPL-2.
+
+License: Apache-2.0
+ On Debian systems the full Apache-2.0 text is in
+ /usr/share/common-licenses/Apache-2.0.

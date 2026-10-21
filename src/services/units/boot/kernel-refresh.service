@@ -1,0 +1,19 @@
+[Unit]
+Description=Rhizo kernel change refresh
+After=systemd-modules-load.service
+Before=androidd.service rhizo-policy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecCondition=/usr/lib/rhizo/install/prepare/kernel-changed.sh
+ExecStart=/usr/lib/rhizo/install/prepare/prepare.sh --kernel-refresh --payload /usr/lib/rhizo
+StandardOutput=append:/var/log/rhizo/prepare.log
+StandardError=append:/var/log/rhizo/prepare.log
+TimeoutStartSec=300
+ReadWritePaths=/var/lib/rhizo /lib/modules /etc/modules-load.d
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

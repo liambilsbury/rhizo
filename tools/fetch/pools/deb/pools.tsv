@@ -1,0 +1,9 @@
+# the guest package pools fetch.sh fetches
+# pool	method	packages	allow-upgrade
+adb-debs	derived	adb	-
+gnome-debs	derived	gnome-shell mutter dbus-user-session libglib2.0-bin wayland-utils gnome-shell-common xdg-desktop-portal-gnome foot gdm3 ubuntu-session gjs python3-gi gir1.2-gtk-4.0	libpolkit-agent-1-0 libpolkit-gobject-1-0 polkitd
+pipewire-debs	derived	pipewire pipewire-bin wireplumber	libx11-6 libx11-data
+sway-debs	derived	sway swaybg grim wlrctl foot	libx11-6 libx11-data
+desktop-debs	listed	xdg-utils desktop-file-utils hicolor-icon-theme	-
+server-debs	closure	conntrack adb	-
+stream-debs	closure	vainfo vpx-tools	-

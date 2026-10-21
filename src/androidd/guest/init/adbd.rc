@@ -1,0 +1,14 @@
+on post-fs-data
+    mkdir /data/misc/adb 02750 system shell
+    setprop persist.adb.tcp.port 5555
+    setprop service.adb.tcp.port 5555
+    setprop persist.sys.usb.config adb
+    setprop sys.usb.config adb
+
+on property:sys.usb.config=none
+    setprop sys.usb.config adb
+# @RHIZO_SUBST adbd_stock_guard
+
+on boot
+# @RHIZO_SUBST adbd_start_line
+# @RHIZO_SUBST adbd_root_service

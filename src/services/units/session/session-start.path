@@ -1,0 +1,10 @@
+[Unit]
+Description=Rhizo session start watcher
+StartLimitIntervalSec=0
+
+[Path]
+PathChanged=/run/rhizo-desktop/session.env
+Unit=rhizo-session-start.service
+
+[Install]
+WantedBy=multi-user.target

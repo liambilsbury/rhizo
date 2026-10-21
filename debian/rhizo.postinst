@@ -1,0 +1,54 @@
+#!/bin/sh
+# run the rhizo package configure steps
+set -e
+
+# shellcheck disable=SC2034
+PROG=rhizo
+case "$1" in
+  configure)
+    # shellcheck source=../src/install/lib/pkg-lib.sh
+    . /usr/lib/rhizo/install/lib/pkg-lib.sh
+    pkg_read_selinux_mode
+    pkg_state_dirs
+    pkg_accounts
+    pkg_install_and_grants
+    pkg_rename_units
+    pkg_enable_core_units
+
+    systemctl stop rhizo-desktop-session.path rhizo-desktop-session.service 2>/dev/null || true
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+      deb-systemd-helper purge rhizo-desktop-session.path >/dev/null 2>&1 || true
+    fi
+    rm -f /etc/systemd/system/multi-user.target.wants/rhizo-desktop-session.path
+    rm -rf /etc/systemd/system/rhizo-desktop-session.service.d
+    for unit in rhizo-desktop-session.path rhizo-desktop-session.service; do
+      if [ "$(readlink "/etc/systemd/system/$unit" 2>/dev/null)" = /dev/null ]; then
+        rm -f "/etc/systemd/system/$unit"
+      fi
+    done
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+      deb-systemd-helper purge rhizo-update-confirm.service >/dev/null 2>&1 || true
+    fi
+    rm -f /etc/systemd/system/multi-user.target.wants/rhizo-update-confirm.service
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+      deb-systemd-helper purge rhizo-hostfs.service >/dev/null 2>&1 || true
+    fi
+    rm -f /etc/systemd/system/multi-user.target.wants/rhizo-hostfs.service
+    pkg_user_units_and_desktop
+
+    if [ "$PKG_MODE" = host ]; then
+      pkg_apt_partial_root
+    fi
+
+    pkg_stop_old_payload "${2:-}"
+    pkg_reboot_notice "${2:-}"
+    ;;
+esac
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+  pkg_unit_policy
+fi
+
+exit 0

@@ -1,0 +1,14 @@
+[Unit]
+Description=Rhizo app watch re-arm
+After=rhizo-policy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl stop rhizo-resync.service rhizo-remove-entries.service
+ExecStart=/usr/bin/systemctl restart rhizo-resync.path
+ExecStart=/usr/bin/systemctl restart rhizo-remove-entries.path
+ExecStart=/usr/bin/systemctl restart rhizo-app-events.service
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

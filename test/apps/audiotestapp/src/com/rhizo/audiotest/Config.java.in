@@ -1,0 +1,10 @@
+package com.rhizo.audiotest;
+
+// constants for an app variant
+final class Config {
+    static final int TONE_HZ = @FREQ@;
+    static final int BACKGROUND = @BG@;
+
+    // prevent instantiation of the constants holder
+    private Config() {}
+}

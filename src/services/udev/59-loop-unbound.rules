@@ -1,0 +1,2 @@
+SUBSYSTEM=="block", KERNEL=="loop*", TEST!="loop/backing_file", ENV{UDEV_DISABLE_PERSISTENT_STORAGE_BLKID_FLAG}="1", ENV{DM_UDEV_DISABLE_OTHER_RULES_FLAG}="1"
+SUBSYSTEM=="block", KERNEL=="loop*", ATTR{loop/backing_file}=="/var/lib/rhizo/*|/srv/rhizo/*|/system/apex/*|/system_ext/apex/*|/product/apex/*|/vendor/apex/*|/data/apex/*", ENV{UDEV_DISABLE_PERSISTENT_STORAGE_BLKID_FLAG}="1", ENV{DM_UDEV_DISABLE_OTHER_RULES_FLAG}="1"

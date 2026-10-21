@@ -1,0 +1,460 @@
+#!/usr/bin/make -f
+export DH_VERBOSE = 1
+
+PAYLOAD  := debian/rhizo/usr/lib/rhizo
+UNITS    := debian/rhizo/usr/lib/systemd/system
+USER_UNITS := debian/rhizo/usr/lib/systemd/user
+
+GFX_HAL_FILES    := rhizo-audio-core-service rhizo-audio-effect-service \
+                    rhizo-bootcontrol-service rhizo-composer rhizo-gatekeeper-service \
+                    rhizo-graphics-allocator rhizo-health-service rhizo-power-service \
+                    rhizo-thermal-service rhizo-bluetooth-service rhizo-gnss-service mapper.rhizo.so libcutils_real.so \
+                    libc++_shared.so libgallium_dri.so libgbm_mesa.so libdrm.so dri_gbm.so \
+                    rhizo_bpf_preload.so rhizo_netbpfload_preload
+GFX_HAL_32_FILES := mapper.rhizo.so
+GPU_DRIVER_FILES := egl/libEGL_rhizo.so egl/libGLESv2_rhizo.so egl/libGLESv1_CM_rhizo.so \
+                    lib/libgallium_dri.so lib/libgbm_mesa.so lib/libdrm.so lib/libbase.so \
+                    lib/libcutils.so lib/libz.so lib/libc++.so lib/libhardware.so lib/dri_gbm.so
+
+DEB_HOST_ARCH := $(shell dpkg-architecture -qDEB_HOST_ARCH 2>/dev/null)
+ifeq ($(DEB_HOST_ARCH),arm64)
+GFX_HAL_DIR       := var/share/gfx_hal_arm64
+GPU_DRIVER_DIR     := var/share/gpu_driver_arm64
+KEYMINT_SVC        := var/share/gfx_hal_arm64/rhizo-keymint-service
+PROBED_BIN         := var/share/rhizo-probed-arm64-v8a
+HOST_DELAY_BIN     := var/share/rhizo-host-delay-arm64-v8a
+WAYLAND_PROBE_BIN  := var/share/rhizo-wayland-probe-arm64-v8a
+HOSTFSD_BIN        := var/share/rhizo-hostfsd-aarch64
+INPUTD_BIN         := var/share/rhizo-inputd-aarch64
+DELAYD_BIN         := var/share/rhizo-delayd-aarch64
+HEADROOMD_BIN      := var/share/rhizo-headroomd-aarch64
+PROBE_CLIENT_BIN   := var/share/rhizo-probe-client-aarch64
+STREAMD_BIN        := var/share/rhizo-streamd-aarch64
+AUDIOD_BIN         := var/share/rhizo-audiod-aarch64
+WLBRIDGE_BIN       := var/share/rhizo-wlbridge-aarch64
+GFX_HAL_32_FILES   :=
+SHIP_A15_POWER     := 0
+SHIP_32BIT_DRIVER  := 0
+SHIP_SOFTWARE_DRIVER := 0
+SHIP_AAPT2         := 0
+else
+GFX_HAL_DIR        := var/share/gfx_hal
+GPU_DRIVER_DIR      := var/share/gpu_driver
+KEYMINT_SVC         := var/share/rhizo-keymint-service
+PROBED_BIN          := var/share/rhizo-probed
+HOST_DELAY_BIN      := var/share/rhizo-host-delay
+WAYLAND_PROBE_BIN   := var/share/rhizo-wayland-probe
+HOSTFSD_BIN         := var/share/rhizo-hostfsd
+INPUTD_BIN          := var/share/rhizo-inputd
+DELAYD_BIN          := var/share/rhizo-delayd
+HEADROOMD_BIN       := var/share/rhizo-headroomd
+PROBE_CLIENT_BIN    := var/share/rhizo-probe-client
+STREAMD_BIN         := var/share/rhizo-streamd
+AUDIOD_BIN          := var/share/rhizo-audiod
+WLBRIDGE_BIN        := var/share/rhizo-wlbridge
+SHIP_32BIT_DRIVER   := 1
+SHIP_SOFTWARE_DRIVER := 1
+SHIP_AAPT2          := 1
+SHIP_A15_POWER      := 1
+endif
+
+REQUIRED_DIRS  := src/androidd/guest $(GFX_HAL_DIR) $(GPU_DRIVER_DIR)
+REQUIRED_FILES := src/androidd/boot.py src/androidd/sandbox/core.py src/androidd/sandbox/guest_files.py \
+                  src/androidd/sandbox/selinux_policy.py src/androidd/sandbox/selinux_labels.py \
+                  src/androidd/sandbox/rootfs.py src/androidd/sandbox/hals.py \
+                  var/share/RhizoAudioRouter.apk var/share/plat_pub_versioned.cil \
+                  var/share/RhizoBootRro.apk var/share/RhizoSettingsRro.apk var/share/RhizoSettingsProviderRro.apk var/share/RhizoSoftwareRro.apk var/share/RhizoHome.apk \
+                  var/share/RhizoDesktop.apk \
+                  var/share/virtual-device/RhizoVirtualDevice.apk \
+                  var/share/virtual-device/RhizoAutomotiveProjectionRro.apk \
+                  $(KEYMINT_SVC) $(PROBED_BIN) $(HOST_DELAY_BIN) $(WAYLAND_PROBE_BIN) \
+                  var/share/audio_policy_configuration.xml var/share/vbmeta.img var/share/sys-kernel-readers.txt \
+                  var/share/probe-client.py $(PROBE_CLIENT_BIN) \
+                  $(HOSTFSD_BIN) $(INPUTD_BIN) \
+                  src/services/inputd/inputd@.service src/services/inputd/inputd-uhid@.service \
+                  debian/dropins/inputd-instance0.conf \
+                  var/share/gpu_driver.PROVENANCE \
+                  $(addprefix $(GFX_HAL_DIR)/,$(GFX_HAL_FILES)) \
+                  $(addprefix $(GPU_DRIVER_DIR)/,$(GPU_DRIVER_FILES)) \
+                  src/install/bootstrap/bootstrap.sh src/install/prepare/prepare.sh \
+                  src/install/teardown/teardown.sh src/install/teardown/teardown-lib.sh \
+                  src/install/lib/host-flavor.sh src/install/bootstrap/bootloader.sh \
+                  src/install/lib/pkg-lib.sh src/install/cli/rhizo.sh \
+                  src/install/prepare/fetch-gsi.sh src/install/prepare/kernel-changed.sh \
+                  src/install/update/gsi-update.sh src/install/prepare/await-boot-completed.py src/install/prepare/hostops.py \
+                  src/install/prepare/verify-prepared-tree.py src/install/cli/print-share-row.py \
+                  src/install/bootstrap/skel-fill.sh src/install/bootstrap/user-cgroup-reset.sh \
+                  src/install/bootstrap/console-vt.py \
+                  src/install/bootstrap/rundir-root.py \
+                  src/services/units/boot/kernel-refresh.service \
+                  src/androidd/host/capture-kernel-log.sh src/androidd/host/launch-app.sh \
+                  src/services/hostfs/hostfs.py src/androidd/host/kernel-check.sh \
+                  src/androidd/host/unfreeze-cgroup.sh src/androidd/host/parse-display-list.sh src/services/appsync/appsync.py \
+                  src/services/appsync/resync.sh src/services/appsync/remove-entries.sh \
+                  src/services/appsync/app-events.py \
+                  src/install/prepare/derive-patches.sh tools/build/packaging/deb/gen-rhizo-icon.py \
+                  src/install/prepare/config-disable.prop \
+                  src/services/units/applications/apk-installer.desktop \
+                  src/services/units/applications/rhizo.desktop \
+                  debian/menus/rhizo.menu debian/menus/rhizo.directory \
+                  src/services/appsync/resync.path src/services/appsync/resync.service \
+                  src/services/appsync/remove-entries.path src/services/appsync/remove-entries.service \
+                  src/services/units/session/desktop-attach.path src/services/units/session/desktop-attach.service \
+                  src/services/units/session/session-start.path src/services/units/session/session-start.service \
+                  src/services/appsync/resync-rearm.service \
+                  src/services/broker/brokerd.socket src/services/broker/brokerd@.service \
+                  src/services/appsync/run-rhizo.mount.d/resync-rearm.conf \
+                  src/services/appsync/run-rhizo-data.mount.d/resync-rearm.conf \
+                  src/services/broker/brokerd.py src/services/broker/broker-client.py \
+                  src/services/deskbridge/dbus_min.py src/services/broker/inbox_stage.py \
+                  src/androidd/host/fill-display-pool.sh src/androidd/host/release-idle-display.sh \
+                  src/services/units/display-pool/display-pool.path src/services/units/display-pool/display-pool.service \
+                  src/services/units/display-pool/display-pool-release.service \
+                  src/services/units/boot/update-begin.service \
+                  src/services/units/boot/update-confirm.service \
+                  src/services/server-idle/server-idle.py \
+                  src/services/server-idle/server-idle.service \
+                  src/services/units/boot/androidd@.service src/services/server-idle/server-idle@.service \
+                  src/services/api/apid.py \
+                  src/services/api/api.socket src/services/api/api@.service \
+                  $(STREAMD_BIN) src/services/streamd/capability-sync.sh \
+                  src/services/streamd/viewer.html \
+                  src/services/streamd/streamd.socket src/services/streamd/streamd.service \
+                  src/services/streamd/stream-capability.path \
+                  src/services/streamd/stream-capability.service \
+                  src/services/deskbridge/deskd.py src/services/deskbridge/desk-token.py $(WLBRIDGE_BIN) \
+                  src/services/deskbridge/desk-notify.py \
+                  $(AUDIOD_BIN) src/services/displayd/displayd.py \
+                  src/services/keymapd/keymapd.py src/androidd/sandbox/capability-allowed.sh \
+                  src/services/units/session/desktop-session.path \
+                  src/services/units/session/desktop-session.service \
+                  src/services/units/session/desktop-session.tmpfiles \
+                  src/services/deskbridge/desk-notify.path src/services/deskbridge/desk-notify.service \
+                  src/services/units/boot/run-root.tmpfiles \
+                  src/services/deskbridge/deskd.service src/services/audiod/audiod.service \
+                  src/services/deskbridge/desk-token.service \
+                  src/services/displayd/displayd.service src/services/keymapd/keymapd.service \
+                  src/services/rtd/rtd.py src/services/rtd/rtd.service \
+                  $(DELAYD_BIN) src/services/delayd/delayd.service \
+                  $(HEADROOMD_BIN) src/services/headroomd/headroomd.service \
+                  src/services/btd/btd.py src/services/btd/btd.service
+ifeq ($(SHIP_32BIT_DRIVER),1)
+REQUIRED_DIRS  += var/share/gfx_hal_32 var/share/gpu_driver_32
+REQUIRED_FILES += $(addprefix var/share/gfx_hal_32/,$(GFX_HAL_32_FILES)) \
+                  $(addprefix var/share/gpu_driver_32/,$(GPU_DRIVER_FILES))
+endif
+ifeq ($(SHIP_SOFTWARE_DRIVER),1)
+REQUIRED_DIRS  += var/share/gpu_driver_software
+REQUIRED_FILES += $(addprefix var/share/gpu_driver_software/,$(GPU_DRIVER_FILES))
+endif
+ifeq ($(SHIP_AAPT2),1)
+REQUIRED_FILES += var/share/aapt2 var/share/aapt2.PROVENANCE
+endif
+ifeq ($(SHIP_A15_POWER),1)
+REQUIRED_FILES += var/share/rel/a15/rhizo-power-service
+endif
+
+%:
+	dh $@
+
+# disable the autotools passes
+override_dh_update_autotools_config:
+
+override_dh_autoreconf:
+
+# skip the repository tests
+override_dh_auto_test:
+
+# write debian/rhizo.postrm with the embedded teardown
+override_dh_installdeb:
+	python3 debian/embed-teardown.py --write
+	dh_installdeb
+
+BOOT_ONLY_UNITS := androidd.service rhizo-prepare.service rhizo-policy.service \
+                   rhizo-update-begin.service rhizo-update-confirm.service rhizo-selinux-mode.service \
+                   rhizo-host-labels.service
+PROFILE_STATE_UNITS := rhizo-server-idle.service
+override_dh_installsystemd:
+	dh_installsystemd --no-start --no-stop-on-upgrade $(BOOT_ONLY_UNITS)
+	dh_installsystemd --no-enable $(PROFILE_STATE_UNITS)
+	dh_installsystemd $(addprefix -X,$(BOOT_ONLY_UNITS) $(PROFILE_STATE_UNITS))
+
+override_dh_clean:
+	dh_clean -d
+	rm -rf debian/.debhelper debian/files debian/debhelper-build-stamp \
+	       debian/*.substvars debian/*.debhelper debian/*.debhelper.log debian/rhizo.postrm
+
+print-ship-set:
+	@printf '%s\n' $(REQUIRED_DIRS) $(REQUIRED_FILES)
+
+override_dh_auto_build:
+	@missing=""; \
+	for d in $(REQUIRED_DIRS); do [ -d "$$d" ] || missing="$$missing $$d"; done; \
+	for f in $(REQUIRED_FILES); do [ -s "$$f" ] || missing="$$missing $$f"; done; \
+	if [ -n "$$missing" ]; then \
+	  echo "rhizo: cannot build, these staged artifacts are missing or empty:" >&2; \
+	  for m in $$missing; do echo "  $$m" >&2; done; \
+	  echo "run make all first" >&2; exit 1; \
+	fi
+	@for d in $(GPU_DRIVER_DIR) $(if $(filter 1,$(SHIP_32BIT_DRIVER)),var/share/gpu_driver_32) \
+	          $(if $(filter 1,$(SHIP_SOFTWARE_DRIVER)),var/share/gpu_driver_software); do \
+	  extra=""; \
+	  for f in $$(cd $$d && find . -type f | sed 's|^\./||' | sort); do \
+	    case " $(GPU_DRIVER_FILES) " in *" $$f "*) ;; *) extra="$$extra $$f" ;; esac; \
+	  done; \
+	  if [ -n "$$extra" ]; then \
+	    echo "rhizo: $$d holds files this package does not ship:$$extra" >&2; exit 1; \
+	  fi; \
+	done
+
+override_dh_auto_install:
+	install -d $(PAYLOAD) $(UNITS)
+	echo '$(shell dpkg-parsechangelog -SVersion)' > $(PAYLOAD)/VERSION
+	chmod 0644 $(PAYLOAD)/VERSION
+	install -m 0644 src/androidd/boot.py $(PAYLOAD)/launcher3.py
+	install -d $(PAYLOAD)/sandbox
+	install -m 0644 src/androidd/sandbox/*.py $(PAYLOAD)/sandbox/
+	install -m 0755 src/androidd/host/capture-kernel-log.sh $(PAYLOAD)/rhizo-avc-capture.sh
+	install -m 0755 src/androidd/host/selinux-mode.py $(PAYLOAD)/rhizo-selinux-mode
+	install -d $(PAYLOAD)/gfx_hal
+	for f in $(GFX_HAL_FILES); do cp -p $(GFX_HAL_DIR)/$$f $(PAYLOAD)/gfx_hal/; done
+ifeq ($(SHIP_A15_POWER),1)
+	install -D -m 0755 var/share/rel/a15/rhizo-power-service $(PAYLOAD)/rel/a15/rhizo-power-service
+endif
+	cp -a $(GPU_DRIVER_DIR) $(PAYLOAD)/gpu_driver
+ifeq ($(SHIP_SOFTWARE_DRIVER),1)
+	cp -a var/share/gpu_driver_software $(PAYLOAD)/gpu_driver_software
+endif
+ifeq ($(SHIP_32BIT_DRIVER),1)
+	install -d $(PAYLOAD)/gfx_hal_32
+	for f in $(GFX_HAL_32_FILES); do cp -p var/share/gfx_hal_32/$$f $(PAYLOAD)/gfx_hal_32/; done
+	cp -a var/share/gpu_driver_32 $(PAYLOAD)/gpu_driver_32
+endif
+	install -d $(PAYLOAD)/netbridged
+	install -m 0644 src/services/netbridged/*.py $(PAYLOAD)/netbridged/
+	cp -a src/androidd/guest $(PAYLOAD)/guest
+	install -m 0644 var/share/sys-kernel-readers.txt $(PAYLOAD)/guest/
+	install -m 0644 src/services/udev/59-loop-unbound.rules $(PAYLOAD)/rhizo-loop-unbound.rules
+	install -m 0644 var/share/RhizoAudioRouter.apk $(PAYLOAD)/
+	install -m 0644 var/share/RhizoBootRro.apk var/share/RhizoSettingsRro.apk var/share/RhizoSettingsProviderRro.apk var/share/RhizoSoftwareRro.apk var/share/RhizoHome.apk $(PAYLOAD)/
+	install -m 0644 var/share/RhizoDesktop.apk $(PAYLOAD)/
+	install -d $(PAYLOAD)/virtual-device
+	install -m 0644 var/share/virtual-device/RhizoVirtualDevice.apk \
+	                var/share/virtual-device/RhizoAutomotiveProjectionRro.apk $(PAYLOAD)/virtual-device/
+	install -m 0755 $(KEYMINT_SVC) $(PAYLOAD)/rhizo-keymint-service
+	install -m 0755 $(PROBED_BIN) $(PAYLOAD)/rhizo-probed
+	install -m 0755 $(HOST_DELAY_BIN) $(PAYLOAD)/rhizo-host-delay
+	install -m 0755 $(WAYLAND_PROBE_BIN) $(PAYLOAD)/rhizo-wayland-probe
+	install -m 0644 var/share/audio_policy_configuration.xml \
+	                var/share/vbmeta.img var/share/plat_pub_versioned.cil $(PAYLOAD)/
+	install -m 0755 var/share/probe-client.py $(PAYLOAD)/
+	install -m 0755 $(PROBE_CLIENT_BIN) $(PAYLOAD)/rhizo-probe-client
+	install -m 0644 src/services/deskbridge/dbus_min.py src/services/broker/inbox_stage.py $(PAYLOAD)/
+	install -m 0755 src/androidd/host/fill-display-pool.sh $(PAYLOAD)/rhizo-fill-display-pool.sh
+	install -m 0755 src/androidd/host/release-idle-display.sh $(PAYLOAD)/rhizo-release-idle-display.sh
+	install -d $(PAYLOAD)/install/bootstrap $(PAYLOAD)/install/prepare $(PAYLOAD)/install/update \
+	           $(PAYLOAD)/install/teardown $(PAYLOAD)/install/lib $(PAYLOAD)/install/cli
+	install -m 0755 src/install/bootstrap/bootstrap.sh src/install/bootstrap/bootloader.sh \
+	                src/install/bootstrap/skel-fill.sh src/install/bootstrap/user-cgroup-reset.sh \
+	                src/install/bootstrap/console-vt.py src/install/bootstrap/rundir-root.py \
+	                $(PAYLOAD)/install/bootstrap/
+	install -m 0755 src/install/prepare/prepare.sh src/install/prepare/fetch-gsi.sh \
+	                src/install/prepare/kernel-changed.sh src/install/prepare/await-boot-completed.py \
+	                src/install/prepare/verify-prepared-tree.py $(PAYLOAD)/install/prepare/
+	install -m 0755 src/install/update/gsi-update.sh $(PAYLOAD)/install/update/
+	install -m 0755 src/install/teardown/teardown.sh src/install/teardown/teardown-lib.sh $(PAYLOAD)/install/teardown/
+	install -m 0755 src/install/lib/host-flavor.sh src/install/lib/pkg-lib.sh $(PAYLOAD)/install/lib/
+	install -m 0755 src/install/cli/print-share-row.py $(PAYLOAD)/install/cli/
+	install -m 0755 src/install/prepare/data-template.sh \
+	                src/install/prepare/materialize-data-template.py src/install/prepare/hostops.py \
+	                src/install/prepare/align-apex.py src/install/prepare/detect-gpu-driver.sh $(PAYLOAD)/
+	install -D -m 0755 src/install/cli/rhizo.sh debian/rhizo/usr/bin/rhizo
+	install -d $(PAYLOAD)/tools
+	install -m 0755 src/androidd/host/launch-app.sh $(PAYLOAD)/tools/rhizo-launch.sh
+	install -m 0755 src/services/appsync/appsync.py \
+	                src/services/appsync/resync.sh src/services/appsync/remove-entries.sh \
+	                src/services/appsync/app-events.py \
+	                src/services/hostfs/hostfs.py src/androidd/host/kernel-check.sh \
+	                src/install/prepare/derive-patches.sh tools/build/packaging/deb/gen-rhizo-icon.py \
+	                $(PAYLOAD)/tools/
+	install -m 0644 src/install/prepare/config-disable.prop $(PAYLOAD)/tools/
+ifeq ($(SHIP_AAPT2),1)
+	install -m 0755 var/share/aapt2 $(PAYLOAD)/tools/
+endif
+	install -D -m 0644 src/androidd/sandbox/capabilities.py $(PAYLOAD)/tools/sandbox/capabilities.py
+	install -m 0644 src/androidd/host/unfreeze-cgroup.sh $(PAYLOAD)/tools/rhizo-cgroup-unfreeze.sh
+	install -m 0644 src/androidd/host/parse-display-list.sh $(PAYLOAD)/tools/rhizo-display-list.sh
+ifeq ($(SHIP_AAPT2),1)
+	install -D -m 0644 var/share/aapt2.PROVENANCE \
+	                   debian/rhizo/usr/share/doc/rhizo/aapt2.PROVENANCE
+endif
+	install -D -m 0644 var/share/gpu_driver.PROVENANCE \
+	                   debian/rhizo/usr/share/doc/rhizo/gpu_driver.PROVENANCE
+	install -d $(PAYLOAD)/broker
+	install -m 0755 src/services/broker/brokerd.py src/services/broker/broker-client.py \
+	                $(PAYLOAD)/broker/
+	install -d $(PAYLOAD)/server-idle
+	install -m 0755 src/services/server-idle/server-idle.py $(PAYLOAD)/server-idle/
+	install -d $(PAYLOAD)/api
+	install -m 0755 src/services/api/apid.py $(PAYLOAD)/api/
+	install -d $(PAYLOAD)/host
+	install -m 0755 $(HOSTFSD_BIN) $(PAYLOAD)/host/rhizo-hostfsd
+	install -m 0755 $(INPUTD_BIN) $(PAYLOAD)/rhizo-inputd
+	install -m 0755 $(DELAYD_BIN) $(PAYLOAD)/rhizo-delayd
+	install -m 0755 $(HEADROOMD_BIN) $(PAYLOAD)/rhizo-headroomd
+	install -d $(PAYLOAD)/streamd
+	install -m 0755 $(STREAMD_BIN) $(PAYLOAD)/streamd/rhizo-streamd
+	install -m 0755 src/services/streamd/capability-sync.sh $(PAYLOAD)/streamd/
+	install -m 0644 src/services/streamd/viewer.html $(PAYLOAD)/streamd/
+	install -d $(PAYLOAD)/deskbridge
+	install -m 0755 src/services/deskbridge/deskd.py src/services/deskbridge/desk-token.py \
+	                src/services/deskbridge/desk-notify.py $(PAYLOAD)/deskbridge/
+	install -m 0755 $(WLBRIDGE_BIN) $(PAYLOAD)/deskbridge/rhizo-wlbridge
+	install -d $(PAYLOAD)/audiod
+	install -m 0755 $(AUDIOD_BIN) $(PAYLOAD)/audiod/rhizo-audiod
+	install -d $(PAYLOAD)/displayd
+	install -m 0755 src/services/displayd/displayd.py $(PAYLOAD)/displayd/
+	install -d $(PAYLOAD)/keymapd
+	install -m 0755 src/services/keymapd/keymapd.py $(PAYLOAD)/keymapd/
+	install -d $(PAYLOAD)/rtd
+	install -m 0755 src/services/rtd/rtd.py $(PAYLOAD)/rtd/
+	install -d $(PAYLOAD)/btd
+	install -m 0755 src/services/btd/btd.py $(PAYLOAD)/btd/
+	install -m 0755 src/androidd/sandbox/capability-allowed.sh $(PAYLOAD)/tools/
+	install -D -m 0644 debian/androidd.env debian/rhizo/etc/rhizo/androidd.env
+	install -D -m 0644 debian/apt.conf.d/50rhizo $(PAYLOAD)/host-mode/etc/apt/apt.conf.d/50rhizo
+	install -D -m 0644 debian/profile.d/console-vt.sh $(PAYLOAD)/host-mode/etc/profile.d/rhizo-console-vt.sh
+	install -D -m 0644 debian/fish/console-acl.fish \
+	                   $(PAYLOAD)/host-mode/usr/share/fish/vendor_conf.d/rhizo-console-acl.fish
+	install -D -m 0644 debian/dropins/private-users-off.conf \
+	                   $(PAYLOAD)/host-mode/usr/lib/systemd/system/service.d/50-rhizo-private-users.conf
+	install -D -m 0644 debian/dropins/accounts-daemon-skel.conf \
+	                   $(PAYLOAD)/host-mode/usr/lib/systemd/system/accounts-daemon.service.d/rhizo-skel.conf
+	install -D -m 0644 debian/dropins/avahi-daemon-policy.conf \
+	                   $(PAYLOAD)/host-mode/usr/lib/systemd/system/avahi-daemon.service.d/50-rhizo-policy.conf
+	install -D -m 0644 debian/dropins/user-at-prep.conf \
+	                   "$(PAYLOAD)/host-mode/usr/lib/systemd/system/user@.service.d/rhizo-user-prep.conf"
+	install -D -m 0644 "src/services/units/session/user-prep@.service" "$(UNITS)/rhizo-user-prep@.service"
+	install -D -m 0644 debian/dropins/session-scope-vt.conf \
+	                   "$(PAYLOAD)/host-mode/usr/lib/systemd/system/session-.scope.d/rhizo-session-vt.conf"
+	install -D -m 0644 "src/services/units/session/session-vt@.service" "$(UNITS)/rhizo-session-vt@.service"
+	install -d debian/rhizo/etc/rhizo/instances
+	install -D -m 0644 src/services/units/boot/androidd.service $(UNITS)/androidd.service
+	install -D -m 0644 src/services/hostfs/hostfs.service $(UNITS)/rhizo-hostfs.service
+	install -D -m 0644 src/services/appsync/app-events.service $(UNITS)/rhizo-app-events.service
+	install -D -m 0644 src/services/units/boot/prepare.service $(UNITS)/rhizo-prepare.service
+	install -D -m 0644 src/services/units/boot/kernel-refresh.service $(UNITS)/rhizo-kernel-refresh.service
+	install -D -m 0644 src/services/units/boot/policy.service $(UNITS)/rhizo-policy.service
+	install -D -m 0644 src/services/units/boot/selinuxfs.service $(UNITS)/rhizo-selinuxfs.service
+	install -D -m 0644 src/services/units/boot/selinux-mode.service $(UNITS)/rhizo-selinux-mode.service
+	install -D -m 0644 src/services/units/boot/host-labels.service $(UNITS)/rhizo-host-labels.service
+	install -D -m 0644 src/services/appsync/resync.path $(UNITS)/rhizo-resync.path
+	install -D -m 0644 src/services/appsync/resync.service $(UNITS)/rhizo-resync.service
+	install -D -m 0644 src/services/appsync/resync-rearm.service $(UNITS)/rhizo-resync-rearm.service
+	install -D -m 0644 src/services/broker/brokerd.socket $(UNITS)/rhizo-brokerd.socket
+	install -D -m 0644 src/services/units/display-pool/display-pool.path $(UNITS)/rhizo-display-pool.path
+	install -D -m 0644 src/services/units/display-pool/display-pool.service $(UNITS)/rhizo-display-pool.service
+	install -D -m 0644 src/services/units/display-pool/display-pool-release.service $(UNITS)/rhizo-display-pool-release.service
+	install -D -m 0644 src/services/units/boot/update-begin.service $(UNITS)/rhizo-update-begin.service
+	install -D -m 0644 src/services/units/boot/update-confirm.service $(UNITS)/rhizo-update-confirm.service
+	install -D -m 0644 src/services/server-idle/server-idle.service $(UNITS)/rhizo-server-idle.service
+	install -D -m 0644 src/services/broker/brokerd@.service $(UNITS)/rhizo-brokerd@.service
+	install -D -m 0644 src/services/units/boot/androidd@.service $(UNITS)/androidd@.service
+	install -D -m 0644 src/services/server-idle/server-idle@.service $(UNITS)/rhizo-server-idle@.service
+	install -D -m 0644 src/services/api/api.socket $(UNITS)/rhizo-api.socket
+	install -D -m 0644 src/services/api/api@.service $(UNITS)/rhizo-api@.service
+	install -D -m 0644 src/services/streamd/streamd.socket $(UNITS)/rhizo-streamd.socket
+	install -D -m 0644 src/services/streamd/streamd.service $(UNITS)/rhizo-streamd.service
+	install -D -m 0644 src/services/streamd/stream-capability.path $(UNITS)/rhizo-stream-capability.path
+	install -D -m 0644 src/services/streamd/stream-capability.service $(UNITS)/rhizo-stream-capability.service
+	install -D -m 0644 src/services/deskbridge/deskd.service $(UNITS)/rhizo-deskd.service
+	install -D -m 0644 src/services/audiod/audiod.service $(UNITS)/rhizo-audiod.service
+	install -D -m 0644 src/services/deskbridge/desk-token.service $(UNITS)/rhizo-desk-token.service
+	install -D -m 0644 src/services/displayd/displayd.service $(UNITS)/rhizo-displayd.service
+	install -D -m 0644 src/services/keymapd/keymapd.service $(UNITS)/rhizo-keymapd.service
+	install -D -m 0644 src/services/rtd/rtd.service $(UNITS)/rhizo-rtd.service
+	install -D -m 0644 src/services/delayd/delayd.service $(UNITS)/rhizo-delayd.service
+	install -D -m 0644 src/services/headroomd/headroomd.service $(UNITS)/rhizo-headroomd.service
+	install -D -m 0644 src/services/btd/btd.service $(UNITS)/rhizo-btd.service
+	install -D -m 0644 src/services/inputd/inputd@.service $(UNITS)/rhizo-inputd@.service
+	install -D -m 0644 src/services/inputd/inputd-uhid@.service $(UNITS)/rhizo-inputd-uhid@.service
+	install -D -m 0644 debian/dropins/inputd-instance0.conf \
+	                   $(UNITS)/rhizo-inputd@0.service.d/10-instance0.conf
+	install -D -m 0644 debian/dropins/inputd-instance0.conf \
+	                   $(UNITS)/rhizo-inputd-uhid@0.service.d/10-instance0.conf
+	install -D -m 0644 src/services/units/session/desktop-session.path \
+	                   $(USER_UNITS)/rhizo-desktop-session.path
+	install -D -m 0644 src/services/units/session/desktop-session.service \
+	                   $(USER_UNITS)/rhizo-desktop-session.service
+	install -D -m 0644 src/services/deskbridge/desk-notify.path \
+	                   $(USER_UNITS)/rhizo-desk-notify.path
+	install -D -m 0644 src/services/deskbridge/desk-notify.service \
+	                   $(USER_UNITS)/rhizo-desk-notify.service
+	install -D -m 0644 src/services/units/session/desktop-session.tmpfiles \
+	                   debian/rhizo/usr/lib/tmpfiles.d/rhizo-desktop-session.conf
+	install -D -m 0644 src/services/units/boot/run-root.tmpfiles \
+	                   debian/rhizo/usr/lib/tmpfiles.d/rhizo-run-root.conf
+	install -D -m 0644 debian/dropins/androidd-desktop-daemons.conf \
+	                   $(UNITS)/androidd.service.d/20-desktop-daemons.conf
+	install -D -m 0644 debian/dropins/androidd-rtd.conf \
+	                   $(UNITS)/androidd.service.d/21-rtd.conf
+	install -D -m 0644 debian/dropins/androidd-delayd.conf \
+	                   $(UNITS)/androidd.service.d/22-delayd.conf
+	install -D -m 0644 debian/dropins/androidd-headroomd.conf \
+	                   $(UNITS)/androidd.service.d/23-headroomd.conf
+	install -D -m 0644 debian/dropins/androidd-btd.conf \
+	                   $(UNITS)/androidd.service.d/24-btd.conf
+	install -D -m 0644 src/services/appsync/remove-entries.path $(UNITS)/rhizo-remove-entries.path
+	install -D -m 0644 src/services/appsync/remove-entries.service $(UNITS)/rhizo-remove-entries.service
+	install -D -m 0644 src/services/units/session/desktop-attach.path $(UNITS)/rhizo-desktop-attach.path
+	install -D -m 0644 src/services/units/session/desktop-attach.service $(UNITS)/rhizo-desktop-attach.service
+	install -D -m 0644 src/services/units/session/session-start.path $(UNITS)/rhizo-session-start.path
+	install -D -m 0644 src/services/units/session/session-start.service $(UNITS)/rhizo-session-start.service
+	install -D -m 0644 src/services/appsync/run-rhizo.mount.d/resync-rearm.conf \
+	                   $(UNITS)/run-rhizo.mount.d/rhizo-resync-rearm.conf
+	install -D -m 0644 src/services/appsync/run-rhizo-data.mount.d/resync-rearm.conf \
+	                   $(UNITS)/run-rhizo-data.mount.d/rhizo-resync-rearm.conf
+	install -D -m 0644 debian/dropins/androidd-packaged-paths.conf \
+	                   $(UNITS)/androidd.service.d/10-packaged-paths.conf
+	install -D -m 0644 debian/dropins/androidd-at-packaged-paths.conf \
+	                   "$(UNITS)/androidd@.service.d/10-packaged-paths.conf"
+	install -D -m 0644 debian/dropins/display-pool-packaged-paths.conf \
+	                   $(UNITS)/rhizo-display-pool.service.d/10-packaged-paths.conf
+	install -D -m 0644 debian/dropins/display-pool-release-packaged-paths.conf \
+	                   $(UNITS)/rhizo-display-pool-release.service.d/10-packaged-paths.conf
+	install -D -m 0644 debian/dropins/hostfs-packaged-paths.conf \
+	                   $(UNITS)/rhizo-hostfs.service.d/10-packaged-paths.conf
+	install -D -m 0644 src/services/units/applications/apk-installer.desktop \
+	                   debian/rhizo/usr/share/applications/rhizo-apk-installer.desktop
+	install -D -m 0644 src/services/units/applications/rhizo.desktop debian/rhizo/usr/share/applications/rhizo.desktop
+	install -D -m 0644 debian/menus/rhizo.menu \
+	                   debian/rhizo/etc/xdg/menus/applications-merged/rhizo.menu
+	install -D -m 0644 debian/menus/rhizo.directory \
+	                   debian/rhizo/usr/share/desktop-directories/rhizo.directory
+	install -d debian/rhizo/usr/share/icons/hicolor/256x256/apps
+	python3 tools/build/packaging/deb/gen-rhizo-icon.py \
+	        debian/rhizo/usr/share/icons/hicolor/256x256/apps/rhizo.png
+	chmod 0644 debian/rhizo/usr/share/icons/hicolor/256x256/apps/rhizo.png
+	install -D -m 0644 src/services/udev/70-uinput.rules \
+	                   debian/rhizo/usr/lib/udev/rules.d/70-rhizo-uinput.rules
+	install -D -m 0644 src/services/udev/59-loop-unbound.rules \
+	                   debian/rhizo/usr/lib/udev/rules.d/59-rhizo-loop-unbound.rules
+	install -D -m 0755 $(INPUTD_BIN) debian/rhizo/usr/lib/udev/rhizo-input-owned
+	install -D -m 0644 LICENSE debian/rhizo/usr/share/doc/rhizo/LICENSE
+	install -D -m 0644 NOTICE debian/rhizo/usr/share/doc/rhizo/NOTICE
+	cp -a LICENSES debian/rhizo/usr/share/doc/rhizo/LICENSES
+# disable the host ELF passes
+override_dh_strip:
+override_dh_dwz:
+override_dh_strip_nondeterminism:
+override_dh_makeshlibs:
+
+override_dh_shlibdeps:
+ifeq ($(DEB_HOST_ARCH),arm64)
+	dh_shlibdeps -prhizo -Xgfx_hal -Xgpu_driver -Xrhizo-probed \
+	             -Xrhizo-wayland-probe -Xrhizo-keymint-service -Xrhizo-host-delay \
+	             -- -l/usr/aarch64-linux-gnu/lib -l/usr/lib/aarch64-linux-gnu
+else
+	dh_shlibdeps -prhizo -Xgfx_hal -Xgpu_driver -Xrhizo-probed \
+	             -Xrhizo-wayland-probe -Xrhizo-keymint-service -Xrhizo-host-delay
+endif

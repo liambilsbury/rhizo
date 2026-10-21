@@ -1,0 +1,7 @@
+#!/bin/bash
+[[ "${APT_CONFIG:-}" == "$STUB_APT_CONFIG" ]] || { echo "E: No packages found" >&2; exit 100; }
+echo "apt-cache $*" >> "$STUB_LOG"
+case "$1" in
+  depends) printf 'a\n  Depends: libreq\n  Depends: <virt>\nb\n  Depends: libopt\nlibreq\nlibopt\n<virt>\n' ;;
+  show) case "$2" in libreq) echo "Priority: required" ;; *) echo "Priority: optional" ;; esac ;;
+esac

@@ -1,0 +1,24 @@
+[Unit]
+Description=Rhizo uhid broker, instance %i
+BindsTo=rhizo-inputd@%i.service
+Wants=rhizo-selinux-mode.service
+After=rhizo-inputd@%i.service rhizo-selinux-mode.service rhizo-host-labels.service
+PartOf=androidd@%i.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh devices.uinput
+ExecStartPre=+/usr/sbin/modprobe uhid
+User=rhizo-uhid
+Group=rhizo-uhid
+ExecStart=/usr/lib/rhizo/rhizo-inputd uhid --instance %i --supervisor /run/rhizo-input-%i/supervisor.sock
+Restart=on-failure
+RestartSec=1
+RestartPreventExitStatus=78
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+StandardOutput=journal
+StandardError=journal

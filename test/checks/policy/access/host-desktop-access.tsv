@@ -1,0 +1,10 @@
+domain	path-or-object	label	class	perms	code-site
+rhizo_host	/tmp/<QLocalServer dir>/s	tmpfs	sock_file	create setattr rename unlink	qtbase QLocalServer::listen
+rhizo_host	/tmp/<QLocalServer dir>	tmpfs	dir	search write add_name remove_name create rmdir	qtbase QLocalServer::listen
+rhizo_host	PID 1's accepted UNIX-STREAM socket	kernel	unix_stream_socket	setattr	systemd 262 varlink/bus handover
+rhizo_host	kdeconnectd's route socket	rhizo_host	netlink_route_socket	ioctl	kdeconnectd interface scan (ioctlcmd 0x8b07)
+rhizo_host	ModemManager's Qualcomm IPC router socket	rhizo_host	qipcrtr_socket	create	ModemManager QRTR probe
+rhizo_host	bwrap's network namespace	rhizo_host	cap_userns	net_admin	bwrap loopback setup
+rhizo_host	/run/user/<uid> tmpfs	tmpfs	filesystem	quotaget quotamod	systemd-user-runtime-dir quota
+rhizo_host	systemd-ssh-generator's vsock probe	rhizo_host	vsock_socket	create	systemd-ssh-generator
+rhizo_host	/tmp/* (tmpfs)	tmpfs	file	execute execute_no_trans	execve from /tmp

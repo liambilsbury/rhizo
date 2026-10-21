@@ -1,0 +1,13 @@
+[Unit]
+Description=Rhizo desktop daemon start
+After=rhizo-policy.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/test -e /run/rhizo-desktop/session.env
+ExecCondition=/usr/bin/systemctl is-active --quiet androidd.service
+ExecStart=/usr/bin/systemctl start --no-block rhizo-deskd.service rhizo-audiod.service
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

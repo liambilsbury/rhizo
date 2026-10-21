@@ -1,0 +1,23 @@
+rhizo: library-not-linked-against-libc [usr/lib/rhizo/*]
+
+rhizo: custom-library-search-path RUNPATH /usr/lib/x86_64-linux-gnu [usr/lib/rhizo/*]
+
+rhizo: unstripped-binary-or-object [usr/lib/rhizo/*]
+
+rhizo: embedded-library zlib [usr/lib/rhizo/gpu_driver/lib/libz.so]
+rhizo: embedded-library zlib [usr/lib/rhizo/gpu_driver_32/lib/libz.so]
+rhizo: embedded-library zlib [usr/lib/rhizo/gpu_driver_software/lib/libz.so]
+
+rhizo: maintainer-script-calls-systemctl
+
+rhizo: command-with-path-in-maintainer-script /usr/bin/rhizo (plain script) [postinst:*]
+
+rhizo: command-with-path-in-maintainer-script /usr/bin/python3 (plain script) [postinst:*]
+
+rhizo: embedded-library expat [usr/lib/rhizo/tools/aapt2]
+rhizo: embedded-library zlib [usr/lib/rhizo/tools/aapt2]
+
+rhizo: no-manual-page [usr/bin/rhizo]
+
+rhizo: wrong-path-for-interpreter /system/bin/sh != /bin/sh [usr/lib/rhizo/guest/*]
+rhizo: script-not-executable [usr/lib/rhizo/guest/*]

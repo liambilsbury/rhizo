@@ -1,0 +1,9 @@
+ACTION!="add|change", GOTO="rhizo_uinput_end"
+SUBSYSTEM!="input", GOTO="rhizo_uinput_end"
+ATTRS{id/bustype}=="0006", ATTRS{id/vendor}=="1209", ATTRS{name}=="rhizo-*", ENV{ID_INPUT}="", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+
+PROGRAM=="/usr/lib/udev/rhizo-input-owned owned %p", ENV{ID_INPUT}="", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+
+LABEL="rhizo_uinput_end"
+
+KERNEL=="uhid", GROUP="rhizo-uhid", MODE="0660"

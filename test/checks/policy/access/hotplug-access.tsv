@@ -1,0 +1,37 @@
+domain	path-or-object	label	class	perms	code-site
+rhizo_host	kernel (the module request)	kernel	system	module_request	kernel/module/kmod.c:__request_module
+kernel	kernel (a kworker's module request)	kernel	system	module_request	kernel/module/kmod.c:__request_module
+kernel	/usr/bin/kmod (via /sbin/modprobe)	rhizo_host_exec	file	getattr open read execute	kernel/umh.c:call_usermodehelper_exec_async
+kernel	the helper's new domain	rhizo_host	process	transition noatsecure siginh rlimitinh	src/androidd/guest/sepolicy/policy.cil:(typetransition kernel rhizo_host_exec process rhizo_host)
+rhizo_host	/usr/bin/kmod	rhizo_host_exec	file	entrypoint read execute map	src/androidd/sandbox/selinux_labels.py:HOST_EXEC_PATHS
+rhizo_host	/usr/bin/kmod.dpkg-new	rhizo_host_exec	file	create write setattr rename open getattr	dpkg's unpack of a kmod update
+rhizo_host	the loader	rhizo_host	capability	sys_module	kernel/module/main.c:may_init_module
+rhizo_host	/lib/modules/<kver>/**/*.ko*	rhizo_host_module_file	system	module_load	security/selinux/hooks.c:selinux_kernel_module_from_file
+rhizo_host	/lib/modules/<kver>/**/*.ko*	rhizo_host_module_file	file	getattr open read map	kmod and libkmod in systemd-udevd
+rhizo_host	/lib/modules/<kver>/**	rhizo_host_module_file	dir	search open read getattr write add_name remove_name create rmdir	dpkg, depmod, dkms, update-initramfs
+rhizo_host	/lib/modules/<kver>/**	rhizo_host_module_file	file	create write unlink rename link setattr	dpkg, depmod, dkms
+rhizo_host	/usr/lib/modules (a unit's mount namespace)	rhizo_host_module_file	dir	mounton	systemd src/core/namespace.c
+rhizo_host	/lib/modules/<kver>/**	unlabeled	file	relabelfrom	src/androidd/sandbox/selinux_labels.py:label_host_modules
+rhizo_host	/lib/modules/<kver>/**	rhizo_host_module_file	file	relabelto	src/androidd/sandbox/selinux_labels.py:label_host_modules
+rhizo_host_module_file	the root filesystem	labeledfs	filesystem	associate	security/selinux/hooks.c:selinux_inode_setxattr
+kernel	/dev and its directories (devtmpfs)	device	dir	search write add_name remove_name create rmdir	drivers/base/devtmpfs.c:handle_create
+kernel	kdevtmpfs	kernel	capability	mknod	fs/namei.c:vfs_mknod
+kernel	a new char node	rhizo_host_device	chr_file	create getattr setattr unlink	drivers/base/devtmpfs.c:handle_create
+kernel	a new block node	rhizo_host_device	blk_file	create getattr setattr unlink	drivers/base/devtmpfs.c:handle_create
+rhizo_host_device	the devtmpfs superblock	device	filesystem	associate	security/selinux/hooks.c:may_create
+rhizo_host	a hotplugged char node	rhizo_host_device	chr_file	getattr open read write ioctl setattr watch	systemd-udevd, logind, the session
+rhizo_host	a hotplugged block node	rhizo_host_device	blk_file	getattr open read write ioctl setattr lock watch	systemd-udevd, udisks2
+rhizo_host	/dev/disk/by-*, /dev/snd/by-*	device	dir	search write add_name remove_name create	systemd-udevd
+rhizo_host	/dev/disk/by-*/*	device	lnk_file	create unlink rename read getattr	systemd-udevd
+rhizo_host	systemd-udevd's uevent socket	rhizo_host	netlink_kobject_uevent_socket	create bind read getattr setattr getopt setopt	systemd-udevd
+kernel	/usr/lib/firmware/**	unlabeled	file	getattr open read	drivers/base/firmware_loader/main.c
+rhizo_host	a service's private user namespace	rhizo_host	user_namespace	create	systemd src/core/exec-invoke.c:setup_private_users
+rhizo_host	PID 1 reading a service's new user namespace	rhizo_host	cap_userns	sys_ptrace	systemd src/core/exec-invoke.c:setup_private_users
+rhizo_host	the (sd-userns) helper inside that namespace	rhizo_host	cap_userns	sys_admin	systemd src/core/exec-invoke.c:setup_private_users
+rhizo_host	a PrivateUsers= unit's bounding set	rhizo_host	cap_userns	setpcap	systemd src/core/exec-invoke.c:capability_bounding_set_drop
+rhizo_host	a PrivateUsers= User= unit's uid switch	rhizo_host	cap_userns	setuid	systemd src/core/exec-invoke.c:enforce_user
+rhizo_host	(sd-userns) uid_map/gid_map	rhizo_host	capability	setuid setgid	kernel/user_namespace.c:new_idmap_permitted
+rhizo_host	the unit's pre-exec child	rhizo_host	process	setcap	systemd src/basic/capability-util.c:capability_gain_cap_setpcap
+rhizo_host	/proc/<pid>/{setgroups,gid_map,uid_map}	rhizo_host	file	open write	systemd src/core/exec-invoke.c
+rhizo_host	(sd-userns) uid 0 map	rhizo_host	capability	!setfcap	kernel/user_namespace.c:verify_root_map
+rhizo_host	/usr/lib/modules/<release>/build/**	rhizo_host_module_file	file	execute execute_no_trans	dkms install

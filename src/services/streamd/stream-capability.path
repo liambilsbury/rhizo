@@ -1,0 +1,9 @@
+[Unit]
+Description=Rhizo stream policy watcher
+
+[Path]
+PathModified=/etc/rhizo/policy.conf
+Unit=rhizo-stream-capability.service
+
+[Install]
+WantedBy=multi-user.target

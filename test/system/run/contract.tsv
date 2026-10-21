@@ -1,0 +1,33 @@
+adb-root.sh	shared	na	-	no	cycles=3	none
+audio.sh	shared	no	display.sh,network.sh	no	-	share:rhizo-audiotest-a.apk share:rhizo-audiotest-b.apk share:RhizoAudioRouter.apk share:rhizo-audiod file:gfx_hal/rhizo-audio-core-service vm-dir:pipewire-debs
+bluetooth-handoff.sh	cold-required	na	-	no	-	file:gfx_hal/rhizo-bluetooth-service
+boot-smoke.sh	cold-required	na	-	no	boot_wait=90s	none
+certified-pair.sh	cold-required	na	launcher.sh	no	variant=user posture=	undeclared
+desktop.sh	cold-required	na	-	no	-	share:rhizo-wlbridge share:RhizoDesktop.apk share:rhizo-deskapp.apk
+device-filter.sh	cold-required	na	-	no	-	none
+display-stress.sh	shared	no	-	no	iterations=200 idle_cycles=3	none
+display.sh	cold-required	na	-	no	-	none
+device-injection.sh	cold-required	no	-	no	-	share:rhizo-devicereader.apk share:rhizo-devicereader.json
+gsi-update.sh	cold-required	na	-	no	exhaust_tries=2	undeclared
+host-safety.sh	shared	yes	-	no	-	none
+install.sh	shared	yes	launcher.sh	no	cycles=2 (default)	share:rhizo-test-fixture.apk file:rhizo-test-fixture.json share:rhizo-deskapp.apk file:rhizo-deskapp.json
+installer.sh	cold-required	na	-	no	leg=base	deb:rhizo deb:rhizo-kernel prev-debs:rhizo vm-file:rhizo-keystoreprobe.apk vm-file:modules-extra.deb vm-dir:sway-debs vm-dir:runtime-debs pool-checked:runtime-debs vm-dir:adb-debs gsi:gsi_a16.zip
+launcher.sh	shared	yes	-	no	-	file:aapt2
+lsm-bootstrap.sh	cold-required	na	boot-smoke.sh	no	boot=grub new_disk=1	undeclared
+multi-instance.sh	cold-required	na	-	no	-	share:rhizo-fps.apk
+network.sh	shared	no	install.sh,launcher.sh	no	-	share:rhizo-nettest share:rhizo-nettest.apk share:rhizo-nettest.json share:rhizo-nettest2.apk share:rhizo-nettest2.json share:rhizo-vpntest.apk share:rhizo-vpntest.json file:aapt2
+restart-smoke.sh	cold-required	na	-	no	-	none
+server.sh	cold-required	na	-	no	-	share:rhizo-fps.apk
+sleep.sh	shared	no	-	no	-	none
+storage.sh	cold-required	na	-	no	-	share:rhizo-storagetest.apk file:rhizo-hostfsd
+stream.sh	cold-required	na	-	no	-	share:rhizo-streamd share:rhizo-stream-export-test share:rhizo-stream-export-verify
+version-swap.sh	cold-required	na	-	no	-	undeclared
+window-input.sh	cold-required	na	-	no	-	share:rhizo-winapp.apk share:rhizo-winapp2.apk share:wlr-inject
+rt-budgets.sh	cold-required	na	-	no	-	none
+host-delay.sh	cold-required	na	-	no	-	share:rt-load share:wlr-inject
+headroom.sh	cold-required	na	-	no	-	share:rt-load share:rhizo-headroomprobe.apk
+lifecycle-sway.sh	cold-required	na	-	no	-	deb:rhizo deb:rhizo-kernel prev-debs:rhizo vm-dir:sway-debs vm-dir:runtime-debs pool-checked:runtime-debs vm-dir:pipewire-debs vm-dir:ubuntu-update-debs vm-dir:probe-debs gsi:gsi_a16.zip gsi:gsi_a15.zip
+lifecycle-gnome.sh	cold-required	na	-	no	-	deb:rhizo deb:rhizo-kernel prev-debs:rhizo vm-dir:sway-debs vm-dir:gnome-debs vm-dir:runtime-debs pool-checked:runtime-debs vm-dir:pipewire-debs vm-dir:ubuntu-update-debs vm-dir:probe-debs gsi:gsi_a16.zip gsi:gsi_a15.zip
+lifecycle-plasma.sh	cold-required	na	-	no	-	vm-dir:arch-pool vm-dir:arch-pkgs gsi:gsi_a16.zip gsi:gsi_a15.zip
+lifecycle-server.sh	cold-required	na	-	no	-	deb:rhizo deb:rhizo-kernel prev-debs:rhizo vm-dir:sway-debs vm-dir:runtime-debs pool-checked:runtime-debs vm-dir:pipewire-debs vm-dir:ubuntu-update-debs vm-dir:probe-debs vm-dir:adb-debs gsi:gsi_a16.zip gsi:gsi_a15.zip
+software-render.sh	cold-required	na	-	no	-	share:gpu_driver_software share:rhizo-secureapp.apk

@@ -1,0 +1,19 @@
+#!/bin/sh
+# stop the sandbox services
+set -e
+
+case "$1" in
+  upgrade)
+    # shellcheck source=../src/install/lib/pkg-lib.sh
+    . /usr/lib/rhizo/install/lib/pkg-lib.sh
+    pkg_pre_replace upgrade
+    ;;
+  remove|deconfigure)
+    # shellcheck source=../src/install/lib/pkg-lib.sh
+    . /usr/lib/rhizo/install/lib/pkg-lib.sh
+    pkg_pre_replace remove
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<audioPolicyConfiguration version="7.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <globalConfiguration speaker_drc_enabled="false"/>
+    <modules>
+        <module name="primary" halVersion="3.0">
+            <attachedDevices>
+                <item>Speaker</item>
+                <item>bus0</item>
+                <item>bus1</item>
+                <item>bus2</item>
+                <item>bus3</item>
+                <item>Default Input</item>
+            </attachedDevices>
+            <defaultOutputDevice>Speaker</defaultOutputDevice>
+            <mixPorts>
+                <mixPort name="primary output" role="source" flags="AUDIO_OUTPUT_FLAG_PRIMARY"
+                         maxOpenCount="1" maxActiveCount="1">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </mixPort>
+                <mixPort name="bus0 output" role="source" maxOpenCount="1" maxActiveCount="1">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </mixPort>
+                <mixPort name="bus1 output" role="source" maxOpenCount="1" maxActiveCount="1">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </mixPort>
+                <mixPort name="bus2 output" role="source" maxOpenCount="1" maxActiveCount="1">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </mixPort>
+                <mixPort name="bus3 output" role="source" maxOpenCount="1" maxActiveCount="1">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </mixPort>
+                <mixPort name="record input" role="sink" maxOpenCount="1" maxActiveCount="1">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_IN_STEREO"/>
+                </mixPort>
+            </mixPorts>
+            <devicePorts>
+                <devicePort tagName="Speaker" type="AUDIO_DEVICE_OUT_SPEAKER" role="sink">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </devicePort>
+                <devicePort tagName="bus0" type="AUDIO_DEVICE_OUT_BUS" role="sink" address="bus0">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </devicePort>
+                <devicePort tagName="bus1" type="AUDIO_DEVICE_OUT_BUS" role="sink" address="bus1">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </devicePort>
+                <devicePort tagName="bus2" type="AUDIO_DEVICE_OUT_BUS" role="sink" address="bus2">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </devicePort>
+                <devicePort tagName="bus3" type="AUDIO_DEVICE_OUT_BUS" role="sink" address="bus3">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+                </devicePort>
+                <devicePort tagName="Default Input" type="AUDIO_DEVICE_IN_BUILTIN_MIC" role="source">
+                    <profile format="AUDIO_FORMAT_PCM_16_BIT"
+                             samplingRates="48000" channelMasks="AUDIO_CHANNEL_IN_STEREO"/>
+                </devicePort>
+            </devicePorts>
+            <routes>
+                <route type="mix" sink="Speaker" sources="primary output"/>
+                <route type="mix" sink="bus0" sources="bus0 output"/>
+                <route type="mix" sink="bus1" sources="bus1 output"/>
+                <route type="mix" sink="bus2" sources="bus2 output"/>
+                <route type="mix" sink="bus3" sources="bus3 output"/>
+                <route type="mix" sink="record input" sources="Default Input"/>
+            </routes>
+        </module>
+    </modules>
+    <volumes>
+        <volume stream="AUDIO_STREAM_VOICE_CALL" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_SYSTEM" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_RING" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_MUSIC" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_ALARM" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_NOTIFICATION" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_BLUETOOTH_SCO" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_ENFORCED_AUDIBLE" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_DTMF" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_TTS" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="FULL_SCALE_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_ACCESSIBILITY" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <volume stream="AUDIO_STREAM_ASSISTANT" deviceCategory="DEVICE_CATEGORY_SPEAKER"
+                ref="DEFAULT_MEDIA_VOLUME_CURVE"/>
+        <reference name="FULL_SCALE_VOLUME_CURVE">
+            <point>0,0</point>
+            <point>100,0</point>
+        </reference>
+        <reference name="DEFAULT_MEDIA_VOLUME_CURVE">
+            <point>1,-4950</point>
+            <point>33,-2350</point>
+            <point>66,-990</point>
+            <point>100,0</point>
+        </reference>
+    </volumes>
+</audioPolicyConfiguration>

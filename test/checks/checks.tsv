@@ -1,0 +1,741 @@
+# each check file under test/checks: path, kind (run, selftest or helper), flags, label (for a helper, what runs it), args and needs, tab-separated, - for none
+android/allocator/memfd-buffer.sh	run	-	memfd buffers: stride, seals and import	-	-
+android/apps/desk-token-delivery.py	selftest	-	desk token delivery check	--selftest	-
+android/apps/desk-token-delivery.py	run	-	desk token: grants and delivery	-	-
+android/apps/desktop-bridge-shipped.py	selftest	-	desktop bridge shipped check	--selftest	-
+android/apps/desktop-bridge-shipped.py	run	-	desktop bridge app staged, never granted	-	-
+android/apps/home-privileged.py	selftest	-	home priority check	--selftest	-
+android/apps/home-privileged.py	run	-	home app is a priv-app	-	-
+android/composer/composer-buffer-release.py	selftest	-	composer-buffer-release check	--selftest	-
+android/composer/composer-buffer-release.py	run	-	composer buffer freed by its destructor	-	-
+android/composer/composer-changed-types.py	selftest	-	composer changed-types check	--selftest	-
+android/composer/composer-changed-types.py	run	-	validate reports every layer's request	-	-
+android/composer/composer-control-wake.py	selftest	-	composer-control-wake check	--selftest	-
+android/composer/composer-control-wake.py	run	-	composer control thread wakes on work	-	-
+android/composer/composer-deferred-mouse.py	selftest	-	composer deferred mouse check	--selftest	-
+android/composer/composer-deferred-mouse.py	run	-	secondary display mouse made when composited	-	-
+android/composer/composer-headless-input.py	selftest	-	composer headless input check	--selftest	-
+android/composer/composer-headless-input.py	run	-	headless primary display gets input	-	-
+android/composer/composer-input-to-photon.py	selftest	-	composer-input-to-photon check	--selftest	-
+android/composer/composer-input-to-photon.py	run	-	input-to-photon arms and resolves	-	-
+android/composer/composer-pointer-enter.py	selftest	-	composer pointer-enter check	--selftest	-
+android/composer/composer-pointer-enter.py	run	-	pointer enter steps android's pointer	-	-
+android/composer/composer-present-fifo.py	selftest	-	present-fifo check	--selftest	-
+android/composer/composer-present-fifo.py	run	-	backend presents in order and stamps feedback	-	-
+android/composer/display-pool-invisible.py	selftest	-	display-pool-invisible check	--selftest	-
+android/composer/display-pool-invisible.py	run	-	spare display has no wayland surface	-	-
+android/composer/pointer-observation.sh	run	-	cursor position read as sprite origin	-	-
+android/composer/pointer-observation.sh	selftest	-	pointer-observation check	--selftest	-
+android/composer/release-spare-atomic.py	selftest	-	release-spare-atomic check	--selftest	-
+android/composer/release-spare-atomic.py	run	-	release-spare's claimed check is atomic with its teardown	-	-
+android/composer/selection-read.sh	run	-	composer reads the newest complete selection	-	-
+android/composer/shm-present.sh	run	-	shm frames presented by their seals	-	-
+android/composer/shm-present.sh	selftest	-	shm-present check	--selftest	-
+android/display/display-list-grammar.py	selftest	-	display-list grammar check	--selftest	-
+android/display/display-list-grammar.py	run	-	display-list consumers parse the reply	-	-
+android/display/display-port-lifetime.py	selftest	-	display-port-lifetime check	--selftest	-
+android/display/display-port-lifetime.py	run	-	display ports live as long as their display	-	-
+android/display/display-port-source.py	selftest	-	display-port-source check	--selftest	-
+android/display/display-port-source.py	run	-	display lookups key on the reported port	-	-
+android/hal/allocator-ring.py	selftest	-	allocator-ring check	--selftest	-
+android/hal/allocator-ring.py	run	-	allocator inode ring is wired, gated and joinable	-	-
+android/hal/gnss-extension-nulls.py	selftest	-	GNSS extension null check	--selftest	-
+android/hal/gnss-extension-nulls.py	run	-	gnss extensions return real objects	-	aosp-android16-qpr2/hardware/interfaces/gnss/
+android/hal/gnss-location-flags.py	selftest	-	GNSS location flag check	--selftest	-
+android/hal/gnss-location-flags.py	run	-	gnss location values and flags agree	-	toolchain/gen/gnss/
+android/hal/gnss-vts-contract.py	selftest	-	GNSS VTS contract check	--selftest	c++
+android/hal/gnss-vts-contract.py	run	-	gnss hal meets the vts contract	-	c++
+android/hal/hal-knobs.py	selftest	-	hal-knobs check	--selftest	-
+android/hal/hal-knobs.py	run	-	every launcher knob has a reader	-	var/share/gfx_hal/
+android/hal/hal-start-class.py	selftest	-	HAL start class check	--selftest	-
+android/hal/hal-start-class.py	run	-	early hals start in early_hal	-	-
+android/hal/keymint-boot-calls.sh	run	-	keymint answers keystore2 boot calls	-	var/share/rhizo-keymint-service var/gsi/system.img
+android/hal/keymint-boot-calls.sh	selftest	-	keymint boot-calls check	--selftest	var/gsi/system.img
+android/hal/keymint-locksettings-sync.sh	selftest	-	keymint/LockSettings sync check	--selftest	-
+android/hal/keymint-locksettings-sync.sh	run	-	keymint alias clear resets every user	-	-
+android/hal/keymint-migration.sh	selftest	-	keymint-migration check	--selftest	-
+android/hal/keymint-migration.sh	run	-	keystore state migrated once	-	-
+android/hal/mapper-inventory.py	selftest	-	mapper-inventory check	--selftest	-
+android/hal/mapper-inventory.py	run	-	mapper buffer inventory	-	-
+android/hal/mapper-xfer-errors.py	selftest	-	mapper transfer-error check	--selftest	-
+android/hal/mapper-xfer-errors.py	run	-	mapper transfer errors fail no_resources	-	-
+android/hal/power-headroom-link.sh	run	-	power hal headroom link reconnects	-	-
+android/hal/power-rtd-link.sh	run	-	power hal rtd link reconnects	-	-
+android/native/host-delay-staging.py	run	-	host-delay staged only when on	-	-
+android/native/host-delay.sh	selftest	volatile	host-delay core check	-	gcc toolchain/perfetto/trace_processor_shell
+android/native/probe-body.sh	selftest	-	probe body check	--selftest	-
+android/native/probe-body.sh	run	-	multi-line probe body runs every line	-	-
+android/native/probed-peer.py	selftest	-	probed peer check	--selftest	-
+android/native/probed-peer.py	run	-	probed admits only root peers	-	-
+build/abi-arm64.py	helper	-	build/abi.sh runs it for the arm64 release	-	-
+build/abi-unwaived.sh	selftest	-	abi-unwaived check	--selftest	-
+build/abi-unwaived.sh	run	-	unwaived abi gap leaves a marker	-	-
+build/abi-waiver-exact-match.sh	selftest	-	abi waiver exact-match check	--selftest	-
+build/abi-waiver-exact-match.sh	run	-	abi waivers looked up by exact match	-	-
+build/abi.sh	run	-	arm64 static abi check	a16-arm64	-
+build/abi.sh	selftest	-	arm64 static ABI check selftest	--selftest	-
+build/build-paths.py	selftest	-	build paths check	--selftest	-
+build/build-paths.py	run	-	tools paths resolve	-	-
+build/build-release.sh	selftest	-	build-release ABI-gap check	--selftest	-
+build/build-release.sh	run	-	build-release reads abi.sh annotations	-	-
+build/build-set.sh	helper	-	build/clean-clone-build.sh runs it on the clone's share	-	-
+build/clean-clone-build.sh	selftest	-	clean-clone system test	--selftest	-
+build/env/build-env-mounts.sh	run	-	build container mounts	-	-
+build/env/build-env-pinned.py	selftest	-	build environment pin check	--selftest	-
+build/env/build-env-pinned.py	run	-	the build container stays pinned	-	-
+build/host-elf-links.py	selftest	-	host ELF links check	--selftest	-
+build/host-elf-links.py	run	-	host elfs link only allowlisted libraries	-	var/share/gfx_hal/ var/share/gpu_driver/
+build/keymint-patches.sh	run	-	keymint patches applied and stamped	-	-
+build/keymint-patches.sh	selftest	-	keymint patch check	--selftest	-
+build/libcxx-boundary.py	selftest	-	libc++ boundary check	--selftest	-
+build/libcxx-boundary.py	run	-	hal.sh products avoid platform c++ objects	-	var/share/gfx_hal/ var/share/rhizo-nettest
+build/payload-producers.py	selftest	-	payload producers	--selftest	-
+build/payload-producers.py	run	-	payload producers	-	-
+build/staged-coverage.py	selftest	-	staged-coverage check	--selftest	-
+build/staged-coverage.py	run	-	share apks have artifacts.tsv rows	-	-
+install/gsi/gsi-cache-cleanup.sh	selftest	-	gsi-cache-cleanup check	--selftest	-
+install/gsi/gsi-cache-cleanup.sh	run	-	gsi download cache removed after staging	-	-
+install/gsi/gsi-labeled-stage.py	run	-	gsi staged through stage-gsi-labeled	-	-
+install/gsi/gsi-labeled-stage.py	selftest	-	gsi-labeled-stage check	--selftest	-
+install/gsi/gsi-loader.sh	selftest	-	GSI loader check	--selftest	-
+install/gsi/gsi-loader.sh	run	volatile	GSI loader lives in its helpers	-	-
+install/gsi/gsi-policy-loaded.sh	run	-	gsi staging deferred by loaded policy	-	-
+install/gsi/gsi-policy-loaded.sh	selftest	-	gsi-policy-loaded check	--selftest	-
+install/gsi/gsi-scratch.sh	selftest	-	gsi-scratch check	--selftest	-
+install/gsi/gsi-scratch.sh	run	-	gsi fetch scratch image	-	-
+install/gsi/gsi-tree-probe.py	run	-	gsi tree probe the host can answer	-	-
+install/gsi/gsi-tree-probe.py	selftest	-	GSI tree probe check	--selftest	-
+install/gsi/gsi-update-trial-corruption.sh	selftest	-	gsi-update trial-corruption check	--selftest	-
+install/gsi/gsi-update-trial-corruption.sh	run	-	corrupt trial image discarded	-	-
+install/gsi/gsi-update-wiring.py	run	-	gsi update units wiring	-	-
+install/gsi/gsi-update-wiring.py	selftest	-	GSI update wiring check	--selftest	-
+install/selinuxns/device-state-cli-label.py	run	-	cli device-state setters label files	-	-
+install/selinuxns/etc-restore.py	run	-	account files restored byte-identical	-	unshare useradd userdel groupadd groupdel usermod bash
+install/selinuxns/etc-restore.py	selftest	-	etc restore check	--selftest	unshare useradd userdel groupadd groupdel usermod bash
+install/selinuxns/host-helper-log-policy.py	run	volatile	host helpers under ubuntu refpolicy	-	var/host-policy/selinux-policy-default_2.20240202-1_all.deb secilc matchpathcon dpkg-deb sesearch
+install/selinuxns/host-helper-log-policy.py	selftest	volatile	host helper log policy check	--selftest	var/host-policy/selinux-policy-default_2.20240202-1_all.deb secilc matchpathcon dpkg-deb sesearch
+install/selinuxns/host-helper-log.py	run	-	host helpers log to a pipe	-	-
+install/selinuxns/host-helper-log.py	selftest	-	host helper log check	--selftest	-
+install/selinuxns/host-labels-order.py	run	-	host-labels service runs first	-	-
+install/selinuxns/host-labels-order.py	selftest	-	host-labels order check	--selftest	-
+install/selinuxns/install-steps.py	run	-	install edits no host security module	-	-
+install/selinuxns/install-steps.py	selftest	-	install-steps check	--selftest	-
+install/selinuxns/kept-mode-file.py	run	-	kept host mode file	-	-
+install/selinuxns/log-pipe-writers.py	selftest	-	log pipe writers check	--selftest	-
+install/selinuxns/log-pipe-writers.py	run	-	kernel and launcher share a log pipe	-	var/suites/android-cts/ var/gsi/system.img
+install/selinuxns/udev-host-policy.py	run	volatile	udev reaches the uinput socket under refpolicy	-	var/host-policy/selinux-policy-default_2.20240202-1_all.deb secilc matchpathcon dpkg-deb sesearch
+install/selinuxns/udev-host-policy.py	selftest	volatile	udev host policy check	--selftest	var/host-policy/selinux-policy-default_2.20240202-1_all.deb secilc matchpathcon dpkg-deb sesearch
+install/selinuxns/uninstall-package-hint.py	run	-	uninstall hints avoid autoremove	-	-
+install/selinuxns/uninstall-package-hint.py	selftest	-	uninstall package hint check	--selftest	-
+install/selinuxns/units-follow-mode.py	run	-	host-wide selinux units follow the mode	-	-
+install/setup/apex-align.py	run	-	apex payloads stay aligned	-	-
+install/setup/cli-pool.sh	selftest	-	rhizo-cli instance-pool fixture check	--selftest	-
+install/setup/cli-pool.sh	run	-	cli-pool: allocate and release	-	-
+install/setup/data-template-mode.sh	run	-	data template follows the mode	-	-
+install/setup/data-template-mode.sh	selftest	-	data-template-mode check	--selftest	-
+install/setup/data-template.sh	selftest	-	data-template check	--selftest	-
+install/setup/data-template.sh	run	-	data template is byte-exact, labeled, named right	-	-
+install/setup/dpkg-no-policy-start.py	selftest	-	dpkg no-policy-start check	--selftest	-
+install/setup/dpkg-no-policy-start.py	run	-	install starts no policy load or sandbox	-	-
+install/setup/loop-max.sh	selftest	-	loop-max check	--selftest	-
+install/setup/loop-max.sh	run	-	loop ceiling covers each release	-	-
+install/setup/orphan-tests.sh	selftest	-	orphan test wiring check	--selftest	-
+install/setup/orphan-tests.sh	run	serial	rhizo.sh and broker offline suites pass	-	-
+install/setup/prepare-tree-refusal.sh	run	-	prepare-tree refusal reason	-	-
+install/setup/prepare-tree-refusal.sh	selftest	-	prepare-tree-refusal check	--selftest	-
+install/setup/prepared-marker-cleared.sh	selftest	-	prepared-marker cleared check	--selftest	-
+install/setup/prepared-marker-cleared.sh	run	-	upgrade clears the prepared marker	-	-
+install/setup/prepared-reprepare.py	run	-	refused prepared tree re-prepared at boot	-	-
+install/setup/prepared-tree-prune.sh	selftest	-	prepared-tree prune check	--selftest	-
+install/setup/prepared-tree-prune.sh	run	-	superseded prepared tree pruned	-	-
+install/setup/setup-boot-order.py	selftest	-	setup-boot order check	--selftest	-
+install/setup/setup-boot-order.py	run	-	setup boot and policy unit never deadlock	-	-
+install/setup/setup-boot-release.py	selftest	-	setup-boot release check	--selftest	-
+install/setup/setup-boot-release.py	run	-	setup boot kept and released	-	-
+install/teardown/host-exec-paths.py	selftest	-	host-exec path lists	--selftest	-
+install/teardown/host-exec-paths.py	run	-	installed host binaries cleared on uninstall	-	-
+install/teardown/teardown-check-scope.sh	run	serial	teardown check stops only its stand-ins	-	-
+install/teardown/teardown-config-restores.py	run	-	teardown restores pacman config lines	-	-
+install/teardown/teardown-config-restores.py	selftest	-	teardown config restores check	--selftest	-
+install/teardown/teardown-remove-keeps-data.py	selftest	-	teardown remove-vs-purge check	--selftest	-
+install/teardown/teardown-remove-keeps-data.py	run	-	non-purge teardown keeps data	-	-
+install/teardown/teardown-stops-payload.sh	selftest	serial	teardown payload stop	--selftest	-
+install/teardown/teardown-stops-payload.sh	run	serial	removal stops leftover sandbox processes	-	-
+install/teardown/teardown-upgrade-stop.sh	selftest	-	replaced-version host cleanup	--selftest	-
+install/teardown/teardown-upgrade-stop.sh	run	-	replaced version's host processes ended	-	-
+install/uninstall-removal-lines.py	run	-	arch removal runs pacman -R	-	-
+launcher/capabilities/capability-coverage.py	selftest	-	capability coverage check	--selftest	-
+launcher/capabilities/capability-coverage.py	run	-	every capability is registered, enforced and proven	-	-
+launcher/capabilities/capability-wiring.py	selftest	-	capability wiring check	--selftest	-
+launcher/capabilities/capability-wiring.py	run	-	withheld capability absent from argv and firewall	-	-
+launcher/devices/android-dummy0.py	run	-	namespace mode gives android dummy0	-	-
+launcher/devices/coldboot-host-uevents.py	selftest	-	cold boot host uevents check	--selftest	aosp-android16-qpr2/system/core/
+launcher/devices/coldboot-host-uevents.py	run	-	cold boot writes no host uevent	-	aosp-android16-qpr2/system/core/ var/gsi/system.img var/share/gsi_a15.img var/share/gsi_a17.img
+launcher/devices/device-cgroup-filter.py	selftest	-	device cgroup filter check	--selftest	-
+launcher/devices/device-cgroup-filter.py	run	-	withheld devices denied at cgroup filter	-	-
+launcher/devices/device-node-teardown.py	selftest	-	device-node capability teardown check	--selftest	-
+launcher/devices/device-node-teardown.py	run	-	devices off removes leftover nodes	-	-
+launcher/devices/gpu-switch-launch.py	run	-	devices.dri off selects software rendering	-	-
+launcher/devices/hidraw-labels.py	run	-	hidraw labels set on the verified node	-	-
+launcher/devices/input-fence.py	selftest	-	host input fence check	--selftest	aosp-android16-qpr2/system/core/ aosp-android16-qpr2/system/sepolicy/
+launcher/devices/input-fence.py	run	-	host input devices fenced from the sandbox	-	aosp-android16-qpr2/system/core/ aosp-android16-qpr2/system/sepolicy/
+launcher/devices/input-port-fence.py	selftest	-	input port fence check	--selftest	-
+launcher/devices/input-port-fence.py	run	-	instance uinput devices fenced	-	-
+launcher/devices/kernel-refusal.sh	selftest	-	kernel check	--selftest	-
+launcher/devices/kernel-refusal.sh	run	-	kernel check refuses a stock kernel	-	-
+launcher/devices/loop-unbound-rule.py	selftest	volatile	loop-unbound udev rule check	--selftest	-
+launcher/devices/loop-unbound-rule.py	run	-	udev skips rhizo loop devices	-	-
+launcher/devices/needed-modules.py	run	-	module load names every needed module	-	-
+launcher/devices/render-node-choice.py	selftest	-	render node choice check	--selftest	-
+launcher/devices/render-node-choice.py	run	-	render node chosen and relabeled	-	-
+launcher/devices/seat-uevent-shadow.py	selftest	-	seat uevent shadow check	--selftest	-
+launcher/devices/seat-uevent-shadow.py	run	-	drm uevents read-only in the sandbox	-	-
+launcher/instances/instance-collision.py	selftest	-	instance-collision manifest check	--selftest	-
+launcher/instances/instance-collision.py	run	-	shared host resources separated	-	-
+launcher/instances/instance-policy.py	selftest	-	instance policy overlay check	--selftest	-
+launcher/kernel/data-tier-probe.py	run	-	data tier probe	-	-
+launcher/kernel/kmsg-follow.py	run	-	kmsg-follow replays then follows	-	-
+launcher/kernel/kmsg-follow.py	selftest	-	kmsg-follow check	--selftest	-
+launcher/kernel/loop-helpers.py	run	-	loop helpers match and refuse	-	-
+launcher/kernel/loop-helpers.py	selftest	-	loop-helpers check	--selftest	-
+launcher/kernel/loop-in-process.py	run	-	loop devices handled in process	-	-
+launcher/kernel/loop-in-process.py	selftest	-	loop-in-process check	--selftest	-
+launcher/launch/cache-touch-stop-timeout.py	run	-	sepolicy cache touch and stop timeout	-	-
+launcher/launch/display-pool-off-launch-path.py	selftest	-	display-pool-off-launch-path check	--selftest	-
+launcher/launch/display-pool-off-launch-path.py	run	-	display pool fill off the launch path	-	-
+launcher/launch/display-pool-restart-prime.sh	selftest	-	display pool restart prime check	--selftest	-
+launcher/launch/display-pool-restart-prime.sh	run	-	restarted stack gets its pooled spare	-	-
+launcher/launch/launch-activation.py	selftest	-	launch activation check	--selftest	-
+launcher/launch/launch-activation.py	run	-	launch activation token raises the window	-	-
+launcher/launch/launch-arg-contract.py	selftest	-	launch-arg contract	--selftest	-
+launcher/launch/launch-arg-contract.py	run	-	launch dispatch args match the guest script	-	-
+launcher/launch/launch-log-order.py	selftest	-	launch-log-order check	--selftest	-
+launcher/launch/launch-log-order.py	run	-	launch log writes stay ordered	-	-
+launcher/launch/launch-on-top.py	selftest	-	launch on-top check	--selftest	-
+launcher/launch/launch-on-top.py	run	-	launch waits for the resumed activity	-	-
+launcher/launch/launch-timeout-margin.py	selftest	-	launch-timeout-margin check	--selftest	-
+launcher/launch/launch-timeout-margin.py	run	-	guest poll ceiling stays under the channel timeout	-	-
+launcher/launch/power-confirm-anchor.py	selftest	-	power-confirm-anchor check	--selftest	-
+launcher/launch/power-confirm-anchor.py	run	-	power-confirm reads from display creation	-	-
+launcher/launch/power-confirm-blocking.py	selftest	-	power-confirm-blocking check	--selftest	-
+launcher/launch/power-confirm-blocking.py	run	-	display that never powers on fails the launch	-	-
+launcher/launch/single-round-trip.py	selftest	-	single round trip check	--selftest	-
+launcher/launch/single-round-trip.py	run	-	launch makes one round trip	-	-
+launcher/launch/unfreeze-scope.sh	selftest	-	unfreeze-scope check	--selftest	-
+launcher/launch/unfreeze-scope.sh	run	-	unfreeze test scope matches use_freezer	-	-
+launcher/primer/enforce-poll-patience.py	selftest	-	enforce poll patience check	--selftest	-
+launcher/primer/enforce-poll-patience.py	run	-	enforce poll outlasts the primer timeout	-	-
+launcher/primer/host-primer-names.py	selftest	-	host primer names check	--selftest	-
+launcher/primer/host-primer-names.py	run	-	host primer binds every name	-	-
+launcher/primer/login-refusal.py	selftest	-	login-refusal check	--selftest	-
+launcher/primer/login-refusal.py	run	-	launch refused while a login predates it	-	-
+launcher/primer/primer-restart-jobs.py	selftest	-	primer restart-jobs check	--selftest	-
+launcher/primer/primer-restart-jobs.py	run	-	primer restart pass skips its caller's job	-	-
+launcher/primer/primer-restart-safety.py	selftest	-	primer restart-loop safety check	--selftest	-
+launcher/primer/primer-restart-safety.py	run	-	primer logs and guards each restart	-	-
+launcher/primer/primer-seat-exemption.py	selftest	-	primer seat-exemption check	--selftest	-
+launcher/primer/primer-seat-exemption.py	run	-	primer refuses a real login session	-	-
+launcher/primer/primer-signal-unblock.py	run	-	primer unblocks signals before spawning	-	-
+launcher/primer/primer-user-managers.py	selftest	-	primer user-managers check	--selftest	-
+launcher/primer/primer-user-managers.py	run	-	primer re-executes user managers	-	-
+launcher/sandbox/apex-override.py	selftest	-	apex override check	--selftest	-
+launcher/sandbox/init-readproc-group.py	run	-	init starts with the readproc group	-	-
+launcher/sandbox/mount-plan.py	selftest	-	mount-plan check	--selftest	-
+launcher/sandbox/mount-plan.py	run	-	mount plan predicted and ordered	-	-
+launcher/sandbox/pid-max.py	run	-	pid_max set inside android's namespace	-	-
+launcher/sandbox/policy-loaded-sites.py	run	-	namespace mode ignores host policy state	-	-
+launcher/sandbox/policy-loaded-sites.py	selftest	-	policy-loaded-sites check	--selftest	-
+launcher/sandbox/run-root-literal.py	selftest	-	run-root literal check	--selftest	-
+launcher/sandbox/sandbox-hardening.py	selftest	-	sandbox hardening check	--selftest	-
+launcher/sandbox/sandbox-hardening.py	run	-	sandbox hardening per unit	-	-
+launcher/sandbox/sandbox-id.py	selftest	-	sandbox-id derivation check	--selftest	-
+launcher/sandbox/sandbox-interior.py	selftest	-	sandbox interior policy check	--selftest	-
+launcher/sandbox/sandbox-interior.py	run	-	sandbox interior matches policy	-	var/share/policy-lab/
+launcher/sandbox/server-profile.py	run	-	server profile check	-	-
+launcher/sandbox/server-profile.py	selftest	-	server profile check	--selftest	-
+launcher/sandbox/sysrq-mask.sh	selftest	-	sysrq-mask check	--selftest	-
+launcher/sandbox/sysrq-mask.sh	run	-	sysrq-trigger mask is real and documented correctly	-	-
+launcher/selinuxns/handoff/handoff-holder.py	run	-	handoff holder keeps the namespaces	-	-
+launcher/selinuxns/handoff/handoff-holder.py	selftest	-	handoff-holder check	--selftest	-
+launcher/selinuxns/handoff/handoff-joiner.py	run	-	handoff joiner sets up init	-	-
+launcher/selinuxns/handoff/handoff-joiner.py	selftest	-	handoff-joiner check	--selftest	-
+launcher/selinuxns/handoff/holder-ends-init.py	run	volatile	holder exit kills android's init	-	-
+launcher/selinuxns/handoff/host-device-label.py	run	-	relabeller labels host kmsg and null	-	-
+launcher/selinuxns/handoff/host-device-label.py	selftest	-	host-device-label check	--selftest	-
+launcher/selinuxns/handoff/init-exit-verdict.py	run	-	early init exit recorded as refusal	-	-
+launcher/selinuxns/handoff/relabeller-ready.py	run	-	init child waits for relabeller ready	-	-
+launcher/selinuxns/handoff/relabeller-ready.py	selftest	-	relabeller-ready check	--selftest	-
+launcher/selinuxns/handoff/relabeller-watch.py	run	-	relabeller verdict gates pid 1	-	-
+launcher/selinuxns/handoff/relabeller-wiring.py	run	-	relabeller and view keeper wiring	-	-
+launcher/selinuxns/handoff/restart-path.py	run	-	namespace mode restart path	-	-
+launcher/selinuxns/handoff/status-dead-start.py	run	-	status names a start with no verdict	-	-
+launcher/selinuxns/handoff/supervisor-record.py	run	-	resident supervisor record	-	-
+launcher/selinuxns/hardening/device-state-readonly.py	run	-	device-state bridge labeled and read-only	-	-
+launcher/selinuxns/hardening/device-state-restorecon.py	run	-	device-state bridge outside restorecon's walk	-	-
+launcher/selinuxns/hardening/device-state-restorecon.py	selftest	-	device-state-restorecon check	--selftest	-
+launcher/selinuxns/hardening/fence-node-labels.py	run	volatile	fence nodes reach their labels	-	var/share/policy-lab/secilc sesearch var/share/policy-lab/
+launcher/selinuxns/hardening/fence-node-labels.py	selftest	-	fence-node-labels check	--selftest	-
+launcher/selinuxns/hardening/handle-filter.py	run	-	open_by_handle_at filter	-	-
+launcher/selinuxns/hardening/helper-caps.py	run	-	forked helpers drop to init's capabilities	-	-
+launcher/selinuxns/hardening/helper-domain.py	selftest	-	helper-domain check	--selftest	-
+launcher/selinuxns/hardening/helper-domain.py	run	-	policy helpers enter their own domain	-	-
+launcher/selinuxns/hardening/helper-label-inprocess.py	selftest	-	helper-label-inprocess check	--selftest	-
+launcher/selinuxns/hardening/helper-label-inprocess.py	run	-	hostfs label-lower runs in process	-	-
+launcher/selinuxns/hardening/label-domain-skip.py	run	volatile	label-domain reports not run without unshare	-	-
+launcher/selinuxns/hardening/label-domain.py	run	volatile	input label service domain	-	-
+launcher/selinuxns/hardening/landlock-domain.py	run	-	pid 1 joins a landlock domain	-	-
+launcher/selinuxns/hardening/permissive-compiled.py	run	volatile	compiled policy permissive types	-	var/share/policy-lab/secilc var/share/policy-lab/sepolicy-analyze var/share/policy-lab/
+launcher/selinuxns/hardening/permissive-compiled.py	selftest	volatile	permissive-compiled check	--selftest	var/share/policy-lab/secilc var/share/policy-lab/sepolicy-analyze var/share/policy-lab/
+launcher/selinuxns/hardening/silent-failures.py	run	-	namespace modules swallow no error	-	-
+launcher/selinuxns/hardening/silent-failures.py	selftest	-	silent-failures check	--selftest	-
+launcher/selinuxns/mode/command-path.py	run	-	namespace mode reaches android through probed	-	-
+launcher/selinuxns/mode/command-path.py	selftest	-	command-path check	--selftest	-
+launcher/selinuxns/mode/enforce-reader.py	run	-	enforce state readers by mode	-	-
+launcher/selinuxns/mode/host-phase.py	run	-	start-time host phase	-	-
+launcher/selinuxns/mode/in-android-policy.py	run	-	in-android-policy release and verbs	-	-
+launcher/selinuxns/mode/mode-readers.py	run	-	mode readers ask the mode helper	-	-
+launcher/selinuxns/mode/mode-readers.py	selftest	-	mode-readers check	--selftest	-
+launcher/selinuxns/mode/prepolicy-labels.py	run	-	pre-policy labels by mode	-	-
+launcher/selinuxns/mode/prepolicy-labels.py	selftest	-	prepolicy-labels check	--selftest	-
+launcher/selinuxns/mode/root-unshare.py	run	-	selinux namespace unshared before mounts	-	-
+launcher/selinuxns/mode/root-unshare.py	selftest	-	root-unshare check	--selftest	-
+launcher/selinuxns/mode/selinux-mode.py	run	-	selinux mode selection	-	-
+launcher/selinuxns/mode/selinuxfs-mount.py	run	-	sandbox selinuxfs mount by mode	-	-
+launcher/selinuxns/mode/vendor-prelabel.py	run	-	vendor tree prelabeled in a child	-	-
+launcher/selinuxns/mode/vendor-prelabel.py	selftest	-	vendor-prelabel check	--selftest	-
+launcher/selinuxns/policy/policy-ns-child.py	run	-	policy namespace child output and reason	-	-
+launcher/selinuxns/policy/policy-ns-child.py	selftest	-	policy-ns-child check	--selftest	-
+launcher/selinuxns/policy/prepared-manifest-view.py	run	-	prepared manifest recorded in host namespace	-	-
+launcher/selinuxns/policy/prepared-manifest-view.py	selftest	-	prepared-manifest-view check	--selftest	-
+launcher/selinuxns/relabel/dev-labels.py	run	volatile	/dev nodes labeled by file_contexts	-	-
+launcher/selinuxns/relabel/input-labels-not-run.py	run	-	input-labels not run without unshare	-	-
+launcher/selinuxns/relabel/input-labels.py	run	-	input labels read through the label service	-	unshare
+launcher/selinuxns/relabel/input-labels.py	selftest	-	input-labels check	--selftest	-
+launcher/selinuxns/relabel/relabel-order.py	run	volatile	relabeller pass order and enforce	-	-
+launcher/stack/cgroup-teardown.py	selftest	-	cgroup teardown control-flow check	--selftest	-
+launcher/stack/cgroup-teardown.py	run	-	stop clears cgroup controllers	-	-
+launcher/stack/handoff-protocol.py	selftest	-	handoff protocol check	--selftest	-
+launcher/stack/host-lock.py	selftest	-	host-lock check	--selftest	-
+launcher/stack/init-identity.sh	selftest	-	sandbox-init identity check	--selftest	-
+launcher/stack/init-identity.sh	run	-	sandbox init found by its cgroup	-	-
+launcher/stack/policy-only.py	selftest	-	policy-only decisions	--selftest	-
+launcher/stack/post-pivot-imports.py	selftest	-	post-pivot import check	--selftest	-
+launcher/stack/post-pivot-imports.py	run	-	no imports after the pivot	-	-
+launcher/stack/resident-supervisor-shutdown-reap.py	run	-	supervisor killed only at shutdown	-	-
+launcher/stack/stop-releases-data.py	selftest	-	stop-releases-data check	--selftest	-
+launcher/stack/stop-releases-data.py	run	-	stop releases host staging and data loop	-	-
+launcher/stack/stop-sweeps-sandbox.py	run	-	stop sweeps the sandbox cgroup	-	-
+launcher/stack/supervisor-instance-scope.py	selftest	-	supervisor instance-scope check	--selftest	-
+launcher/stack/supervisor-instance-scope.py	run	-	supervisor reads no per-instance constants	-	-
+launcher/stack/supervisor-log-pump.py	run	-	supervisor log pump survives a stop	-	-
+launcher/stack/undefined-names.py	selftest	-	undefined-names check	--selftest	-
+launcher/stack/undefined-names.py	run	-	every name resolves, calls fit	-	-
+launcher/staging/data-in-code.py	selftest	-	data-in-code check	--selftest	-
+launcher/staging/data-in-code.py	run	-	sandbox files are files	-	-
+launcher/staging/prepare-tree-unmount.py	run	-	prepare-tree unmounts before removal	-	-
+launcher/staging/prepare-tree-unmount.py	selftest	-	prepare-tree-unmount check	--selftest	-
+launcher/staging/prepared-layout-version.py	selftest	-	prepared-layout version	--selftest	-
+launcher/staging/prepared-layout-version.py	run	-	the prepared-tree layout version tracks its own code	-	-
+launcher/staging/prepared-tree.py	selftest	-	prepared-tree check	--selftest	-
+launcher/staging/prepared-tree.py	run	-	prepared-bind copy sites all go through stage_bulk	-	-
+launcher/staging/stage-imports.py	selftest	-	stage-imports check	--selftest	-
+launcher/staging/stage-imports.py	run	-	launcher's imports are all staged	-	-
+launcher/staging/status-chip-off.py	selftest	-	status-event chip check	--selftest	-
+launcher/staging/status-chip-off.py	run	-	every boot turns SystemUI's status-event chip off	-	-
+launcher/staging/suspend-backoff.py	selftest	-	suspend-backoff check	--selftest	-
+launcher/staging/suspend-backoff.py	run	-	suspend backoff wired to a short suspend	-	-
+launcher/staging/vendor-cgroups.py	selftest	-	vendor-cgroups check	--selftest	-
+launcher/staging/vendor-cgroups.py	run	-	vendor cgroups.json shape	-	-
+lib/avc-lab.sh	selftest	-	AVC lab check	--selftest	-
+lib/check_entries.py	selftest	-	check entry reader	--selftest	-
+lib/package-tree.py	selftest	-	package matches tree	--selftest	-
+lib/parse-avc.py	selftest	-	AVC parser check	--selftest	-
+lib/policy_lab_cache.py	selftest	-	policy-lab cil cache key	--selftest	-
+lib/tree_dirs.py	selftest	-	tool and test folder list	--selftest	-
+packaging/deb/apt-sandbox.py	selftest	-	apt sandbox host-mode file check	--selftest	-
+packaging/deb/apt-sandbox.py	run	-	apt helpers run as root in host mode	-	-
+packaging/deb/build-debs-at-share.sh	selftest	-	build-debs-at-share check	--selftest	-
+packaging/deb/build-debs-at-share.sh	run	-	debs.sh --at stages its own payload	-	-
+packaging/deb/conffile-runtime-state.py	selftest	-	conffile runtime-state check	--selftest	-
+packaging/deb/conffile-runtime-state.py	run	-	no script writes a conffile	-	-
+packaging/deb/deb-build-scope.sh	selftest	-	package build scope	--selftest	-
+packaging/deb/deb-build-scope.sh	run	-	package build leaves sibling trees untouched	-	-
+packaging/deb/deb-preflight.sh	selftest	-	deb-preflight check	--selftest	-
+packaging/deb/deb-preflight.sh	run	-	deb preflight rebuilds an outdated deb	-	-
+packaging/deb/deb-routes.py	selftest	-	deb-routes check	--selftest	-
+packaging/deb/deb-routes.py	run	-	debian/rules files route to installer.sh	-	-
+packaging/deb/packaging-claims.py	selftest	-	packaging claims check	--selftest	-
+packaging/deb/packaging-claims.py	run	-	debian/control's claim and rhizo doctor's disclosure agree	-	-
+packaging/deb/packaging-config-channel.py	selftest	-	packaging config-channel check	--selftest	-
+packaging/deb/packaging-config-channel.py	run	-	packaged install has a config channel	-	-
+packaging/deb/pool-version-skew.py	selftest	-	pool version-skew check	--selftest	-
+packaging/deb/preinst-release-refusal.sh	selftest	-	preinst release-mismatch refusal check	--selftest	-
+packaging/deb/preinst-release-refusal.sh	run	-	preinst refuses a release mismatch	-	-
+packaging/deb/uninstall-residue.py	run	volatile	uninstall leaves the image's packages	-	var/pristine-dl/ubuntu-24.04-server-cloudimg-amd64.manifest apt-get apt-cache dpkg-deb gcc /etc/apt/apt.conf.d/01autoremove
+packaging/deb/uninstall-residue.py	selftest	volatile	uninstall residue check	--selftest	var/pristine-dl/ubuntu-24.04-server-cloudimg-amd64.manifest apt-get apt-cache dpkg-deb gcc /etc/apt/apt.conf.d/01autoremove
+packaging/deb/version-sites.py	selftest	-	version sites check	--selftest	-
+packaging/deb/version-sites.py	run	-	package version sources agree	-	-
+packaging/layout/deploy-layout-parity.py	selftest	-	deploy-layout parity	--selftest	-
+packaging/layout/deploy-layout-parity.py	run	-	redeploy and package layouts match	-	-
+packaging/layout/launcher-beside-paths.py	run	-	launcher's beside paths are shipped	-	-
+packaging/layout/launcher-beside-paths.py	selftest	-	launcher beside-paths check	--selftest	-
+packaging/layout/release-files.py	run	-	packaged boot stages each release	-	-
+packaging/layout/release-files.py	selftest	-	release files check	--selftest	-
+packaging/layout/root-program-paths.py	run	-	root programs stay out of user dirs	-	-
+packaging/layout/root-program-paths.py	selftest	-	root program paths check	--selftest	-
+packaging/units/avahi-daemon-policy.py	run	-	avahi starts after the policy unit	-	-
+packaging/units/avahi-daemon-policy.py	selftest	-	avahi daemon policy check	--selftest	-
+packaging/units/deploy-unit-parity.py	selftest	-	deploy-unit parity	--selftest	-
+packaging/units/deploy-unit-parity.py	run	-	deploy path stages every unit	-	-
+packaging/units/desktop-attach.py	selftest	-	desktop-attach check	--selftest	-
+packaging/units/desktop-attach.py	run	-	desktop daemons wait for the session	-	-
+packaging/units/desktop-units.py	selftest	-	desktop-units check	--selftest	-
+packaging/units/desktop-units.py	run	-	desktop units drop-ins, masks and wants	-	-
+packaging/units/nnp-unit-execs.py	run	-	nnp units exec no transitioning command	-	-
+packaging/units/nnp-unit-execs.py	selftest	-	nnp-unit-execs check	--selftest	-
+packaging/units/packaged-unit-rig-paths.py	selftest	-	packaged-unit rig-path check	--selftest	-
+packaging/units/packaged-unit-rig-paths.py	run	-	packaged units name no /root path	-	-
+packaging/units/packaged-units.py	selftest	-	packaged-units check	--selftest	-
+packaging/units/packaged-units.py	run	-	packaged units match removals	-	-
+packaging/units/profile-unit-enable.py	selftest	-	profile-masked unit enable check	--selftest	dh_installsystemd make
+packaging/units/profile-unit-enable.py	run	-	desktop-masked units stay unenabled	-	dh_installsystemd make
+packaging/units/systemctl-after-policy.py	run	-	systemctl units ordered after policy	-	-
+packaging/units/systemctl-after-policy.py	selftest	-	systemctl after policy check	--selftest	-
+packaging/units/unit-policy-order.py	selftest	-	unit policy order check	--selftest	-
+packaging/units/unit-policy-order.py	run	-	profile sockets set after package steps	-	-
+policy/access/hotplug-policy.py	selftest	-	hotplug policy check	--selftest	-
+policy/access/hotplug-policy.py	run	-	hotplugged devices labeled and granted	-	var/suites/android-cts/ var/gsi/system.img
+policy/access/restart-access.py	selftest	-	restart access inventory check	--selftest	var/suites/android-cts/ var/gsi/system.img
+policy/access/restart-access.py	run	-	restart path accesses granted	-	var/suites/android-cts/ var/gsi/system.img
+policy/access/restart-access.py	run	-	display manager login accesses granted	--tsv policy/access/host-desktop-access.tsv	var/suites/android-cts/ var/gsi/system.img
+policy/avc/avc-capture-bounded.py	selftest	-	avc capture bounded check	--selftest	-
+policy/avc/avc-capture-bounded.py	run	-	avc log writers use the rotating capture	-	-
+policy/avc/avc-capture-singleton.py	run	-	avc capture is a singleton per boot	-	-
+policy/dac/console-vt.py	selftest	-	console VT check	--selftest	-
+policy/dac/console-vt.py	run	-	console vt gets a root acl	-	-
+policy/dac/desk-rundir.py	selftest	-	desk runtime dir check	--selftest	-
+policy/dac/desk-rundir.py	run	-	deskd runtime dir gets a root acl	-	-
+policy/dac/new-account-home.py	selftest	-	new account home check	--selftest	-
+policy/dac/new-account-home.py	run	-	new account home gets /etc/skel	-	-
+policy/dac/root-unit-paths.py	selftest	-	root-unit-paths check	--selftest	-
+policy/dac/root-unit-paths.py	run	-	root units name no user paths	-	-
+policy/dac/user-manager-start.py	selftest	-	user manager start check	--selftest	-
+policy/dac/user-manager-start.py	run	-	user manager starts without dac override	-	-
+policy/dac/wayland-socket-dac.sh	selftest	-	wayland-socket-dac check	--selftest	-
+policy/dac/wayland-socket-dac.sh	run	-	wayland socket reached without dac override	-	-
+policy/domains/ns-helper-domains.py	selftest	volatile	namespace helper domains check	--selftest	var/suites/android-cts/testcases/CtsSecurityHostTestCases/CtsSecurityHostTestCases.jar var/gsi/system.img var/share/policy-lab/ var/share/plat_pub_versioned.cil
+policy/domains/ns-helper-domains.py	run	volatile	namespace helper domains compile and stay narrow	-	var/suites/android-cts/testcases/CtsSecurityHostTestCases/CtsSecurityHostTestCases.jar var/gsi/system.img var/share/policy-lab/ var/share/plat_pub_versioned.cil
+policy/labels/android-data-labels.py	run	-	host-created data files labeled	-	-
+policy/labels/android-data-labels.py	selftest	-	android-data-labels check	--selftest	-
+policy/labels/host-android-labels.py	run	-	no host-side android labels on a policy host	-	-
+policy/labels/host-android-labels.py	selftest	-	host-android-labels check	--selftest	-
+policy/labels/host-copy-ops.py	run	-	host scripts copy no unwritable attributes	-	-
+policy/labels/host-copy-ops.py	selftest	-	host copy-ops check	--selftest	-
+policy/labels/relabel-scope.py	selftest	-	relabel-scope check	--selftest	-
+policy/labels/relabel-scope.py	run	-	no relabel pass reaches the gsi	-	-
+policy/labels/relabel-spec.py	selftest	-	relabel-spec check	--selftest	-
+policy/labels/relabel-spec.py	run	-	pre-init relabels match the primer spec	-	-
+policy/labels/staged-labels.py	selftest	-	staged-labels oracle	--selftest	-
+policy/labels/wakeup-genfs.py	selftest	-	wakeup genfs check	--selftest	-
+policy/labels/wakeup-genfs.py	run	-	host wakeup sources rendered as sysfs_wakeup	-	-
+policy/labels/wayland-relabel-domain.sh	selftest	-	wayland relabel domain check	--selftest	-
+policy/labels/wayland-relabel-domain.sh	run	-	wayland socket relabel skips chcon	-	-
+policy/rules/composer-input-sysfs.py	run	-	composer reads input sysfs through its own type	-	-
+policy/rules/composer-input-sysfs.py	selftest	-	composer-input-sysfs check	--selftest	-
+policy/rules/composer-input-sysfs.py	run	volatile	uinput sysfs type mirrors sysfs rules	--plat	sesearch secilc var/share/policy-lab/secilc
+policy/rules/compositor-domain-twins.py	selftest	-	compositor domain twins check	--selftest	-
+policy/rules/compositor-domain-twins.py	run	-	compositor holds kernel's grants	-	-
+policy/rules/cts-vendor-cil-resolves.py	selftest	-	cts vendor cil check	--selftest	-
+policy/rules/cts-vendor-cil-resolves.py	run	volatile	cts vendor artifact names known types	-	var/suites/android-cts/testcases/CtsSecurityHostTestCases/CtsSecurityHostTestCases.jar var/gsi/system.img var/share/policy-lab/ var/share/plat_pub_versioned.cil
+policy/rules/cts-vendor-cil-resolves.py	run	volatile	cts vendor artifact compiles with neverallows	--neverallow	var/suites/android-cts/testcases/CtsSecurityHostTestCases/CtsSecurityHostTestCases.jar var/share/policy-lab/secilc var/share/policy-lab/ var/share/plat_pub_versioned.cil
+policy/rules/daemon-socket-labels.py	selftest	-	daemon socket label check	--selftest	-
+policy/rules/daemon-socket-labels.py	run	-	daemon sockets bound with their own type	-	var/suites/android-cts/ var/gsi/system.img
+policy/rules/host-domain-entry.py	selftest	-	host daemon domain entry check	--selftest	-
+policy/rules/host-domain-entry.py	run	-	host daemons enter their own domains	-	-
+policy/rules/host-ptrace.py	selftest	-	host ptrace check	--selftest	-
+policy/rules/host-ptrace.py	run	-	rhizo_host may ptrace only itself	-	var/suites/android-cts/ var/gsi/system.img
+policy/rules/host-pty-owner.py	selftest	-	host pty owner check	--selftest	-
+policy/rules/host-pty-owner.py	run	-	logins take their own pty	-	var/suites/android-cts/ var/gsi/system.img
+policy/rules/host-tty-policy.py	selftest	-	host tty policy check	--selftest	-
+policy/rules/host-tty-policy.py	run	-	host terminals drive their own pty	-	var/suites/android-cts/ var/gsi/system.img
+policy/rules/host-userns-caps.py	selftest	-	host user namespace capability check	--selftest	-
+policy/rules/host-userns-caps.py	run	-	host user namespaces get chroot and nice	-	var/suites/android-cts/ var/gsi/system.img
+policy/rules/in-android-access.py	selftest	-	in-android access check	--selftest	-
+policy/rules/in-android-access.py	run	-	in-android accesses granted or refused	-	var/suites/android-cts/ var/gsi/system.img
+policy/rules/in-android-rc.py	selftest	-	in-android rc check	--selftest	-
+policy/rules/in-android-rc.py	selftest	-	in-android rc gsi script check	--selftest-gsi	mke2fs debugfs
+policy/rules/in-android-rc.py	run	-	shell-domain services and composer caps	-	-
+policy/rules/in-android-rc.py	run	volatile	shell-domain scripts are gsi shell scripts	--gsi ../../var/gsi/system.img	var/gsi/system.img debugfs
+policy/rules/policy-noise.py	selftest	-	policy noise check	--selftest	-
+policy/rules/policy-noise.py	run	volatile	mesa properties, camera and netd noise	-	var/suites/android-cts/ var/gsi/system.img
+policy/rules/policy-template.py	selftest	-	rhizo-policy check	--selftest	var/share/plat_pub_versioned.cil
+policy/rules/policy-template.py	run	-	policy template renders with one owner	-	var/share/plat_pub_versioned.cil
+run-tests.py	selftest	-	test runner	--selftest	-
+services/appsync/appsync-large-pull.py	selftest	-	appsync large APK pull check	--selftest	-
+services/appsync/appsync-large-pull.py	run	-	large apk pulls byte for byte	-	-
+services/appsync/appsync-mode.py	run	-	appsync reads the mode once	-	-
+services/appsync/appsync-mode.py	selftest	-	appsync-mode check	--selftest	-
+services/appsync/appsync-overlap.py	run	-	appsync drain beside a full pass	-	-
+services/audiod/audiod-daemon.sh	run	-	audio daemon survives a silent client	-	-
+services/audiod/audiod-policy.sh	selftest	-	audio policy gate check	--selftest	-
+services/audiod/audiod-policy.sh	run	-	audio.out off leaves no daemon or socket	-	-
+services/audiod/audiod-selftest.sh	run	-	the audio daemon's own header selftest passes	-	-
+services/delayd/delayd.sh	selftest	-	delayd check	-	-
+services/delayd/delayd.sh	selftest	-	delayd mutation check	--selftest	-
+services/deskbridge/desk_hello.py	helper	-	the deskd-*.py drivers beside it import its android app hello	-	-
+services/deskbridge/deskd-auth-order.py	helper	-	deskd-auth-order.sh runs it against a live rhizo-deskd	-	-
+services/deskbridge/deskd-auth-order.sh	run	-	deskd authenticates before displacing	-	-
+services/deskbridge/deskd-bind-before-veth.py	run	-	deskd listens before the veth is configured	-	ip unshare
+services/deskbridge/deskd-bounds.py	run	-	deskd queues and tables stay bounded	-	-
+services/deskbridge/deskd-drop-traversal.py	helper	-	deskd-drop-traversal.sh runs it against a live rhizo-deskd	-	-
+services/deskbridge/deskd-drop-traversal.sh	run	-	deskd drop path confined and capped	-	-
+services/deskbridge/deskd-hostile-lines.py	run	-	deskd survives hostile lines	-	-
+services/deskbridge/deskd-line-injection.py	helper	-	deskd-line-injection.sh runs it against a live rhizo-deskd	-	-
+services/deskbridge/deskd-line-injection.sh	run	-	sandbox strings cannot inject lines	-	-
+services/deskbridge/deskd-notify.py	helper	-	deskd-notify.sh runs it against a live rhizo-deskd	-	-
+services/deskbridge/deskd-notify.sh	selftest	-	desktop notify path	--selftest	-
+services/deskbridge/deskd-notify.sh	run	-	android notification reaches the desktop	-	-
+services/deskbridge/deskd-open-uri.py	helper	-	deskd-open-uri.sh runs it against a live rhizo-deskd	-	-
+services/deskbridge/deskd-open-uri.sh	run	-	open-on-host allowlist, cap and rate limit	-	-
+services/deskbridge/desktop-session-consumers.py	selftest	-	desktop-session consumers check	--selftest	-
+services/deskbridge/desktop-session-consumers.py	run	-	desktop session consumers	-	-
+services/deskbridge/session/desk-notify-bad-lines.py	run	-	desk-notify survives bad requests	-	-
+services/deskbridge/session/deskd-bus-closed.py	run	-	deskd survives a closed session bus	-	-
+services/deskbridge/session/deskd-no-session-bus.py	run	-	no system unit talks to a session bus	-	-
+services/deskbridge/session/deskd-notify-flood.py	run	-	notification flood capped and delivered	-	-
+services/deskbridge/session/deskd-notify-relay.py	run	-	deskd admits only the session owner's relay	-	-
+services/deskbridge/session/deskd-restart-relay.py	run	-	deskd notification socket across restarts	-	-
+services/deskbridge/session/deskd-session-reattach.py	run	-	deskd reattaches to a new session	-	-
+services/deskbridge/session/notify-sink-bus-closed.py	run	-	notify sink exits cleanly on bus close	-	-
+services/headroomd/headroomd.sh	selftest	-	headroomd check	-	-
+services/headroomd/headroomd.sh	selftest	-	headroomd mutation check	--selftest	-
+services/hostfsd/hostfs-init-resolution.py	selftest	-	sandbox init resolution check	--selftest	-
+services/hostfsd/hostfs-init-resolution.py	run	-	hostfs resolves the sandbox's own init	-	-
+services/hostfsd/hostfs-owner-resolution.py	selftest	-	share owner resolution check	--selftest	-
+services/hostfsd/hostfs-owner-resolution.py	run	-	share in a 0750 home resolves its owner	-	-
+services/hostfsd/hostfs-unit-ordering.py	selftest	-	hostfs unit conditions check	--selftest	-
+services/hostfsd/hostfs-unit-ordering.py	run	-	hostfs waits for its 9p mount	-	-
+services/hostfsd/hostfs-xdg-dirs.py	selftest	-	hostfs xdg user-dirs check	--selftest	-
+services/hostfsd/hostfs-xdg-dirs.py	run	-	hostfs shares follow user-dirs.dirs	-	-
+services/hostfsd/hostfsd-selfexec.sh	selftest	-	host filesystem daemon self-exec path	--selftest	-
+services/hostfsd/hostfsd-selfexec.sh	run	-	hostfsd selftest resolves by bare name	-	-
+services/hostfsd/hostfsd.sh	selftest	-	host filesystem daemon	--selftest	-
+services/hostfsd/hostfsd.sh	run	-	the host share daemon still resolves and refcounts	-	-
+services/inputd/inputd.py	selftest	-	input creator daemon check	--selftest	-
+services/inputd/inputd.py	run	-	inputd registers devices before udev	-	-
+services/netbridged/netbridged.sh	selftest	-	netbridged check	--selftest	-
+services/netbridged/netbridged.sh	run	-	the host network daemon selftests pass	-	-
+services/probe-client/probe-client-pipes.py	run	-	probe-client exits cleanly on a closed pipe	-	-
+services/resync/resync-boot-wait.py	selftest	-	resync boot-wait check	--selftest	-
+services/resync/resync-boot-wait.py	run	-	boot resync waits for boot completion	-	-
+services/resync/resync-drain.py	selftest	-	resync queue-drain check	--selftest	-
+services/resync/resync-drain.py	run	-	appwatch queue synced beside the full pass	-	-
+services/server-idle/count-line.py	run	-	idle detector count line	-	-
+services/server-idle/count-line.py	selftest	-	count-line check	--selftest	-
+services/streamd/stream-policy.sh	selftest	-	stream policy gate check	--selftest	-
+services/streamd/stream-policy.sh	run	-	stream.enabled off leaves no socket	-	-
+services/streamd/streamd-render-node.py	selftest	-	streamd render node check	--selftest	-
+services/streamd/streamd-render-node.py	run	-	streamd encodes on the chosen render node	-	-
+services/units/companion-lifetime.py	run	-	companions end with the sandbox unit	-	-
+services/units/companion-lifetime.py	selftest	-	companion-lifetime check	--selftest	-
+services/units/deskd-restart.py	run	-	deskd restarts with a fresh token	-	-
+services/units/unit-sandbox-paths.py	run	-	unit sandbox paths exist before start	-	-
+services/units/unit-sandbox-paths.py	selftest	-	unit-sandbox-paths check	--selftest	-
+services/units/unit-specifiers.py	selftest	-	unit-specifiers check	--selftest	-
+services/units/unit-specifiers.py	run	-	unit text carries no bare specifier	-	-
+services/units/unit-template.py	selftest	-	unit template check	--selftest	-
+services/units/unit-write-paths.py	selftest	-	unit-write-paths check	--selftest	-
+services/units/unit-write-paths.py	run	-	strict units declare their write paths	-	-
+services/wlbridge/deskd-wlbridge-selftest.sh	run	-	wlbridge's base64 and buffer selftests pass	-	./.rhizo-inputs.tsv
+services/wlbridge/wlbridge-callers.py	selftest	-	wlbridge caller arguments	--selftest	-
+services/wlbridge/wlbridge-callers.py	run	-	wlbridge launches pass required arguments	-	-
+services/wlbridge/wlbridge-exit-release.sh	run	-	wlbridge releases its selection on sigterm	-	./.rhizo-inputs.tsv
+system/common/boot-completed-read.py	selftest	-	sys.boot_completed read check	--selftest	-
+system/common/boot-completed-read.py	run	-	boot_completed read through getprop_live	-	-
+system/common/boot-evidence-coverage.py	run	-	system tests bank their boot evidence	-	-
+system/common/boot-evidence-coverage.py	selftest	-	boot evidence coverage check	--selftest	-
+system/common/fatal-sweeps-read-capture.py	selftest	-	fatal sweeps read their capture check	--selftest	-
+system/common/fatal-sweeps-read-capture.py	run	-	fatal sweeps fail an empty capture	-	-
+system/common/guest-read-decisions.py	selftest	-	guest read decisions check	--selftest	-
+system/common/guest-read-decisions.py	run	-	paint read decisions	-	-
+system/common/system-audio-captures.py	selftest	-	test-audio captures check	--selftest	-
+system/common/system-audio-captures.py	run	-	test-audio legs fail missing readings	-	-
+system/common/system-boot-evidence-scope.sh	selftest	-	test-boot RHIZO_BOOT_EVIDENCE_DIR scope check	--selftest	-
+system/common/system-boot-evidence-scope.sh	run	-	boot evidence dir scoped per system test	-	-
+system/common/system-log-window.py	selftest	-	test-log-window check	--selftest	-
+system/common/system-log-window.py	run	-	fatal scans use a scoped logcat window	-	-
+system/common/system-network-observe.py	run	-	test-network names a dead channel	-	-
+system/common/system-network-observe.py	selftest	-	test-network observe check	--selftest	-
+system/common/system-redeploy-exit-checked.sh	selftest	-	system test redeploy exit-check	--selftest	-
+system/common/system-redeploy-exit-checked.sh	run	-	redeploy calls check their exit status	-	-
+system/desktop/app-events-trigger-domain.py	selftest	-	appwatch trigger domain check	--selftest	-
+system/desktop/app-events-trigger-domain.py	run	-	desktop.sh never pokes the appwatch trigger	-	-
+system/desktop/display-logical-id.py	selftest	-	display-logical-id check	--selftest	-
+system/desktop/display-logical-id.py	run	-	display commands avoid the composer id	-	-
+system/desktop/display-toplevel-id.py	selftest	-	display-toplevel-id check	--selftest	-
+system/desktop/display-toplevel-id.py	run	-	display commands key on cdisplay	-	-
+system/desktop/display-windowinput-harness.py	selftest	-	display/window-input harness check	--selftest	-
+system/desktop/display-windowinput-harness.py	run	-	window-input and display test harness	-	-
+system/desktop/forced-size-predicate.py	selftest	-	forced-size predicate check	--selftest	-
+system/desktop/forced-size-predicate.py	run	-	forced-size guard reads the dump	-	-
+system/desktop/input-tuning.sh	run	-	pointer acceleration turned off per release	-	-
+system/desktop/layout-expect.py	helper	-	test/system/desktop/window-input.sh runs it for the layout it expects	-	-
+system/desktop/logcat-sweep-readable.py	selftest	-	logcat sweep readable check	--selftest	-
+system/desktop/logcat-sweep-readable.py	run	-	display tests fail an empty logcat sweep	-	-
+system/desktop/system-desktop-legs.py	selftest	-	test-desktop legs check	--selftest	-
+system/desktop/system-desktop-legs.py	run	-	test-desktop legs	-	-
+system/desktop/window-input-click-read.sh	run	-	second-output click read from the app	-	-
+system/gsi-update/fault-knob.py	run	-	boot-failure knob armed safely	-	-
+system/gsi-update/fault-knob.py	selftest	-	boot-failure knob check	--selftest	-
+system/gsi-update/release-switch-marker.sh	selftest	-	release-switch marker check	--selftest	-
+system/gsi-update/release-switch-marker.sh	run	-	release switch cannot strand /data	-	-
+system/gsi-update/release-switch-ordering.py	run	-	release switch armed in its safe window	-	-
+system/gsi-update/release-switch-ordering.py	selftest	-	release-switch ordering check	--selftest	-
+system/gsi-update/system-gsi-update-cleanup.sh	selftest	-	test-gsi-update vm-cleanup check	--selftest	-
+system/gsi-update/system-gsi-update-cleanup.sh	run	-	gsi-update cleanup verified	-	-
+system/gsi-update/system-gsi-update-evidence.py	selftest	-	test-gsi-update evidence check	--selftest	-
+system/gsi-update/system-gsi-update-evidence.py	run	-	test-gsi-update banks evidence per leg	-	-
+system/gsi-update/system-gsi-update-refusal.sh	selftest	-	test-gsi-update refusal check	--selftest	-
+system/gsi-update/system-gsi-update-refusal.sh	run	-	boot_and_start stops after a refusal sentinel	-	-
+system/install/cts-jdk.sh	selftest	-	cts jdk selection check	--selftest	-
+system/install/install-removal-window.sh	selftest	-	install removal-window check	--selftest	-
+system/install/install-removal-window.sh	run	-	removal window holds only the removal	-	-
+system/install/installer-cachyos-rig-path.sh	run	-	cachyos installer packages and removal	-	zstd
+system/install/installer-census-inputs.py	selftest	-	installer census-inputs check	--selftest	-
+system/install/installer-census-inputs.py	run	-	installer census reads its own windows	-	-
+system/install/installer-deb-snapshot.sh	selftest	-	installer deb-snapshot check	--selftest	-
+system/install/installer-deb-snapshot.sh	run	-	installer reads its deb snapshot	-	-
+system/install/nested-sway-ssh-wait.sh	selftest	-	nested test_ensure_sway restart ssh wait	--selftest	-
+system/install/nested-sway-ssh-wait.sh	run	-	start-sway re-confirmation default kept	-	-
+system/install/resumed-on-display.sh	selftest	-	resumed-on-display check	--selftest	-
+system/install/resumed-on-display.sh	run	-	test-install reads the resumed activity	-	-
+system/install/system-install-legs.py	selftest	-	test-install legs check	--selftest	-
+system/install/system-install-legs.py	run	-	test-install legs restore and gate	-	-
+system/lifecycle/lifecycle-entry-waits.sh	selftest	-	lifecycle entry-wait check	--selftest	-
+system/lifecycle/lifecycle-entry-waits.sh	run	-	lifecycle entry waits fail at their cause	-	-
+system/measure/headroom-sample-floor.sh	run	-	headroom sample floor	-	-
+system/measure/headroom-sample-floor.sh	selftest	-	headroom sample floor check	--selftest	-
+system/profiles/desk-user-paths.py	selftest	-	desk-user paths check	--selftest	-
+system/profiles/desk-user-paths.py	run	-	desktop harness touches user paths as the user	-	-
+system/profiles/desktop-lib-dispatch.py	selftest	-	desktop-lib dispatch check	--selftest	-
+system/profiles/desktop-lib-dispatch.py	run	-	compositors reached only through desk verbs	-	-
+system/profiles/gnome-launch-lingering.sh	run	-	gnome launch answers from its own launcher	-	-
+system/profiles/gnome-launcher.py	run	-	gnome launcher passes the activation token	-	-
+system/profiles/kde-inject.sh	run	-	kde-inject applies and refuses lines	-	-
+system/profiles/plasma-inject.sh	run	-	plasma input path counts answers	-	-
+system/profiles/shell-ext-gi.py	selftest	-	gnome harness gi call check	--selftest	-
+system/profiles/shell-ext-gi.py	run	-	gnome harness gi calls exist	-	-
+system/profiles/sway-launch-scope.sh	run	-	sway launch claim scopes no_focus	-	-
+system/profiles/sway-shot-hang.sh	run	-	sway screenshots bounded	-	-
+system/run/system-affects.sh	selftest	-	test-affects check	--selftest	-
+system/run/system-affects.sh	run	-	test-affects map covers the tree	-	-
+system/run/system-contract.sh	selftest	-	test-contract check	--selftest	-
+system/run/system-contract.sh	run	-	contract.tsv matches each system test	-	-
+system/run/system-usage.py	run	-	usage.sh prints usage for every test	-	-
+system/run/system-usage.py	selftest	-	system test usage check	--selftest	-
+system/tools/bufinfo-parse.py	selftest	-	bufinfo parse check	--selftest	-
+system/tools/hostside-patterns.py	selftest	-	hostside-patterns check	--selftest	-
+system/tools/hostside-patterns.py	run	-	HOST_SIDE_PATTERNS resolves to real host-side daemons	-	-
+system/tools/meter-attribution.py	selftest	-	meter-attribution check	--selftest	-
+system/tools/meter-attribution.py	run	serial	meter attributes what it claims to	-	-
+system/tools/pcapstat-parse.py	selftest	-	pcap parse check	--selftest	-
+system/tools/pcapstat-parse.py	run	-	pcapstat reads what it claims to	-	-
+system/verdict/system-pass-semantics.sh	selftest	-	system test pass semantics	--selftest	-
+system/verdict/system-pass-semantics.sh	run	-	system test pass semantics	-	-
+tree/repo/arch-neutral.py	selftest	-	arch-neutral ratchet	--selftest	-
+tree/repo/arch-neutral.py	run	-	the tree reads the host architecture	-	-
+tree/repo/layout.py	run	-	tracked paths follow the layout	-	-
+tree/repo/layout.py	selftest	-	layout check	--selftest	-
+tree/repo/test-coverage.py	run	-	make test runs every test file	-	-
+tree/repo/test-coverage.py	selftest	-	test coverage check	--selftest	-
+tree/shell/android-sh-args.py	selftest	-	android_sh argument check	--selftest	-
+tree/shell/android-sh-args.py	run	-	android_sh takes one body argument	-	-
+tree/shell/bounded-remote.py	run	-	remote calls are externally bounded	-	-
+tree/shell/declare-grep-pipefail.py	selftest	-	declare-grep-pipefail check	--selftest	-
+tree/shell/declare-grep-pipefail.py	run	-	no function body piped into grep -q	-	-
+tree/shell/dmesg-window.py	run	-	no dmesg line-count offset spans a guest reboot	-	-
+tree/shell/dmesg-window.py	selftest	-	dmesg window check	--selftest	-
+tree/shell/dpkg-status-abbrev.py	selftest	-	dpkg Status-Abbrev read check	--selftest	-
+tree/shell/dpkg-status-abbrev.py	run	-	dpkg status-abbrev read whole	-	-
+tree/shell/early-exit-pipe.py	run	-	no large producer feeds an early grep	-	-
+tree/shell/early-exit-pipe.py	selftest	-	early-exit pipe check	--selftest	-
+tree/shell/git-init-env-guard.sh	selftest	-	git-init env guard	--selftest	-
+tree/shell/git-init-env-guard.sh	run	-	no git init under an inherited git_dir	-	-
+tree/shell/lib-anchored.py	selftest	-	library anchoring check	--selftest	-
+tree/shell/lib-anchored.py	run	-	test libraries anchored to their folder	--resolve	-
+tree/shell/mktemp-mv.py	run	-	shipped temp files made beside their target	-	-
+tree/shell/mktemp-mv.py	selftest	-	mktemp mv check	--selftest	-
+tree/shell/pseudofs-size-test.py	selftest	-	pseudofs-size check	--selftest	-
+tree/shell/pseudofs-size-test.py	run	-	no size test reads a pseudo-filesystem	-	-
+tree/shell/remote-bodies.py	selftest	-	remote-bodies check	--selftest	-
+tree/shell/remote-bodies.py	run	-	remote bodies well formed	-	-
+tree/shell/root-shadow-tools.py	selftest	-	root-shadow-tools check	--selftest	-
+tree/shell/root-shadow-tools.py	run	-	no rhizo tool invoked through /root	-	-
+tree/shell/scripts-parse.py	run	-	every tracked shell and python script parses	-	-
+tree/shell/scripts-parse.py	selftest	-	script parse check	--selftest	-
+tree/shell/stage-cmd-quoting.py	selftest	-	stage_cmd quoting check	--selftest	-
+tree/shell/stage-cmd-quoting.py	run	-	stage_cmd stays quoted	-	-
+vm/boot/androidd-env-no-launch.sh	selftest	-	a --no-launch deploy still writes androidd.env	--selftest	-
+vm/boot/androidd-env-no-launch.sh	run	-	no-launch deploy writes androidd.env	-	-
+vm/boot/boot-refusal-explained.sh	selftest	-	refused boot told apart from dead qemu	--selftest	-
+vm/boot/boot-refusal-explained.sh	run	-	refused boot names its precondition	-	-
+vm/boot/boot-refusal-labeled.sh	selftest	-	boot refusal labeled apart from a real hang	--selftest	-
+vm/boot/boot-refusal-labeled.sh	run	-	pre-boot refusal filed as refused	-	-
+vm/boot/data-release-marker.sh	selftest	-	data-release-marker check	--selftest	-
+vm/boot/data-release-marker.sh	run	-	/data refuses a cross-release boot	-	-
+vm/boot/deploy-tree-own-set.py	run	-	deploy reads the tree's own files	-	-
+vm/boot/deploy-tree-own-set.py	selftest	-	deploy-tree-own-set check	--selftest	-
+vm/boot/desktop-user-read.sh	selftest	-	desktop-user read check	--selftest	-
+vm/boot/desktop-user-read.sh	run	-	redeploy reads desktop-user safely	-	-
+vm/boot/explain-boot-stage.sh	selftest	-	explain-boot STAGE / boot-release evidence-once check	--selftest	-
+vm/boot/explain-boot-stage.sh	run	-	not-booted guest names its stage	--tools-dir ../vm	-
+vm/boot/guest-knobs.sh	selftest	-	guest-knobs check	--selftest	-
+vm/boot/guest-knobs.sh	run	-	guest knobs reach the guest	-	-
+vm/boot/kill-vm.sh	selftest	-	kill-vm check	--selftest	-
+vm/boot/kill-vm.sh	run	-	teardown never reports a live guest dead	-	-
+vm/boot/loop-sizing.sh	selftest	-	loop sizing check	--selftest	aosp-android16-qpr2/system/apex/
+vm/boot/run-vm-render-node.sh	selftest	-	run-vm render node check	--selftest	-
+vm/boot/system-preflight-evidence.sh	selftest	-	test_boot preflight-evidence check	--selftest	-
+vm/boot/system-preflight-evidence.sh	run	-	preflight fail line kept in the bundle	-	-
+vm/boot/vm-launch-detached.sh	selftest	-	vm-launch detach check	--selftest	-
+vm/boot/vm-launch-detached.sh	run	-	a VM launch detaches	-	-
+vm/boot/vm-preparedness.sh	selftest	-	vm-preparedness check	--selftest	-
+vm/boot/wait-for-ssh-fastfail.sh	run	-	wait_for_ssh notices a refused boot	-	-
+vm/guest-os/arch-pool-lib.sh	selftest	-	offline pacman pool lib	--selftest	-
+vm/guest-os/build-cachyos-base-args.sh	selftest	-	cachyos base build arguments	--selftest	-
+vm/guest-os/cachyos-guest-lib.sh	selftest	-	cachyos guest lib	--selftest	qemu-system-x86_64 qemu-img
+vm/guest-os/guest-os-lib.sh	selftest	-	guest os lib	--selftest	-
+vm/image/retired-kernel.sh	run	-	retired kernel refused	-	-
+vm/image/share-mount.py	selftest	-	share-mount check	--selftest	-
+vm/image/share-mount.py	run	-	one 9p share mount definition	-	-
+vm/image/share-staging.py	selftest	-	share staging	--selftest	-
+vm/image/share-staging.py	run	-	share copies unlink first	-	-
+vm/image/share-temp-cleanup.sh	selftest	-	share temp cleanup check	--selftest	-
+vm/image/share-temp-cleanup.sh	run	-	share temps swept after a kill	-	-
+vm/image/stage-dirs.sh	selftest	-	stage-dirs check	--selftest	-
+vm/image/stage-sync.py	selftest	-	stage-sync check	--selftest	-
+vm/image/stage-sync.py	run	-	STAGE_FILES entries all reach share via sync.sh	-	-
+vm/image/stage-to-share.sh	selftest	-	stage to share	--selftest	-
+vm/image/stage-to-share.sh	run	-	restaging keeps the share hardlinked	-	-
+vm/image/sync-whole-set.sh	selftest	-	sync.sh whole-set directories	--selftest	-
+vm/rhizo-kernel-args.py	run	-	run-vm kernel selection	-	-
+vm/rhizo-kernel-grub-default.sh	run	-	grub default left byte-identical	-	-
+vm/rhizo-kernel-grub-default.sh	selftest	-	rhizo-kernel-grub-default check	--selftest	-
+vm/rhizo-kernel-vm-argv.py	run	-	rhizo kernel vm argv pairs	-	-
+vm/rig/rig-hooks.sh	selftest	-	rig hooks check	--selftest	-
+vm/rig/rig-hooks.sh	run	-	rig hooks on a plain checkout	-	-
+vm/start/adb-bridge-explained.sh	selftest	-	adb bridge explanation names its layer	--selftest	-
+vm/start/adb-bridge-explained.sh	run	-	offline adb device names its layer	-	-
+vm/start/audio-graph.sh	selftest	-	audio graph check	--selftest	-
+vm/start/audio-graph.sh	run	-	session pipewire audio graph	-	-
+vm/start/desk-session-start.sh	selftest	-	desk session start check	--selftest	-
+vm/start/desk-session-start.sh	run	-	desk session names its compositor	-	-
+vm/start/net-wait.sh	selftest	-	net-wait check	--selftest	-
+vm/start/net-wait.sh	run	-	a guest-network precondition is polled, not read once	-	-
+vm/start/render-node-nogpu.sh	selftest	-	render-node relabel on a vm with no gpu	--selftest	-
+vm/start/socket-bridge-carry.sh	selftest	-	socket-bridge check	--selftest	-
+vm/start/socket-bridge-carry.sh	run	-	socket bridges carry their payload	-	-
+vm/start/stay-awake-release.sh	selftest	-	stay-awake release check	--selftest	-
+vm/vm-copy-source.sh	run	-	copy_source copies read-only	-	-
+vm/worktree/ssh-control-path.sh	selftest	-	ssh-control-path check	--selftest	-
+vm/worktree/ssh-control-path.sh	run	-	ssh ControlPath fits a Unix socket	-	-

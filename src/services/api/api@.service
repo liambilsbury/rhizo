@@ -1,0 +1,16 @@
+[Unit]
+Description=Rhizo control-plane connection
+After=rhizo-host-labels.service
+
+[Service]
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/api/apid.py
+User=root
+TasksMax=64
+RuntimeMaxSec=720
+NoNewPrivileges=yes
+ProtectHome=read-only
+PrivateTmp=yes

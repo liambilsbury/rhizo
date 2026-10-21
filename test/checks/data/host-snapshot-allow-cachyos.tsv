@@ -1,0 +1,22 @@
+remove	rhizo_dirs\t/var/lib/rhizo	must exist to hold data.img, which a plain remove keeps on purpose
+remove	rhizo_dirs\t/var/lib/rhizo/data.img	a plain apt remove keeps Android data on purpose
+remove	rhizo_dirs\t/var/lib/rhizo/data.img.meta	the sidecar recording data.img's template provenance, kept for the same reason as data.img itself
+remove@installer	rhizo_dirs\t/var/lib/rhizo/.test-remove-marker	installer.sh step 12a's own scaffolding, written to prove a remove+reinstall keeps data.img's own content -- never a Rhizo mutation, and outside DEFERRED so a plain remove leaves it in place like any other file under /var/lib/rhizo it did not create
+remove	rhizo_dirs\t/etc/rhizo*	a plain apt remove keeps your /etc/rhizo configuration on purpose
+remove	rhizo_dirs\t/srv/rhizo	must exist to hold the fetched GSI tree, which a plain remove keeps on purpose
+remove	etc\t/etc/rhizo*	the same kept /etc/rhizo, seen by the etc section's own walk of /etc -- the rhizo_dirs row above covers only that section's listing
+remove	rhizo_dirs\t/srv/rhizo/gsi_system*	a plain apt remove keeps the downloaded, sha256-verified GSI tree on purpose -- re-fetchable, but a multi-GB re-download
+remove?	rhizo_dirs\t/var/lib/rhizo/instances*	each added instance's own data.img, which a plain remove keeps like instance 0's; its launch trees go
+remove?	rhizo_dirs\t/var/lib/rhizo/device-state*	the device profile `rhizo device set` wrote for an instance, kept with that instance's data
+remove?	rhizo_dirs\t/var/lib/rhizo/pool*	the server pool's record of the kept instances, kept with them
+remove?	rhizo_dirs\t/var/lib/rhizo/update*	`rhizo gsi update`'s state and its trial and rollback copies of /data, user data a plain remove keeps
+remove?	etc\t/etc/mkinitcpio.d/linux-rhizo.preset	the preset mkinitcpio's install hook writes for a kernel package that ships none, here the Rhizo kernel's: pacman -R of rhizo keeps the kernel, and its removal by name takes the preset
+*?	state_dirs\t/var/lib/systemd*	systemd rewrites its random seed every boot; covers other systemd-owned state under here too
+*?	state_dirs\t/var/log*	the journal rotates and the rest of /var/log grows on every boot and every unit that logs; /var/log/rhizo itself is a SEPARATE row (section rhizo_dirs) this pattern does not reach, and that row is never allowlisted
+*?	home_root\t/root/.bash_history	an interactive shell's own history, not a Rhizo mutation
+remove	btrfs\tvar/lib/rhizo	the bootstrap makes /var/lib/rhizo its own subvolume, out of root snapshots; it holds data.img, which a plain remove keeps on purpose
+remove	etc\t/etc/shells	dash, which rhizo depends on and a plain remove keeps, adds itself to /etc/shells from its install scriptlet; the purge removes dash and its line
+*?	etc\t/etc/.updated	systemd-update-done rewrites its stamp at the boot after any pacman transaction, whose 30-systemd-update hook arms ConditionNeedsUpdate
+*?	unit\trhizo-kde-inject.service	start-plasma.sh's systemd-run injector unit for the harness's seat login; up at the BEFORE snapshot, gone once the run stops it
+*?	unit\trhizo-notify-watch.service	start-plasma.sh's systemd-run notification watcher for the harness's seat login; up at the BEFORE snapshot, gone once the run stops it
+*?	unit\tdbus-:*.service	a system helper D-Bus activates for a caller in the seat session (KDE powerdevil's backlight, charge-threshold and GPU helpers) runs as a systemd-run unit dbus-broker names dbus-:<connection>-<name>@<n>.service, up while that caller holds it

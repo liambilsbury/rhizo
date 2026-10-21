@@ -1,0 +1,14 @@
+[Unit]
+Description=Rhizo removed-app entry cleanup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/dash /usr/lib/rhizo/tools/remove-entries.sh
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/usr/share/applications -/usr/share/icons
+ProtectHome=yes
+CacheDirectory=rhizo-appsync
+RuntimeDirectory=rhizo-remove-entries
+RuntimeDirectoryPreserve=yes
+PrivateTmp=yes

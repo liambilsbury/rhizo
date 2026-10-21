@@ -1,0 +1,22 @@
+[Unit]
+Description=Rhizo host delay daemon
+Before=androidd.service
+PartOf=androidd.service
+Wants=rhizo-selinux-mode.service
+After=rhizo-selinux-mode.service
+
+[Service]
+Type=notify
+RuntimeDirectory=rhizo-delay rhizo-delayd
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+Restart=on-failure
+RestartSec=1
+RestartPreventExitStatus=78
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh trace.host_delay
+ExecStart=/usr/lib/rhizo/rhizo-delayd --socket /run/rhizo-delay/delayd --status-path /run/rhizo-delayd/status.json
+ExecStopPost=/usr/lib/rhizo/rhizo-delayd --remove-instance
+StandardOutput=append:/var/log/rhizo/rhizo-delayd.log
+StandardError=append:/var/log/rhizo/rhizo-delayd.log
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX

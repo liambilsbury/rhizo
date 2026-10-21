@@ -1,0 +1,13 @@
+export virgl PRIME fds read-write
+
+--- a/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
++++ b/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
+@@ -680,7 +680,7 @@
+    } else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
+       whandle->handle = res->bo_handle;
+    } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
+-      if (drmPrimeHandleToFD(qdws->fd, res->bo_handle, DRM_CLOEXEC, (int*)&whandle->handle))
++      if (drmPrimeHandleToFD(qdws->fd, res->bo_handle, DRM_CLOEXEC | DRM_RDWR, (int*)&whandle->handle))
+             return false;
+       mtx_lock(&qdws->bo_handles_mutex);
+       _mesa_hash_table_insert(qdws->bo_handles, (void *)(uintptr_t)res->bo_handle, res);

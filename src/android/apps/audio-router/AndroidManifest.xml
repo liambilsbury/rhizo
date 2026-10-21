@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.rhizo.audiorouter">
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_ROUTING"/>
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+    <application android:name=".RouterApp"
+                 android:persistent="true"
+                 android:label="Rhizo Audio Router"
+                 android:allowBackup="false">
+        <receiver android:name=".MapReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.rhizo.audiorouter.MAP"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

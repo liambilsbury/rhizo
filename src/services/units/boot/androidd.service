@@ -1,0 +1,28 @@
+[Unit]
+Description=Rhizo Android sandbox (androidd)
+ConditionPathExists=/root/launcher3.py
+After=systemd-modules-load.service
+After=rhizo-policy.service
+Wants=rhizo-policy.service
+Wants=rhizo-hostfs.service
+Wants=rhizo-update-begin.service rhizo-update-confirm.service
+After=rhizo-update-begin.service
+After=rhizo-selinux-mode.service
+
+[Service]
+Type=exec
+NotifyAccess=all
+Delegate=yes
+ExecStart=/usr/bin/python3 /root/launcher3.py selinux_setup
+EnvironmentFile=-/root/androidd.env
+EnvironmentFile=-/var/lib/rhizo/androidd-runtime.env
+RuntimeDirectory=rhizo-wayland
+RuntimeDirectoryPreserve=yes
+StandardInput=null
+StandardOutput=append:/root/boot.log
+StandardError=append:/root/boot.log
+TimeoutStartSec=300
+TimeoutStopSec=60
+ExecStop=/usr/bin/python3 /root/launcher3.py androidd-stop
+ExecStopPost=/usr/bin/python3 /root/launcher3.py release-staging
+KillMode=mixed

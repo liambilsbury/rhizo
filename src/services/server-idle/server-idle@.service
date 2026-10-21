@@ -1,0 +1,23 @@
+[Unit]
+Description=Rhizo server idle stop, instance %i
+After=androidd@%i.service rhizo-host-labels.service
+PartOf=androidd@%i.service
+
+[Service]
+Type=exec
+EnvironmentFile=-/etc/rhizo/instances/%i.env
+Environment=RHIZO_SANDBOX_ID=%i
+# rhizo-template-allowlist: ExecStart -- a script and interpreter, execed identically by all of the instances; RHIZO_SANDBOX_ID (below) is what makes each instance's run distinct
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/server-idle/server-idle.py
+Environment=PYTHONPATH=/usr/lib/rhizo
+Restart=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+Environment=PYTHONNOUSERSITE=1
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=androidd@%i.service

@@ -1,0 +1,17 @@
+[constants]
+ndk_bin = '@DIRNAME@' / '../../toolchain/ndk_extract/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin'
+
+[binaries]
+ar = ndk_bin / 'llvm-ar'
+c = ndk_bin / 'aarch64-linux-android35-clang'
+cpp = [ndk_bin / 'aarch64-linux-android35-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+c_ld = 'lld'
+cpp_ld = 'lld'
+strip = ndk_bin / 'llvm-strip'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'android'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'

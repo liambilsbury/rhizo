@@ -1,0 +1,10 @@
+[Unit]
+Description=Rhizo VT access for session %i
+DefaultDependencies=no
+CollectMode=inactive-or-failed
+After=rhizo-host-labels.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/rhizo/install/bootstrap/console-vt.py --session %i
+TimeoutStartSec=10

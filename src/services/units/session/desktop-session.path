@@ -1,0 +1,9 @@
+[Unit]
+Description=Rhizo Wayland session watcher
+ConditionUser=1000
+
+[Path]
+PathExistsGlob=/run/user/1000/wayland-*
+
+[Install]
+WantedBy=default.target

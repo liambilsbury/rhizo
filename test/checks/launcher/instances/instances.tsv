@@ -1,0 +1,244 @@
+avc capture log	host-global	src/androidd/sandbox/core.py:AVC_LOG
+netbpfload preload stage	per-instance	src/androidd/sandbox/core.py:NETBPFLOAD_PRELOAD_STAGE
+sandbox cgroup root	per-instance	src/androidd/sandbox/core.py:CGROUP_ROOT
+cgroup root record	per-instance	src/androidd/sandbox/core.py:CGROUP_ROOT_FILE
+cgroup root record invocation	per-instance	src/androidd/sandbox/core.py:CGROUP_INVOCATION_FILE
+resident supervisor cgroup	host-global	src/androidd/sandbox/core.py:SUPERVISOR_CGROUP
+GSI image tree	host-global	src/androidd/sandbox/core.py:GSI
+resident supervisor pid file	host-global	src/androidd/sandbox/core.py:G_PID_FILE
+supervisor handoff inbox	host-global	src/androidd/sandbox/core.py:HANDOFF_DIR
+host bootstrap lock	host-global	src/androidd/sandbox/core.py:HOST_LOCK_FILE
+host primer script	host-global	src/androidd/sandbox/core.py:HOST_PRIMER_PATH
+init pid file	per-instance	src/androidd/sandbox/core.py:INIT_PID_FILE
+netbridged log	per-instance	src/androidd/sandbox/core.py:NETBRIDGED_LOG
+netbridged runtime dir	per-instance	src/androidd/sandbox/core.py:NETBRIDGED_RUNTIME_DIR
+netbridged unit name	per-instance	src/androidd/sandbox/core.py:NETBRIDGED_UNIT
+guest veth MAC	per-instance	src/androidd/sandbox/core.py:NET_GUEST_MAC
+veth host address	per-instance	src/androidd/sandbox/core.py:NET_HOST_ADDR
+subnet third octet	per-instance	src/androidd/sandbox/core.py:NET_OCTET3
+DHCP pool end	per-instance	src/androidd/sandbox/core.py:NET_POOL_END
+DHCP pool start	per-instance	src/androidd/sandbox/core.py:NET_POOL_START
+sandbox subnet	per-instance	src/androidd/sandbox/core.py:NET_SUBNET
+prepared tree	host-global	src/androidd/sandbox/core.py:PREPARED_ROOT
+prepare request	host-global	src/androidd/sandbox/core.py:PREPARE_REQUEST
+host primer log	host-global	src/androidd/sandbox/core.py:PRIMER_LOG
+patched apex payload	per-instance	src/androidd/sandbox/core.py:RHIZO_APEX_DIR
+sepolicy cache	host-global	src/androidd/sandbox/core.py:RHIZO_CACHE_DIR
+policy mode record	host-global	src/androidd/sandbox/core.py:POLICY_MODE_STATE
+sandbox data image	per-instance	src/androidd/sandbox/core.py:RHIZO_DATA_IMG
+derived rc files	host-global	src/androidd/sandbox/core.py:RHIZO_DERIVED_DIR
+device state dir	per-instance	src/androidd/sandbox/core.py:RHIZO_DEVICE_STATE_DIR
+state root	host-global	src/androidd/sandbox/core.py:RHIZO_STATE_DIR
+host log dir	host-global	src/androidd/sandbox/core.py:RHIZO_LOG_DIR
+vendor payload	per-instance	src/androidd/sandbox/core.py:RHIZO_VENDOR_DIR
+sandbox staging root	per-instance	src/androidd/sandbox/core.py:RUN_ROOT
+selinux namespace records dir	per-instance	src/androidd/sandbox/core.py:SELINUXNS_RECORDS_DIR
+staged system adb key file	per-instance	src/androidd/sandbox/core.py:SYSTEM_ADB_KEYS
+supervisor log	host-global	src/androidd/sandbox/core.py:SUPERVISOR_LOG
+supervisor state	host-global	src/androidd/sandbox/core.py:SUPERVISOR_STATE
+veth host interface	per-instance	src/androidd/sandbox/core.py:VETH_HOST_IF
+wayland runtime dir shared by the launcher	per-instance	src/androidd/sandbox/core.py:WAYLAND_RUN_DIR
+
+launcher payload (condition)	host-global	src/services/units/boot/androidd.service:ConditionPathExists
+androidd env file	host-global	src/services/units/boot/androidd.service:EnvironmentFile=-/root/androidd.env
+runtime release env file	host-global	src/services/units/boot/androidd.service:EnvironmentFile=-/var/lib/rhizo/androidd-runtime.env
+launcher payload (start)	host-global	src/services/units/boot/androidd.service:ExecStart
+launcher payload (stop)	host-global	src/services/units/boot/androidd.service:ExecStop
+launcher payload (stop-post)	host-global	src/services/units/boot/androidd.service:ExecStopPost
+wayland runtime dir	host-global	src/services/units/boot/androidd.service:RuntimeDirectory
+boot log (stderr)	host-global	src/services/units/boot/androidd.service:StandardError
+boot log (stdout)	host-global	src/services/units/boot/androidd.service:StandardOutput
+
+launcher payload (condition)	host-global	src/services/units/boot/androidd@.service:ConditionPathExists
+androidd env file (host-wide)	host-global	src/services/units/boot/androidd@.service:EnvironmentFile=-/root/androidd.env
+runtime release env file (host-wide)	host-global	src/services/units/boot/androidd@.service:EnvironmentFile=-/var/lib/rhizo/androidd-runtime.env
+instance env file	per-instance	src/services/units/boot/androidd@.service:EnvironmentFile=-/etc/rhizo/instances/%i.env
+launcher payload (start)	host-global	src/services/units/boot/androidd@.service:ExecStart
+launcher payload (stop)	host-global	src/services/units/boot/androidd@.service:ExecStop
+launcher payload (stop-post)	host-global	src/services/units/boot/androidd@.service:ExecStopPost
+wayland runtime dir	per-instance	src/services/units/boot/androidd@.service:RuntimeDirectory
+boot log (stderr)	per-instance	src/services/units/boot/androidd@.service:StandardError
+boot log (stdout)	per-instance	src/services/units/boot/androidd@.service:StandardOutput
+
+input broker runtime dir	per-instance	src/services/inputd/inputd@.service:RuntimeDirectory
+input supervisor socket	per-instance	src/services/inputd/inputd@.service:ExecStart=/run/rhizo-input-%i/supervisor.sock
+input fence socket	per-instance	src/services/inputd/inputd@.service:ExecStart=/run/rhizo-input-%i/fence.sock
+input supervisor registrations	per-instance	src/services/inputd/inputd@.service:ExecStart=/run/rhizo-input-%i/owned
+input owned socket for udev	per-instance	src/services/inputd/inputd@.service:ExecStart=/run/udev/rhizo-input-%i.sock
+uhid broker binary	host-global	src/services/inputd/inputd-uhid@.service:ExecStart
+
+operator api socket	host-global	src/services/api/api.socket:ListenStream
+appwatch trigger file	host-global	src/services/appsync/app-events.service:ExecStart=/run/rhizo-app-events/trigger
+watched /data/app	host-global	src/services/appsync/app-events.service:ExecStart=/run/rhizo/data/app
+appwatch runtime dir	host-global	src/services/appsync/app-events.service:RuntimeDirectory
+app broker socket	host-global	src/services/broker/brokerd.socket:ListenStream
+hostfs config	host-global	src/services/hostfs/hostfs.service:ConditionPathExists=/etc/rhizo/hostfs.conf
+hostfs payload (condition)	host-global	src/services/hostfs/hostfs.service:ConditionPathExists=/root/share/hostfs.py
+hostfs payload (start)	host-global	src/services/hostfs/hostfs.service:ExecStart
+hostfs payload (stop)	host-global	src/services/hostfs/hostfs.service:ExecStop
+prepared marker (condition)	host-global	src/services/units/boot/prepare.service:ConditionPathExists=|!/var/lib/rhizo/.prepared
+prepare request (condition)	host-global	src/services/units/boot/prepare.service:ConditionPathExists=|/var/lib/rhizo/prepare-request
+prepared marker (write)	host-global	src/services/units/boot/prepare.service:ExecStartPost
+prepare log (stderr)	host-global	src/services/units/boot/prepare.service:StandardError
+prepare log (stdout)	host-global	src/services/units/boot/prepare.service:StandardOutput
+prepare log (stderr, kernel-refresh)	host-global	src/services/units/boot/kernel-refresh.service:StandardError
+prepare log (stdout, kernel-refresh)	host-global	src/services/units/boot/kernel-refresh.service:StandardOutput
+launcher payload (policy)	host-global	src/services/units/boot/policy.service:ConditionPathExists=/usr/lib/rhizo/launcher3.py
+selinux enforce node (policy)	host-global	src/services/units/boot/policy.service:ConditionPathExists=/sys/fs/selinux/enforce
+androidd env (policy)	host-global	src/services/units/boot/policy.service:EnvironmentFile=-/etc/rhizo/androidd.env
+runtime release env (policy)	host-global	src/services/units/boot/policy.service:EnvironmentFile=-/var/lib/rhizo/androidd-runtime.env
+kept host mode env (policy)	host-global	src/services/units/boot/policy.service:EnvironmentFile=-/var/lib/rhizo/host-mode-kept.env
+policy log (stdout)	host-global	src/services/units/boot/policy.service:StandardOutput
+policy log (stderr)	host-global	src/services/units/boot/policy.service:StandardError
+selinuxfs mount	host-global	src/services/units/boot/selinuxfs.service:ExecStart
+display pool idle payload	host-global	src/services/units/display-pool/display-pool-release.service:ExecStart
+display pool consumed marker	host-global	src/services/units/display-pool/display-pool.path:PathExists
+display pool refill target	host-global	src/services/units/display-pool/display-pool.path:Unit
+display pool payload	host-global	src/services/units/display-pool/display-pool.service:ExecStart
+display pool runtime dir	host-global	src/services/units/display-pool/display-pool.service:RuntimeDirectory
+prune trigger watch	host-global	src/services/appsync/remove-entries.path:PathModified
+prune target	host-global	src/services/appsync/remove-entries.path:Unit
+appsync verdict cache (prune)	host-global	src/services/appsync/remove-entries.service:CacheDirectory
+resync trigger watch	host-global	src/services/appsync/resync.path:PathModified
+resync target	host-global	src/services/appsync/resync.path:Unit
+appsync verdict cache (resync)	host-global	src/services/appsync/resync.service:CacheDirectory
+appsync queue-drain state (resync)	host-global	src/services/appsync/resync.service:RuntimeDirectory
+appsync prune stamp (prune)	host-global	src/services/appsync/remove-entries.service:RuntimeDirectory
+desktop session attach watch	host-global	src/services/units/session/desktop-attach.path:PathChanged
+desktop session attach target	host-global	src/services/units/session/desktop-attach.path:Unit
+desktop session attach gate	host-global	src/services/units/session/desktop-attach.service:ExecCondition
+desktop session start watch	host-global	src/services/units/session/session-start.path:PathChanged
+desktop session start target	host-global	src/services/units/session/session-start.path:Unit
+desktop session start gate	host-global	src/services/units/session/session-start.service:ExecCondition
+deskd session gate	host-global	src/services/deskbridge/deskd.service:ConditionPathExists
+audiod session gate	host-global	src/services/audiod/audiod.service:ConditionPathExists
+instance env file (idle detector)	per-instance	src/services/server-idle/server-idle@.service:EnvironmentFile
+gsi update state (begin)	host-global	src/services/units/boot/update-begin.service:ConditionPathExists
+gsi update state (confirm)	host-global	src/services/units/boot/update-confirm.service:ConditionPathExists
+host label removal record (condition)	host-global	src/services/units/boot/host-labels.service:ConditionPathExists
+
+netbridged transient unit	per-instance	src/androidd/boot.py:systemd-run --unit={NETBRIDGED_UNIT}
+host primer scope	host-global	src/androidd/boot.py:systemd-run --unit=rhizo-host-primer
+installer remove unit	host-global	test/system/install/installer.sh:systemd-run --unit=rhizo-test-remove
+installer remove2 unit	host-global	test/system/install/installer.sh:systemd-run --unit=rhizo-test-remove2
+installer purge unit	host-global	test/system/install/installer.sh:systemd-run --unit=rhizo-test-purge
+lifecycle hostclient unit	host-global	test/system/lib/desktop-assert-lib.sh:systemd-run --unit=rhizo-lifecycle-hostclient
+lifecycle focus holder unit	host-global	test/system/lib/desktop-lib.sh:systemd-run --unit=rhizo-focus-holder
+lifecycle dac probe unit	host-global	test/system/cycle/claims-desktop.sh:systemd-run --unit=rhizo-lc-dacprobe
+lifecycle hotplug add monitor unit	host-global	test/system/cycle/claims-server.sh:systemd-run --unit=rhizo-lc-hpmon
+lifecycle hotplug add monitor log	host-global	test/system/cycle/claims-server.sh:systemd-run /run/rhizo-lc-hpmon.log
+launcher scope	per-instance	test/vm/redeploy.sh:systemd-run --unit=rhizo-launcher-\$\$
+rig prepare unit	host-global	test/vm/image/prepare-guest.sh:systemd-run --unit=rhizo-prepare
+pool proof offline unit	host-global	tools/fetch/pools/arch/arch-pool.sh:systemd-run --unit=rhizo-offline
+pool proof offline script	host-global	tools/fetch/pools/arch/arch-pool.sh:systemd-run /root/share/offline.sh
+audiod unit	host-global	src/services/audiod/audiod.service:ExecStart=/run/rhizo-audio/audiod
+displayd unit	host-global	src/services/displayd/displayd.service:StandardOutput
+keymapd unit	host-global	src/services/keymapd/keymapd.service:StandardOutput
+desktop-session unit	host-global	src/services/units/session/desktop-session.path:PathExistsGlob
+netbridged rig unit	per-instance	test/vm/start/start-netbridge.sh:systemd-run --unit=$UNIT
+gnome-shell unit	host-global	test/vm/start/start-gnome.sh:systemd-run --unit=$UNIT
+kwin rig unit	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$UNIT
+kwin rig socket	host-global	test/vm/start/start-plasma.sh:systemd-run --socket=$RIG_SOCKET
+kwin rig input device unit	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$INJECT_UNIT
+plasma notification watcher unit	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$WATCH_UNIT
+plasma launcher unit	host-global	test/system/lib/plasma-lib.sh:systemd-run --unit=rhizo-launcher-$nonce
+
+host primer environment	host-global	src/androidd/boot.py:systemd-run --unit=rhizo-host-primer environment
+pool proof offline environment	host-global	tools/fetch/pools/arch/arch-pool.sh:systemd-run --unit=rhizo-offline environment
+netbridged environment	host-global	src/androidd/boot.py:systemd-run --unit={NETBRIDGED_UNIT} environment
+installer remove log	host-global	test/system/install/installer.sh:systemd-run /var/tmp/remove.log
+installer remove marker	host-global	test/system/install/installer.sh:systemd-run /var/tmp/remove.done
+installer remove environment	host-global	test/system/install/installer.sh:systemd-run --unit=rhizo-test-remove environment
+installer remove2 log	host-global	test/system/install/installer.sh:systemd-run /var/tmp/remove2.log
+installer remove2 marker	host-global	test/system/install/installer.sh:systemd-run /var/tmp/remove2.done
+installer remove2 environment	host-global	test/system/install/installer.sh:systemd-run --unit=rhizo-test-remove2 environment
+installer purge log	host-global	test/system/install/installer.sh:systemd-run /var/tmp/purge.log
+installer purge marker	host-global	test/system/install/installer.sh:systemd-run /var/tmp/purge.done
+installer purge environment	host-global	test/system/install/installer.sh:systemd-run --unit=rhizo-test-purge environment
+lifecycle hostclient environment	host-global	test/system/lib/desktop-assert-lib.sh:systemd-run --unit=rhizo-lifecycle-hostclient environment
+lifecycle focus holder environment	host-global	test/system/lib/desktop-lib.sh:systemd-run --unit=rhizo-focus-holder environment
+lifecycle dac probe environment	host-global	test/system/cycle/claims-desktop.sh:systemd-run --unit=rhizo-lc-dacprobe environment
+lifecycle hotplug add monitor environment	host-global	test/system/cycle/claims-server.sh:systemd-run --unit=rhizo-lc-hpmon environment
+lifecycle kernel uevent monitor unit	host-global	test/system/cycle/claims-server.sh:systemd-run --unit=rhizo-lc-kmon
+lifecycle kernel uevent monitor log	host-global	test/system/cycle/claims-server.sh:systemd-run /run/rhizo-lc-kmon.log
+lifecycle kernel uevent monitor environment	host-global	test/system/cycle/claims-server.sh:systemd-run --unit=rhizo-lc-kmon environment
+lifecycle forged input device unit	host-global	test/system/cycle/claims-server.sh:systemd-run --unit=rhizo-lc-forge
+lifecycle forged input device environment	host-global	test/system/cycle/claims-server.sh:systemd-run --unit=rhizo-lc-forge environment
+launcher payload (rig scope)	host-global	test/vm/redeploy.sh:systemd-run /root/launcher3.py
+rig boot log	host-global	test/vm/redeploy.sh:systemd-run /root/boot.log
+launcher scope environment	host-global	test/vm/redeploy.sh:systemd-run --unit=rhizo-launcher-\$\$ environment
+rig prepare payload	host-global	test/vm/image/prepare-guest.sh:systemd-run /root/prepare.sh
+rig prepare log	host-global	test/vm/image/prepare-guest.sh:systemd-run /root/rhizo-prepare.log
+GSI image tree (rig prepare)	host-global	test/vm/image/prepare-guest.sh:systemd-run /srv/rhizo/gsi_system
+rig prepare environment	host-global	test/vm/image/prepare-guest.sh:systemd-run --unit=rhizo-prepare environment
+audiod bus-to-package map	host-global	src/services/audiod/audiod.service:ExecStart=/run/rhizo-audio-map
+audiod environment	host-global	src/services/audiod/audiod.service:EnvironmentFile
+audiod log	host-global	src/services/audiod/audiod.service:StandardOutput
+audiod log (stderr)	host-global	src/services/audiod/audiod.service:StandardError
+deskd environment	host-global	src/services/deskbridge/deskd.service:EnvironmentFile
+deskd runtime dir	host-global	src/services/deskbridge/deskd.service:RuntimeDirectory
+deskd runtime dir root grant	host-global	src/services/deskbridge/deskd.service:ExecStartPre
+deskd log	host-global	src/services/deskbridge/deskd.service:StandardOutput
+deskd log (stderr)	host-global	src/services/deskbridge/deskd.service:StandardError
+deskd notification socket removal	host-global	src/services/deskbridge/deskd.service:ExecStopPost
+deskd notification socket watch	host-global	src/services/deskbridge/desk-notify.path:PathExists
+deskd notification relay	host-global	src/services/deskbridge/desk-notify.service:ExecStart
+deskd token delivery	host-global	src/services/deskbridge/desk-token.service:ExecStart
+deskd token delivery log	host-global	src/services/deskbridge/desk-token.service:StandardOutput
+deskd token delivery log (stderr)	host-global	src/services/deskbridge/desk-token.service:StandardError
+desktop-session env file	host-global	src/services/units/session/desktop-session.service:ExecStop
+displayd log (stderr)	host-global	src/services/displayd/displayd.service:StandardError
+keymapd log (stderr)	host-global	src/services/keymapd/keymapd.service:StandardError
+rtd runtime dir	host-global	src/services/rtd/rtd.service:RuntimeDirectory
+rtd log	host-global	src/services/rtd/rtd.service:StandardOutput
+rtd log (stderr)	host-global	src/services/rtd/rtd.service:StandardError
+delayd runtime dir	host-global	src/services/delayd/delayd.service:RuntimeDirectory
+delayd socket	host-global	src/services/delayd/delayd.service:ExecStart=/run/rhizo-delay/delayd
+delayd status file	host-global	src/services/delayd/delayd.service:ExecStart=/run/rhizo-delayd/status.json
+delayd log	host-global	src/services/delayd/delayd.service:StandardOutput
+delayd log (stderr)	host-global	src/services/delayd/delayd.service:StandardError
+headroomd runtime dir	host-global	src/services/headroomd/headroomd.service:RuntimeDirectory
+headroomd socket	host-global	src/services/headroomd/headroomd.service:ExecStart=/run/rhizo-headroom/headroomd
+headroomd status file	host-global	src/services/headroomd/headroomd.service:ExecStart=/run/rhizo-headroomd/status.json
+headroomd log	host-global	src/services/headroomd/headroomd.service:StandardOutput
+headroomd log (stderr)	host-global	src/services/headroomd/headroomd.service:StandardError
+btd runtime dir	host-global	src/services/btd/btd.service:RuntimeDirectory
+btd socket	host-global	src/services/btd/btd.service:ExecStart
+btd log	host-global	src/services/btd/btd.service:StandardOutput
+btd log (stderr)	host-global	src/services/btd/btd.service:StandardError
+gnome-shell environment	host-global	test/vm/start/start-gnome.sh:systemd-run --unit=$UNIT environment
+kwin rig environment	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$UNIT environment
+kwin rig input device environment	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$INJECT_UNIT environment
+plasma notification watcher environment	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$WATCH_UNIT environment
+plasma launcher environment	host-global	test/system/lib/plasma-lib.sh:systemd-run --unit=rhizo-launcher-$nonce environment
+rig pipewire unit	host-global	test/vm/start/start-audio.sh:systemd-run --unit=$RIG_PW
+rig pipewire environment	host-global	test/vm/start/start-audio.sh:systemd-run --unit=$RIG_PW environment
+rig wireplumber unit	host-global	test/vm/start/start-audio.sh:systemd-run --unit=$RIG_WP
+rig wireplumber environment	host-global	test/vm/start/start-audio.sh:systemd-run --unit=$RIG_WP environment
+
+stream socket unit	host-global	src/services/streamd/streamd.socket:ListenStream
+streamd render node	host-global	src/services/streamd/streamd.service:ExecStart
+stream capability watch	host-global	src/services/streamd/stream-capability.path:PathModified
+stream capability target	host-global	src/services/streamd/stream-capability.path:Unit
+streamd unit	host-global	test/vm/start/start-stream.sh:systemd-run --unit=rhizo-streamd
+streamd log	host-global	test/vm/start/start-stream.sh:systemd-run /tmp/streamd.log
+stream consumer socket	host-global	test/vm/start/start-stream.sh:systemd-run --socket=$SOCKET
+streamd environment	host-global	test/vm/start/start-stream.sh:systemd-run --unit=rhizo-streamd environment
+stream verifier unit	host-global	test/vm/start/start-stream.sh:systemd-run --unit=rhizo-stream-verify
+stream verifier environment	host-global	test/vm/start/start-stream.sh:systemd-run --unit=rhizo-stream-verify environment
+netbridged rig environment	host-global	test/vm/start/start-netbridge.sh:systemd-run --unit=$UNIT environment
+idle-stop timer unit	per-instance	src/services/server-idle/server-idle.py:systemd-run --unit=TIMER_UNIT
+idle-stop timer environment	host-global	src/services/server-idle/server-idle.py:systemd-run --unit=TIMER_UNIT environment
+
+loop device budget	host-global	src/install/bootstrap/bootstrap.sh:LOOP_TOKENS
+built-in binder devices	host-global	src/install/prepare/prepare.sh:require_rhizo_kernel
+adb lan DNAT	host-global	src/androidd/boot.py:DNAT_ARGS
+ip_forward sysctl	host-global	src/androidd/boot.py:setup_veth_and_nat
+binderfs mount point	host-global	src/androidd/sandbox/rootfs.py:binderfs
+adbd tcp port	host-global	src/androidd/guest/init/adbd.rc:service.adb.tcp.port
+guest IPv6 ULA prefix	per-instance	src/androidd/boot.py:NET_ULA_PREFIX
+vbmeta loop device	per-instance	src/androidd/boot.py:VBMETA_LOOP_FILE
+lifecycle private-users probe unit	host-global	test/system/cycle/claims-install.sh:systemd-run --unit=rhizo-lc-privusers
+lifecycle private-users probe environment	host-global	test/system/cycle/claims-install.sh:systemd-run --unit=rhizo-lc-privusers environment
+lifecycle journal user unit	host-global	test/system/cycle/claims-install.sh:systemd-run --unit=$unit
+lifecycle journal user unit environment	host-global	test/system/cycle/claims-install.sh:systemd-run --unit=$unit environment

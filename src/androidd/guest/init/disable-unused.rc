@@ -1,0 +1,54 @@
+service rhizo-disable-dynsystem /system/bin/sh /system/bin/pm disable --user 0 com.android.dynsystem/com.android.dynsystem.BootCompletedReceiver
+    disabled
+    oneshot
+    user root
+    seclabel u:r:shell:s0
+
+service rhizo-restore-dynsystem /system/bin/sh /system/bin/pm default-state --user 0 com.android.dynsystem
+    disabled
+    oneshot
+    user shell
+    seclabel u:r:shell:s0
+
+service rhizo-disable-phone /system/bin/sh /system/bin/pm disable-user --user 0 com.android.phone
+    disabled
+    oneshot
+    user shell
+    seclabel u:r:shell:s0
+
+service rhizo-disable-keychain /system/bin/sh /system/bin/pm disable-user --user 0 com.android.keychain
+    disabled
+    oneshot
+    user shell
+    seclabel u:r:shell:s0
+
+on property:sys.boot_completed=1
+    start rhizo-disable-dynsystem
+    start rhizo-restore-dynsystem
+    start rhizo-disable-phone
+    start rhizo-disable-keychain
+
+service rhizo-disable-launcher3 /system/bin/sh /system/bin/pm disable-user --user 0 com.android.launcher3
+    disabled
+    oneshot
+    user shell
+    seclabel u:r:shell:s0
+
+service rhizo-disable-keyguard /system/bin/sh /system/bin/locksettings set-disabled --user 0 true
+    disabled
+    oneshot
+    user shell
+    seclabel u:r:shell:s0
+
+on property:sys.boot_completed=1
+    start rhizo-disable-launcher3
+    start rhizo-disable-keyguard
+
+service rhizo-status-chip-off /system/bin/sh /system/bin/device_config put privacy enable_immersive_indicator false
+    disabled
+    oneshot
+    user root
+    seclabel u:r:shell:s0
+
+on property:sys.boot_completed=1
+    start rhizo-status-chip-off

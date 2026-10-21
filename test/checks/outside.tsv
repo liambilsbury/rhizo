@@ -1,0 +1,85 @@
+# the checks whose script lives outside test/checks: kind, flags, label, argv (from test/checks) and optional needs
+selftest	-	gnome harness check	python3 ../system/guest/gnome-harness.py --selftest
+selftest	-	plasma harness check	python3 ../system/guest/plasma-harness.py --selftest
+selftest	-	rt-budgets daemon check	python3 ../../src/services/rtd/rtd.py --selftest
+selftest	volatile	host-delay trace reader check	python3 ../system/trace/host-delay-trace.py --selftest	toolchain/perfetto/trace_processor_shell
+selftest	-	stream viewer check	python3 ../system/tools/stream-client.py --selftest
+selftest	-	maint_inline check	python3 ../../tools/build/packaging/deb/maint_inline.py --selftest
+selftest	-	lifecycle cycle claims check	../system/cycle/cycle-selftest.sh
+selftest	-	host snapshot diff check	python3 ../system/host/host-snapshot-diff.py --selftest
+run	-	the shipped host-snapshot allowlist parses	python3 ../system/host/host-snapshot-diff.py --check-allow ./data/host-snapshot-allow.tsv
+selftest	-	compositor pool planner check	python3 ../../tools/build/packaging/deb/deb-pool-plan.py --selftest
+selftest	-	compositor pool staging check	bash ../../tools/fetch/pools/deb/deb-pool-lib.sh --selftest
+selftest	-	runtime pool derivation check	bash ../../tools/fetch/pools/deb/runtime-debs.sh --selftest
+selftest	-	deb-pool fetch-env check	bash ../../tools/fetch/pools/deb/deb-pool-fetch-env-lib.sh --selftest
+selftest	-	pool fetcher check	bash ../../tools/fetch/pools/deb/fetch.sh --selftest
+selftest	-	appsync synthesis check	python3 ../../src/services/appsync/appsync.py --selftest
+selftest	-	ubuntu-update leg assertions check	../system/cycle/ubuntu-update-leg.sh --selftest
+selftest	-	installer assertions check	../system/install/installer.sh --selftest	dpkg-deb
+selftest	-	update-repo server check	../vm/guest-os/serve-update-repo.sh --selftest
+selftest	-	vm residue and cachyos binder check	../vm/boot/preflight.sh --selftest
+selftest	-	test-restart-smoke assertions check	../system/boot/restart-smoke.sh --selftest
+selftest	-	test-device-filter assertions check	../system/android/device-filter.sh --selftest
+selftest	-	test-software-render assertions check	../system/boot/software-render.sh --selftest
+selftest	-	build inputs fetch	../../tools/fetch/build-inputs.sh --selftest
+selftest	-	GSI lib extraction	../../tools/build/image/extract-gsi-libs.sh --selftest
+selftest	-	GSI build tree, signing and posture check	../../tools/build/image/gsi.sh --selftest
+selftest	-	GSI signing key arguments check	../../tools/build/image/gsi-keys.sh --selftest
+selftest	-	GSI source bundle check	../../tools/build/image/gsi-source.sh --selftest
+selftest	-	GSI GPL source list check	python3 ../../tools/build/image/gsi-share-list.py --selftest
+selftest	-	wayland cross build	../../tools/build/toolchain/wayland-android.sh --selftest
+selftest	-	AIDL glue regen	../../tools/build/toolchain/regen-aidl-glue.sh --selftest
+selftest	-	GPU driver build	../../tools/build/graphics/gpu-driver.sh --selftest
+selftest	-	android sdk resolver	bash ../../tools/build/toolchain/android-sdk.sh --selftest
+selftest	-	make rules	python3 ../../tools/build/rules.py --selftest
+run	-	artifacts.tsv renders make rules	python3 ../../tools/build/rules.py --check
+selftest	-	kernel-changed ExecCondition	../../src/install/prepare/kernel-changed.sh --selftest
+selftest	-	stamps check	python3 ../../tools/build/stamps.py --selftest
+selftest	-	plasma staged login check	../vm/start/start-plasma.sh --selftest
+selftest	-	boot-phases reader	python3 ../vm/boot/boot-phases.py --selftest
+selftest	-	boot-owners reader	python3 ../vm/boot/boot-owners.py --selftest
+selftest	-	settings screen text parser	python3 ../system/tools/uidump.py --selftest
+selftest	-	qemu QMP state capture	python3 ../vm/guest-os/qmp.py --selftest
+selftest	-	qemu guest agent client	python3 ../vm/guest-os/qga.py --selftest
+selftest	-	data-template materializer	python3 ../../src/install/prepare/materialize-data-template.py --selftest
+selftest	-	await-boot-completed check	python3 ../../src/install/prepare/await-boot-completed.py --selftest
+selftest	-	mesa driver build recipe	../../tools/build/graphics/mesa.sh --selftest	mesa-src/
+selftest	-	android llvm build marker check	../../tools/build/toolchain/llvm-android.sh --selftest
+selftest	-	gpu driver detection	../../src/install/prepare/detect-gpu-driver.sh --selftest
+selftest	-	sys-kernel scan check	../../tools/build/image/scan-sys-kernel-readers.sh --selftest	aosp-android16-qpr2/
+run	-	rig daemons resolve their instance paths	python3 ../../src/services/tests/test_instance_paths.py
+run	-	host daemons read by descriptor	python3 ../../src/services/tests/test_control_reads_raw.py
+run	-	deskd respects noclipboard	python3 ../../src/services/deskbridge/tests/test_deskd_noclipboard.py
+run	-	deskd reaps wlbridge	python3 ../../src/services/deskbridge/tests/test_deskd_wlbridge_reap.py
+run	-	deskd arms its drop watch on auth	python3 ../../src/services/deskbridge/tests/test_deskd_control_rearm.py
+run	-	deskd carries one copy once	python3 ../../src/services/deskbridge/tests/test_deskd_clip_echo.py
+run	-	deskd keeps the newest copy	python3 ../../src/services/deskbridge/tests/test_deskd_clip_order.py
+run	-	bridge clip echo rules	python3 ../../src/services/deskbridge/tests/test_bridge_clip_echo.py
+run	-	drag-out pad on the launch display	python3 ../../src/services/deskbridge/tests/test_deskd_dragwatch.py
+run	-	drop pad pressed once per drop	python3 ../../src/services/deskbridge/tests/test_deskd_pad_press.py
+run	-	displayd waits for sandbox init	python3 ../../src/services/displayd/tests/test_displayd_start.py
+run	-	displayd sends android's mouse gain	python3 ../../src/services/displayd/tests/test_displayd_cursor_gain.py
+run	-	displayd announces every display	python3 ../../src/services/displayd/tests/test_displayd_born.py
+run	-	displayd scales density by framework dpi	python3 ../../src/services/displayd/tests/test_displayd_scale.py
+run	-	apid.py's own offline test suite passes	python3 ../../src/services/api/tests/test_apid.py
+run	-	gsi-update.sh's own offline test suite passes	../../src/install/tests/test-gsi-update.sh
+selftest	-	debs.sh --at cleanup check	../../tools/build/packaging/deb/debs.sh --selftest
+run	-	prepare.sh offline suite passes	../../src/install/tests/test-host-prepare-release.sh
+run	-	fetch-gsi.sh pin table	../../src/install/tests/test-fetch-gsi-pins.sh
+run	-	swapfile and fstab install and removal	../../src/install/tests/test-swap-ownership.sh
+run	-	host flavor lib and snapshot refusal	../../src/install/tests/test-host-flavor.sh
+run	-	package library steps under dash	../../src/install/tests/test-pkg-lib.sh
+run	-	pacman scriptlet runs the package library	../../src/install/tests/test-rhizo-install.sh
+selftest	-	postinst unit list reader check	python3 ../../tools/build/packaging/deb/deb_unit_lists.py --selftest
+selftest	-	pacman package entry comparison check	../../tools/build/packaging/arch/arch-pkgs.sh --selftest
+run	-	bootloader lib	../../src/install/tests/test-bootloader.sh
+run	-	bootstrap --show token lines	../../src/install/tests/test-bootstrap-tokens.sh
+run	-	bootstrap apply, verify and refusal	../../src/install/tests/test-bootstrap-flows.sh
+run	-	teardown removes cmdline tokens	../../src/install/tests/test-teardown-bootloader.sh
+selftest	-	keymint relink check	python3 ../../tools/build/hal/relink-keymint-static.py --selftest
+run	-	hostfs labels mount points	python3 ../../src/services/hostfs/tests/test_hostfs_label.py
+selftest	-	verify-all-domains-enforcing check	bash ../system/cts/verify-all-domains-enforcing.sh --selftest
+run	-	kernel configure.sh config	../../kernel/tests/test-configure.sh	~/.cache/rhizo/kernel/linux/
+run	-	kernel deb-meta.sh packages	../../kernel/tests/test-deb-meta.sh	dpkg-deb
+run	-	kernel build.sh revision	../../kernel/tests/test-package-revision.sh
+run	-	kernel sign.sh signing	../../kernel/tests/test-sign.sh	sbsign sbverify openssl as ld
