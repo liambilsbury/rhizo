@@ -1,0 +1,12 @@
+[Unit]
+Description=Rhizo notification relay
+ConditionUser=1000
+After=rhizo-desktop-session.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/usr/lib/rhizo
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/deskbridge/desk-notify.py --socket /run/rhizo-desk-notify/notify.sock
+NoNewPrivileges=yes

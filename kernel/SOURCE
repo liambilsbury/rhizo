@@ -1,0 +1,21 @@
+# pinned inputs of the Rhizo kernel, read by kernel/tools/fetch-inputs.sh
+base_url=https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+base_tag=v7.1-rc1
+base_commit=254f49634ee16a731174d2ae34bc50bd5f45e731
+series_url=https://github.com/stephensmalley/selinux-kernel.git
+series_commit=d66100b8759f2048abc7e9269e81222a92d5d09c
+series_git_version=2.56.0
+series_abbrev=11
+ubuntu_package_url=https://launchpad.net/ubuntu/+archive/primary/+files/linux-headers-6.8.0-136-generic_6.8.0-136.136_amd64.deb
+ubuntu_package_sha256=0a2aa4733f304e2db054807ff04df4f6b70dbf6c0f286402c9a15f7efe36bd46
+ubuntu_config_path=usr/src/linux-headers-6.8.0-136-generic/.config
+ubuntu_config_sha256=4ebc8d11777802628c8391942a225ac177d21d67dd6178f81d141160366bd997
+cachyos_package_url=https://mirror.krfoss.org/cachyos/repo/x86_64_v4/cachyos-znver4/linux-cachyos-headers-7.2.9-2-x86_64_v4.pkg.tar.zst
+cachyos_package_sha256=1a6a50d2323c801b37b95b2fc32cab4a4544232b71f00a49755315a408a92aa4
+cachyos_config_path=usr/lib/modules/7.2.9-2-cachyos/build/.config
+cachyos_config_sha256=0bb86190e4bde11733b5fc8664f2335167d0fb93c5b5add4aaf5a9f1a6ee1be2
+
+# series: branch working-selinuxns at series_commit, git format-patch base_tag..series_commit
+# series authors: Stephen Smalley (48), Christian Göttsche (9), Daniel Durning (1), Thorsten Blum (1)
+# patches: kernel/patches, Liam Bilsbury, except 0003 (Denis V. Lunev, mainline 1aac65f3e651)
+# license: GPL-2.0-only, the kernel's own; all of the patches carry their authors' Signed-off-by

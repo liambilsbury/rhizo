@@ -1,0 +1,21 @@
+#cloud-config
+hostname: rhizo-vm
+ssh_pwauth: true
+disable_root: false
+users:
+  - name: root
+    ssh_authorized_keys:
+      - @VM_PUBKEY@
+    lock_passwd: false
+chpasswd:
+  expire: false
+  users:
+    - {name: root, password: vm, type: text}
+runcmd:
+  - [ sh, -c, "test -f /swapfile || (fallocate -l 2G /swapfile && chmod 0600 /swapfile && mkswap /swapfile)" ]
+  - [ sh, -c, "swapon /swapfile || true" ]
+  - [ sh, -c, "grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab" ]
+  - systemctl mask pollinate.service systemd-networkd-wait-online.service
+    ModemManager.service multipathd.service multipathd.socket
+    snapd.seeded.service snapd.service snapd.socket apport.service
+    udisks2.service

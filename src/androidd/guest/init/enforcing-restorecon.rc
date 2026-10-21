@@ -1,0 +1,6 @@
+on early-init && property:ro.vendor.rhizo.first_boot=1
+    restorecon_recursive /vendor
+    restorecon_recursive /data
+    restorecon_recursive /system_ext
+    restorecon_recursive /product
+    restorecon_recursive /system/apex

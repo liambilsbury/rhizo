@@ -1,0 +1,206 @@
+encrypt AES key blobs with a master key persisted on /data
+
+--- a/system/keymaster/contexts/pure_soft_keymaster_context.cpp
++++ b/system/keymaster/contexts/pure_soft_keymaster_context.cpp
+@@ -17,7 +17,13 @@
+ #include <keymaster/contexts/pure_soft_keymaster_context.h>
+ 
+ #include <assert.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
+ #include <memory>
++#include <mutex>
+ #include <utility>
+ 
+ #include <openssl/aes.h>
+@@ -190,6 +196,150 @@
+     return key_factory->GetOperationFactory(purpose);
+ }
+ 
++namespace {
++
++constexpr size_t kRhizoMasterKeyBytes = 32;
++constexpr char kRhizoMasterKeyDir[] = "/data/rhizo_keymint";
++constexpr char kRhizoMasterKeyPath[] = "/data/rhizo_keymint/master.key";
++
++enum class RhizoKeyLoad { kLoaded, kAbsent, kUnusable };
++
++// read the persisted master key
++RhizoKeyLoad RhizoLoadMasterKey(uint8_t* out) {
++    int fd = TEMP_FAILURE_RETRY(open(kRhizoMasterKeyPath, O_RDONLY | O_CLOEXEC));
++    if (fd < 0) {
++        if (errno == ENOENT) return RhizoKeyLoad::kAbsent;
++        LOG_E("rhizo: cannot open the KeyMint master key at %s: %s", kRhizoMasterKeyPath,
++              strerror(errno));
++        return RhizoKeyLoad::kUnusable;
++    }
++    uint8_t buf[kRhizoMasterKeyBytes + 1];
++    ssize_t n = TEMP_FAILURE_RETRY(read(fd, buf, sizeof(buf)));
++    int read_errno = errno;
++    close(fd);
++    if (n < 0) {
++        LOG_E("rhizo: cannot read the KeyMint master key at %s: %s", kRhizoMasterKeyPath,
++              strerror(read_errno));
++        return RhizoKeyLoad::kUnusable;
++    }
++    if (static_cast<size_t>(n) != kRhizoMasterKeyBytes) {
++        LOG_E("rhizo: the KeyMint master key at %s is %zd bytes, expected %zu -- refusing to "
++              "replace it, because every AES key blob on this /data was wrapped with the key "
++              "it should hold and overwriting it would destroy them for good",
++              kRhizoMasterKeyPath, n, kRhizoMasterKeyBytes);
++        return RhizoKeyLoad::kUnusable;
++    }
++    memcpy(out, buf, kRhizoMasterKeyBytes);
++    return RhizoKeyLoad::kLoaded;
++}
++
++// write the master key file and fsync it
++bool RhizoPersistMasterKey(const uint8_t* key) {
++    int fd = TEMP_FAILURE_RETRY(
++        open(kRhizoMasterKeyPath, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600));
++    if (fd < 0) {
++        LOG_E("rhizo: cannot create the KeyMint master key at %s: %s", kRhizoMasterKeyPath,
++              strerror(errno));
++        return false;
++    }
++    size_t written = 0;
++    while (written < kRhizoMasterKeyBytes) {
++        ssize_t n = TEMP_FAILURE_RETRY(write(fd, key + written, kRhizoMasterKeyBytes - written));
++        if (n <= 0) {
++            LOG_E("rhizo: cannot write the KeyMint master key at %s: %s", kRhizoMasterKeyPath,
++                  strerror(errno));
++            close(fd);
++            unlink(kRhizoMasterKeyPath);
++            return false;
++        }
++        written += static_cast<size_t>(n);
++    }
++    bool durable = (fsync(fd) == 0);
++    if (!durable) {
++        LOG_E("rhizo: cannot fsync the KeyMint master key at %s: %s", kRhizoMasterKeyPath,
++              strerror(errno));
++    }
++    close(fd);
++    if (!durable) {
++        unlink(kRhizoMasterKeyPath);
++        return false;
++    }
++    int dfd = TEMP_FAILURE_RETRY(open(kRhizoMasterKeyDir, O_RDONLY | O_DIRECTORY | O_CLOEXEC));
++    if (dfd >= 0) {
++        fsync(dfd);
++        close(dfd);
++    }
++    LOG_I("rhizo: created and persisted a new KeyMint master key at %s", kRhizoMasterKeyPath);
++    return true;
++}
++
++}  // namespace
++
++// return the master key, loading or creating it
++static const KeymasterKeyBlob& RhizoAesGcmMasterKey() {
++    static std::mutex mu;
++    static KeymasterKeyBlob* blob = nullptr;
++    static bool persisted = false;
++    static int persist_attempts = 0;
++    static bool warned_unpersisted = false;
++    constexpr int kMaxPersistAttempts = 8;
++
++    std::lock_guard<std::mutex> lock(mu);
++
++    if (blob == nullptr) {
++        blob = new KeymasterKeyBlob(kRhizoMasterKeyBytes);
++        switch (RhizoLoadMasterKey(blob->writable_data())) {
++        case RhizoKeyLoad::kLoaded:
++            persisted = true;
++            break;
++        case RhizoKeyLoad::kAbsent:
++            RAND_bytes(blob->writable_data(), kRhizoMasterKeyBytes);
++            ++persist_attempts;
++            persisted = RhizoPersistMasterKey(blob->key_material);
++            break;
++        case RhizoKeyLoad::kUnusable:
++            RAND_bytes(blob->writable_data(), kRhizoMasterKeyBytes);
++            persist_attempts = kMaxPersistAttempts;
++            break;
++        }
++    } else if (!persisted && persist_attempts < kMaxPersistAttempts) {
++        ++persist_attempts;
++        if (RhizoLoadMasterKey(blob->writable_data()) == RhizoKeyLoad::kLoaded) {
++            persisted = true;
++        } else {
++            persisted = RhizoPersistMasterKey(blob->key_material);
++        }
++    }
++
++    if (!persisted && !warned_unpersisted) {
++        warned_unpersisted = true;
++        LOG_E("rhizo: SERVING A KEYMINT MASTER KEY THAT IS NOT ON DISK. Every AES key blob "
++              "created in this process stops being decryptable when it exits. The errors "
++              "above say why %s could not be written.",
++              kRhizoMasterKeyPath);
++    }
++    return *blob;
++}
++
++// parse a blob encrypted with the master key
++static keymaster_error_t ParseRhizoEncryptedBlob(const KeymasterKeyBlob& blob,
++                                                 const AuthorizationSet& hidden,
++                                                 KeymasterKeyBlob* key_material,
++                                                 AuthorizationSet* hw_enforced,
++                                                 AuthorizationSet* sw_enforced) {
++    KmErrorOr<DeserializedKey> key = DeserializeAuthEncryptedBlob(blob);
++    if (!key) return key.error();
++
++    KmErrorOr<KeymasterKeyBlob> decrypted =
++        DecryptKey(*key, hidden, SecureDeletionData(), RhizoAesGcmMasterKey());
++    if (!decrypted) return decrypted.error();
++
++    *key_material = std::move(*decrypted);
++    *hw_enforced = std::move(key->hw_enforced);
++    *sw_enforced = std::move(key->sw_enforced);
++    return KM_ERROR_OK;
++}
++
+ keymaster_error_t PureSoftKeymasterContext::CreateKeyBlob(const AuthorizationSet& key_description,
+                                                           const keymaster_key_origin_t origin,
+                                                           const KeymasterKeyBlob& key_material,
+@@ -266,8 +488,22 @@
+     error = BuildHiddenAuthorizations(key_description, &hidden, softwareRootOfTrust);
+     if (error != KM_ERROR_OK) return error;
+ 
+-    error = SerializeIntegrityAssuredBlob(key_material, hidden, *hw_enforced, *sw_enforced, blob);
+-    if (error != KM_ERROR_OK) return error;
++    keymaster_algorithm_t import_algorithm;
++    if (key_description.GetTagValue(TAG_ALGORITHM, &import_algorithm) &&
++        import_algorithm == KM_ALGORITHM_AES) {
++        // encrypt AES key material with the master key
++        KmErrorOr<EncryptedKey> encrypted =
++            EncryptKey(key_material, AES_GCM_WITH_SW_ENFORCED, *hw_enforced, *sw_enforced, hidden,
++                      SecureDeletionData(), RhizoAesGcmMasterKey(), *this /* random */);
++        if (!encrypted) return encrypted.error();
++        KmErrorOr<KeymasterKeyBlob> serialized =
++            SerializeAuthEncryptedBlob(*encrypted, *hw_enforced, *sw_enforced, 0 /* key_slot */);
++        if (!serialized) return serialized.error();
++        *blob = std::move(*serialized);
++    } else {
++        error = SerializeIntegrityAssuredBlob(key_material, hidden, *hw_enforced, *sw_enforced, blob);
++        if (error != KM_ERROR_OK) return error;
++    }
+ 
+     // Pretend to be some sort of secure hardware that can securely store the key blob.
+     if (!needStoreBySecureKeyStorage) return KM_ERROR_OK;
+@@ -360,6 +598,11 @@
+     if (error == KM_ERROR_OK) LOG_D("Parsed an old keymaster1 software key");
+     if (error != KM_ERROR_INVALID_KEY_BLOB) return constructKey();
+ 
++    // Maybe it's encrypted with the Rhizo master key.
++    error = ParseRhizoEncryptedBlob(blob, hidden, &key_material, &hw_enforced, &sw_enforced);
++    if (error == KM_ERROR_OK) LOG_D("Parsed a Rhizo AES-GCM-wrapped software key");
++    if (error != KM_ERROR_INVALID_KEY_BLOB) return constructKey();
++
+     // Wasn't an auth-encrypted blob.  Maybe it's an old softkeymaster blob.
+     error = ParseOldSoftkeymasterBlob(blob, &key_material, &hw_enforced, &sw_enforced);
+     if (error == KM_ERROR_OK) LOG_D("Parsed an old sofkeymaster key");

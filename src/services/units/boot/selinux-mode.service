@@ -1,0 +1,11 @@
+[Unit]
+Description=Rhizo SELinux mode record
+Before=rhizo-headroomd.service rhizo-delayd.service rhizo-rtd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/rhizo/rhizo-selinux-mode --write-mode-file
+
+[Install]
+WantedBy=multi-user.target

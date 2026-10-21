@@ -1,0 +1,12 @@
+# @RHIZO_SUBST early_init_restorecon
+
+service vendor.rhizo-audio-core /vendor/bin/hw/rhizo-audio-core-service
+    class core
+    user system
+    group system
+    capabilities SYS_NICE
+    stdio_to_kmsg
+
+on property:sys.audio.restart.hal=1
+    stop vendor.rhizo-audio-core
+    start vendor.rhizo-audio-core

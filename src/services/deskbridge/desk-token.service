@@ -1,0 +1,14 @@
+[Unit]
+Description=Rhizo desktop bridge token delivery
+After=rhizo-deskd.service
+PartOf=rhizo-deskd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh --any desktop.clipboard desktop.notifications desktop.drag desktop.open_uri
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/deskbridge/desk-token.py --port 47100 --token-file /run/rhizo-desk/token
+TimeoutStartSec=420
+StandardOutput=append:/var/log/rhizo/rhizo-desk-token.log
+StandardError=append:/var/log/rhizo/rhizo-desk-token.log
+NoNewPrivileges=yes

@@ -1,0 +1,24 @@
+LIBBINDER_NDK {
+  global:
+    ABinderProcess_joinThreadPool; ABinderProcess_setThreadPoolMaxThreadCount;
+    AIBinder_Class_define; AIBinder_Class_setOnDump; AIBinder_Weak_delete; AIBinder_Weak_new;
+    AIBinder_Weak_promote; AIBinder_decStrong; AIBinder_getUserData; AIBinder_incStrong; AIBinder_new;
+    AParcel_getDataPosition; AParcel_readBool; AParcel_readByteArray; AParcel_readInt32; AParcel_readInt64;
+    AParcel_readParcelableArray; AParcel_setDataPosition; AParcel_writeBool; AParcel_writeByteArray;
+    AParcel_writeInt32; AParcel_writeInt64; AParcel_writeParcelableArray; AParcel_writeStatusHeader;
+    AParcel_writeString; AParcel_writeStrongBinder; AServiceManager_addService; AStatus_delete;
+    AStatus_fromServiceSpecificError; AStatus_fromServiceSpecificErrorWithMessage; AStatus_isOk; AStatus_newOk;
+  local: *;
+};
+LIBBINDER_NDK30 {
+  global: AIBinder_markVintfStability; AIBinder_Class_setHandleShellCommand;
+} LIBBINDER_NDK;
+LIBBINDER_NDK36 {
+  global: AIBinder_Class_setTransactionCodeToFunctionNameMap;
+} LIBBINDER_NDK30;
+LIBC {
+  global: __system_property_find; __system_property_get;
+};
+LIBC_O {
+  global: __system_property_read_callback; __system_property_wait;
+} LIBC;

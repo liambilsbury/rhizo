@@ -1,0 +1,111 @@
+diff --git a/security/selinux/avc.c b/security/selinux/avc.c
+index 9fa566bfec1..fe09ce623eb 100644
+--- a/security/selinux/avc.c
++++ b/security/selinux/avc.c
+@@ -975,6 +975,9 @@ static void avc_flush(struct selinux_avc *avc)
+ 	}
+ }
+ 
++/* count of AVC resets in all SELinux namespaces */
++static atomic_t avc_resets = ATOMIC_INIT(0);
++
+ /**
+  * avc_ss_reset - Flush the cache and revalidate migrated permissions.
+  * @avc: the access vector cache
+@@ -998,6 +1001,10 @@ int avc_ss_reset(struct selinux_avc *avc, u32 seqno)
+ 	}
+ 
+ 	avc_latest_notif_update(avc, seqno, 0);
++
++	/* order the AVC flush before the increment */
++	smp_mb__before_atomic();
++	atomic_inc(&avc_resets);
+ 	return rc;
+ }
+ 
+@@ -1578,10 +1585,13 @@ int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
+ 		rc = avc_has_perm_noaudit(state, ssid, tsid, tclass,
+ 					  requested, 0, &tmp_avd);
+ 
+-		avd->allowed &= tmp_avd.allowed;
+-		avd->auditallow |= tmp_avd.auditallow;
+-		avd->auditdeny |= tmp_avd.auditdeny;
+-		avd->flags &= tmp_avd.flags;
++		/* skip the all-allowed decision of an ancestor with no policy */
++		if (selinux_initialized(state)) {
++			avd->allowed &= tmp_avd.allowed;
++			avd->auditallow |= tmp_avd.auditallow;
++			avd->auditdeny |= tmp_avd.auditdeny & ~tmp_avd.allowed;
++			avd->flags &= tmp_avd.flags;
++		}
+ 
+ 		if (rc)
+ 			return rc;
+@@ -1781,3 +1791,9 @@ u32 avc_policy_seqno(struct selinux_state *state)
+ {
+ 	return state->avc->avc_cache.latest_notif;
+ }
++
++/* return the count of AVC resets in all SELinux namespaces */
++u32 avc_reset_generation(void)
++{
++	return atomic_read_acquire(&avc_resets);
++}
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 03b84dd3fe8..4f0d022894d 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -3313,6 +3313,7 @@ static inline void task_avdcache_reset(struct task_security_struct *tsec)
+ 	memset(&tsec->avdcache.dir, 0, sizeof(tsec->avdcache.dir));
+ 	tsec->avdcache.sid = current_sid();
+ 	tsec->avdcache.seqno = avc_policy_seqno(current_selinux_state);
++	tsec->avdcache.reset_generation = avc_reset_generation();
+ 	tsec->avdcache.dir_spot = TSEC_AVDC_DIR_SIZE - 1;
+ }
+ 
+@@ -3337,7 +3338,9 @@ static inline int task_avdcache_search(struct task_security_struct *tsec,
+ 
+ 	if (unlikely(current_sid() != tsec->avdcache.sid ||
+ 			tsec->avdcache.seqno !=
+-			avc_policy_seqno(current_selinux_state))) {
++			avc_policy_seqno(current_selinux_state) ||
++			tsec->avdcache.reset_generation !=
++			avc_reset_generation())) {
+ 		task_avdcache_reset(tsec);
+ 		return -ENOENT;
+ 	}
+diff --git a/security/selinux/include/avc.h b/security/selinux/include/avc.h
+index ce3df5a674f..081354fefac 100644
+--- a/security/selinux/include/avc.h
++++ b/security/selinux/include/avc.h
+@@ -187,6 +187,7 @@ int selinux_state_has_perm(struct selinux_state *state, u32 ssid, u32 tsid,
+ 			   struct common_audit_data *ad);
+ 
+ u32 avc_policy_seqno(struct selinux_state *state);
++u32 avc_reset_generation(void);
+ 
+ #define AVC_CALLBACK_GRANT		1
+ #define AVC_CALLBACK_TRY_REVOKE		2
+diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
+index 95a6bd4e9ef..c0e7c6a7c26 100644
+--- a/security/selinux/include/objsec.h
++++ b/security/selinux/include/objsec.h
+@@ -43,6 +43,7 @@ struct task_security_struct {
+ 	struct {
+ 		u32 sid; /* current SID for cached entries */
+ 		u32 seqno; /* AVC sequence number */
++		u32 reset_generation; /* AVC resets in all namespaces */
+ 		unsigned int dir_spot; /* dir cache index to check first */
+ 		struct avdc_entry dir[TSEC_AVDC_DIR_SIZE]; /* dir entries */
+ 		bool permissive_neveraudit; /* permissive and neveraudit */
+@@ -55,7 +56,9 @@ static inline bool task_avdcache_permnoaudit(struct task_security_struct *tsec,
+ 	return (tsec->avdcache.permissive_neveraudit &&
+ 		sid == tsec->avdcache.sid &&
+ 		tsec->avdcache.seqno ==
+-			avc_policy_seqno(current_selinux_state));
++			avc_policy_seqno(current_selinux_state) &&
++		tsec->avdcache.reset_generation ==
++			avc_reset_generation());
+ }
+ 
+ enum label_initialized {

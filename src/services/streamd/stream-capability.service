@@ -1,0 +1,9 @@
+[Unit]
+Description=Rhizo stream socket toggle
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/rhizo/streamd/capability-sync.sh
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes

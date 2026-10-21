@@ -1,0 +1,53 @@
+#!/bin/bash
+# print llvm-config output for the Android LLVM build
+set -uo pipefail
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LLVM_DL="$REPO_ROOT/toolchain/llvm-android"
+BUILD="$LLVM_DL/build-android-x86_64"
+SRC_INCLUDE="$LLVM_DL/llvm-project-18.1.8.src/llvm/include"
+VERSION=18.1.8
+
+KNOWN_MODULES="bitwriter engine mcdisassembler mcjit core executionengine scalaropts transformutils instcombine coroutines native"
+
+# print the LLVM static library flags
+libs_for_modules() {
+  printf '%s\n' '-lLLVMX86TargetMCA -lLLVMMCA -lLLVMX86Disassembler -lLLVMX86AsmParser -lLLVMX86CodeGen -lLLVMX86Desc -lLLVMX86Info -lLLVMInstrumentation -lLLVMIRPrinter -lLLVMGlobalISel -lLLVMSelectionDAG -lLLVMCFGuard -lLLVMAsmPrinter -lLLVMMCJIT -lLLVMMCDisassembler -lLLVMInterpreter -lLLVMExecutionEngine -lLLVMRuntimeDyld -lLLVMOrcTargetProcess -lLLVMOrcShared -lLLVMCodeGen -lLLVMTarget -lLLVMScalarOpts -lLLVMInstCombine -lLLVMAggressiveInstCombine -lLLVMObjCARCOpts -lLLVMTransformUtils -lLLVMCodeGenTypes -lLLVMBitWriter -lLLVMAnalysis -lLLVMProfileData -lLLVMSymbolize -lLLVMDebugInfoBTF -lLLVMDebugInfoPDB -lLLVMDebugInfoMSF -lLLVMDebugInfoDWARF -lLLVMObject -lLLVMTextAPI -lLLVMMCParser -lLLVMIRReader -lLLVMAsmParser -lLLVMMC -lLLVMDebugInfoCodeView -lLLVMBitReader -lLLVMCore -lLLVMRemarks -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMTargetParser -lLLVMPasses -lLLVMCoroutines -lLLVMCoverage -lLLVMExtensions -lLLVMFileCheck -lLLVMFrontendOffloading -lLLVMFrontendOpenACC -lLLVMFrontendOpenMP -lLLVMHipStdPar -lLLVMJITLink -lLLVMLinker -lLLVMOption -lLLVMOrcJIT -lLLVMTableGen -lLLVMTableGenCommon -lLLVMTableGenGlobalISel -lLLVMVectorize -lLLVMWindowsDriver -lLLVMipo -lLLVMSupport -lLLVMDemangle'
+}
+
+out=""
+want_ldflags=0 want_libs=0 want_system_libs=0
+modules=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version) echo "$VERSION"; exit 0 ;;
+    --components) echo "$KNOWN_MODULES"; exit 0 ;;
+    --includedir) echo "$BUILD/include"; exit 0 ;;
+    --libdir) echo "$BUILD/lib"; exit 0 ;;
+    --shared-mode) echo "static"; exit 0 ;;
+    --has-rtti) echo "NO"; exit 0 ;;
+    --cppflags)
+      out+=" -I$BUILD/include -I$SRC_INCLUDE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+      ;;
+    --ldflags) want_ldflags=1 ;;
+    --libs) want_libs=1 ;;
+    --link-static) : ;;
+    --system-libs) want_system_libs=1 ;;
+    -*) : ;;
+    *) modules+=("$1") ;;
+  esac
+  shift
+done
+
+(( want_ldflags )) && out+=" -L$BUILD/lib"
+if (( want_libs )); then
+  for m in "${modules[@]}"; do
+    if ! grep -qw "$m" <<<"$KNOWN_MODULES"; then
+      echo "llvm-config-android-shim: module '$m' is not in KNOWN_MODULES ($KNOWN_MODULES)" >&2
+      exit 1
+    fi
+  done
+  out+=" $(libs_for_modules)"
+fi
+(( want_system_libs )) && out+=" -ldl -lm"
+
+echo "$out"

@@ -1,0 +1,14 @@
+[Unit]
+Description=Rhizo GSI update start
+Before=androidd.service
+ConditionPathExists=/var/lib/rhizo/update/state
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/lib/rhizo/install/update/gsi-update.sh begin-boot
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

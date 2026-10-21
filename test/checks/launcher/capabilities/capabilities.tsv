@@ -1,0 +1,77 @@
+network.enabled	on	src/androidd/boot.py:setup_veth_and_nat	run:capability-wiring.py
+network.services	on	src/androidd/boot.py:setup_veth_and_nat	run:capability-wiring.py
+network.proxy_connect	deny-local	src/services/netbridged/nb_proxy.py:target_policy_for_mode	run:capability-wiring.py
+desktop.clipboard	both	src/services/deskbridge/deskd.py:wlbridge_caps;src/android/hal/graphics-composer/src/wayland/wayland_backend.cpp:composerClipboardEnabled;src/services/deskbridge/desk-token.py:wanted_grants	run:capability-wiring.py
+desktop.notifications	on	src/services/deskbridge/deskd.py:connect_notify_socket;src/services/deskbridge/desk-token.py:wanted_grants	run:deskd-notify.sh
+desktop.drag	on	src/services/deskbridge/deskd.py:wlbridge_caps;src/services/deskbridge/desk-token.py:wanted_grants	run:capability-wiring.py
+desktop.pointer	off	src/services/deskbridge/deskd.py:wlbridge_caps	run:capability-wiring.py
+desktop.open_uri	on	src/services/deskbridge/deskd.py:open_on_host	run:deskd-open-uri.sh
+desktop.default_handler	off	src/services/appsync/appsync.py:host_defaults	selftest:appsync.py
+devices.tun	on	src/androidd/boot.py:install_device_cgroup_filter	test:device-filter.sh
+devices.dri	on	src/androidd/boot.py:install_device_cgroup_filter	test:software-render.sh
+devices.uinput	on	src/androidd/boot.py:install_device_cgroup_filter;src/androidd/sandbox/rootfs.py:open_label_service	test:device-filter.sh
+devices.bluetooth	on	src/androidd/sandbox/capability-allowed.sh:policy_or_deny;src/androidd/sandbox/rootfs.py:_bind_sockets_and_shadows;src/androidd/sandbox/hals.py:bluetooth_armed	test:bluetooth-handoff.sh
+audio.out	on	src/androidd/sandbox/capability-allowed.sh:policy_or_deny	run:audiod-policy.sh
+devices.virtual	off	src/androidd/sandbox/hals.py:stage_virtual_device	run:capability-wiring.py
+config=/etc/rhizo/adb_keys	off	src/androidd/sandbox/hals.py:_stage_adb	run:server-profile.py
+config=/etc/rhizo/hostfs.conf	off	src/services/hostfs/hostfs.py:read_config	run:packaging-config-channel.py
+rhizo.profile	desktop	src/androidd/sandbox/capabilities.py:read_policy	run:server-profile.py
+server.adb_reach	host	src/androidd/boot.py:setup_veth_and_nat	run:server-profile.py
+server.idle_stop_s	0	src/services/server-idle/server-idle.py:arm_timer	run:server-profile.py
+server.display	1280x800@60/400	src/android/hal/graphics-composer/src/composer.cpp:PrimaryGeometry	run:server-profile.py
+server.screen_off_s	60	src/androidd/boot.py:spawn_host_primer	run:server-profile.py
+instance.cpu_max	None	src/androidd/boot.py:write_cgroup_ceilings	selftest:instance-policy.py
+instance.memory_max	None	src/androidd/boot.py:write_cgroup_ceilings	selftest:instance-policy.py
+stream.enabled	off	test/vm/start/start-stream.sh	run:stream-policy.sh
+rt.budgets	off	src/androidd/sandbox/capability-allowed.sh:policy_or_deny	test:rt-budgets.sh
+rt.budget_percent	25	src/androidd/sandbox/capabilities.py:read_policy	test:rt-budgets.sh
+rt.contain	off	src/androidd/sandbox/capability-allowed.sh:policy_or_deny	test:rt-budgets.sh
+rt.contain_percent	10	src/androidd/sandbox/capabilities.py:read_policy	test:rt-budgets.sh
+rt.contain_runtime_us	2000	src/androidd/sandbox/capabilities.py:read_policy	test:rt-budgets.sh
+rt.contain_period_us	16667	src/androidd/sandbox/capabilities.py:read_policy	test:rt-budgets.sh
+trace.ftrace	off	src/androidd/sandbox/rootfs.py:_bind_sockets_and_shadows;src/androidd/sandbox/selinux_policy.py:FTRACE_GUARD	test:host-safety.sh
+trace.host_delay	off	src/androidd/sandbox/capability-allowed.sh:policy_or_deny;src/androidd/sandbox/rootfs.py:_bind_sockets_and_shadows;src/androidd/sandbox/hals.py:stage_host_delay	test:host-delay.sh
+power.cpu_headroom	off	src/androidd/sandbox/capability-allowed.sh:policy_or_deny;src/androidd/sandbox/rootfs.py:_bind_sockets_and_shadows;src/android/hal/power/src/headroom_link.h:HeadroomLink	test:headroom.sh
+
+#not-a-capability
+null
+zero
+full
+random
+urandom
+tty
+console
+kmsg
+ashmem
+binder
+vbmeta
+block
+shm
+input
+input-host
+loop-control
+device-mapper
+fuse
+hw_random
+dma_heap
+
+#not-a-daemon-capability
+keymapd
+displayd
+probe-client
+tests
+broker
+api
+fuse-wire
+udev
+
+#daemon-owner
+audiod	audio.out
+rtd	rt.budgets
+inputd	devices.uinput
+btd	devices.bluetooth
+hostfs	config=/etc/rhizo/hostfs.conf
+server-idle	server.idle_stop_s
+streamd	stream.enabled
+delayd	trace.host_delay
+headroomd	power.cpu_headroom

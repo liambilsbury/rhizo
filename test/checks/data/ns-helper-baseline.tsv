@@ -1,0 +1,67 @@
+# domain	target	class	perms	ioctl command (- for none)	basis
+# rows the denial census cannot hold
+rhizo_ns_helper	proc	dir	search	-	kernel
+rhizo_ns_helper	proc	lnk_file	read	-	kernel
+rhizo_ns_helper	proc	filesystem	getattr	-	kernel
+rhizo_ns_helper	labeledfs	filesystem	getattr	-	kernel
+rhizo_ns_helper	sysfs	dir	search	-	kernel
+rhizo_ns_helper	selinuxfs	filesystem	getattr	-	kernel
+rhizo_ns_helper	unlabeled	file	ioctl	0x5401	kernel
+rhizo_ns_relabel	file_contexts_file	file	getattr open read map ioctl	0x5401	kernel
+rhizo_ns_relabel	system_file	file	getattr open read	-	kernel
+rhizo_ns_label	system_data_root_file	dir	getattr search	-	kernel
+rhizo_ns_label	media_userdir_file	dir	search	-	kernel
+rhizo_ns_label	media_rw_data_file	dir	getattr search add_name remove_name write create setattr rmdir	-	kernel
+rhizo_ns_label	media_rw_data_file	dir	relabelfrom relabelto	-	code
+rhizo_ns_relabel	tmpfs	filesystem	getattr	-	kernel
+rhizo_ns_relabel	device	filesystem	getattr	-	kernel
+rhizo_ns_relabel	devpts	filesystem	getattr	-	kernel
+rhizo_ns_relabel	devpts	dir	search	-	kernel
+rhizo_ns_relabel	proc	dir	getattr	-	kernel
+rhizo_ns_relabel	proc_net	dir	search	-	kernel
+rhizo_ns_relabel	device	lnk_file	getattr read	-	kernel
+rhizo_ns_relabel	ptmx_device	lnk_file	getattr read	-	kernel
+rhizo_ns_relabel	binder_device	lnk_file	getattr read	-	kernel
+rhizo_ns_relabel	hwbinder_device	lnk_file	getattr read	-	kernel
+rhizo_ns_relabel	vndbinder_device	lnk_file	getattr read	-	kernel
+rhizo_ns_relabel	properties_serial	file	getattr	-	kernel
+rhizo_ns_relabel	property_info	file	getattr	-	kernel
+rhizo_ns_relabel	system_file	lnk_file	read	-	kernel
+rhizo_ns_relabel	system_lib_file	lnk_file	read	-	kernel
+rhizo_ns_relabel	system_linker_exec	lnk_file	read	-	kernel
+rhizo_ns_relabel	self	unix_stream_socket	create connect	-	kernel
+rhizo_ns_label	rootfs	dir	search	-	kernel
+rhizo_ns_label	self	capability	setgid	-	code
+rhizo_ns_label	self	unix_stream_socket	create connect	-	kernel
+rhizo_ns_helper	unlabeled	file	ioctl	0x5451	kernel
+rhizo_ns_relabel	block_device	lnk_file	getattr read	-	kernel
+rhizo_ns_relabel	null_device	chr_file	write	-	kernel
+rhizo_ns_relabel	tmpfs	chr_file	write	-	kernel
+rhizo_ns_stage	rootfs	dir	search	-	kernel
+rhizo_ns_relabel	rhizo_host_device	chr_file	relabelfrom	-	code
+rhizo_ns_relabel	null_device	chr_file	relabelto	-	code
+rhizo_ns_stage	system_file_type	dir	getattr open read search add_name create write setattr	-	code
+rhizo_ns_stage	vendor_file_type	dir	getattr open read search add_name create write setattr	-	code
+rhizo_ns_stage	system_file_type	file	getattr open read ioctl create write setattr	0x9409	code
+rhizo_ns_stage	exec_type	file	getattr open read ioctl create write setattr	0x9409	code
+rhizo_ns_stage	vendor_file_type	file	getattr open read ioctl create write setattr	0x9409	code
+rhizo_ns_stage	system_file_type	lnk_file	getattr read create setattr	-	code
+rhizo_ns_stage	vendor_file_type	lnk_file	getattr read create setattr	-	code
+rhizo_ns_relabel	rhizo_relabel_dest_file	file	relabelto	-	code
+rhizo_ns_relabel	rhizo_relabel_dest_file	lnk_file	relabelto	-	code
+rhizo_ns_relabel	rhizo_relabel_dest_file	dir	relabelto	-	code
+rhizo_ns_relabel	rhizo_relabel_dest_dev	chr_file	relabelto	-	code
+rhizo_ns_relabel	rhizo_relabel_dest_dev	blk_file	relabelto	-	code
+rhizo_ns_relabel	rhizo_relabel_dest_dev	lnk_file	relabelto	-	code
+rhizo_ns_relabel	rhizo_relabel_dest_dev	dir	relabelto	-	code
+rhizo_ns_relabel	vendor_file_type	dir	getattr open read search relabelto	-	code
+rhizo_ns_relabel	vendor_file_type	file	getattr relabelto	-	code
+rhizo_ns_relabel	vendor_file_type	lnk_file	getattr relabelto	-	code
+rhizo_ns_relabel	file_type	file	getattr	-	code
+rhizo_ns_relabel	file_type	lnk_file	getattr	-	code
+rhizo_ns_relabel	file_type	sock_file	getattr	-	code
+rhizo_ns_relabel	dev_type	chr_file	getattr	-	code
+rhizo_ns_relabel	dev_type	blk_file	getattr	-	code
+rhizo_ns_relabel	property_type	file	getattr	-	code
+rhizo_ns_relabel	tmpfs	file	relabelfrom	-	code
+rhizo_ns_relabel	rhizo_host_kmsg_device	chr_file	ioctl	0x542a	code

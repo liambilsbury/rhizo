@@ -1,0 +1,231 @@
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 2fb1c75afd1..607a5e91057 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -1886,6 +1886,7 @@ S:	Supported
+ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/gregkh/staging.git
+ F:	Documentation/netlink/specs/binder.yaml
+ F:	drivers/android/
++F:	include/uapi/linux/android/ashmem.h
+ 
+ ANDROID GOLDFISH PIC DRIVER
+ M:	Miodrag Dinic <miodrag.dinic@mips.com>
+diff --git a/drivers/android/Kconfig b/drivers/android/Kconfig
+index e2e402c9d17..f00263a51bd 100644
+--- a/drivers/android/Kconfig
++++ b/drivers/android/Kconfig
+@@ -51,6 +51,16 @@ config ANDROID_BINDER_DEVICES
+ 	  created. Each binder device has its own context manager, and is
+ 	  therefore logically separated from the other devices.
+ 
++config ANDROID_ASHMEM
++	bool "Android shared memory (ashmem) device"
++	depends on SHMEM
++	default n
++	help
++	  Provides /dev/ashmem, the Android shared memory ioctl interface,
++	  backed by shmem files. Android userspace opens it to share memory
++	  between processes, so it is needed to run that userspace on a
++	  mainline kernel, where the staging driver was removed.
++
+ config ANDROID_BINDER_ALLOC_KUNIT_TEST
+ 	tristate "KUnit Tests for Android Binder Alloc" if !KUNIT_ALL_TESTS
+ 	depends on ANDROID_BINDER_IPC && KUNIT
+diff --git a/drivers/android/Makefile b/drivers/android/Makefile
+index e0c650d3898..8adb01643ce 100644
+--- a/drivers/android/Makefile
++++ b/drivers/android/Makefile
+@@ -3,5 +3,6 @@ ccflags-y += -I$(src)			# needed for trace events
+ 
+ obj-$(CONFIG_ANDROID_BINDERFS)		+= binderfs.o
+ obj-$(CONFIG_ANDROID_BINDER_IPC)	+= binder.o binder_alloc.o binder_netlink.o
++obj-$(CONFIG_ANDROID_ASHMEM)		+= ashmem.o
+ obj-$(CONFIG_ANDROID_BINDER_ALLOC_KUNIT_TEST)	+= tests/
+ obj-$(CONFIG_ANDROID_BINDER_IPC_RUST)	+= binder/
+diff --git a/drivers/android/ashmem.c b/drivers/android/ashmem.c
+new file mode 100644
+index 00000000000..07f0baf559c
+--- /dev/null
++++ b/drivers/android/ashmem.c
+@@ -0,0 +1,133 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * /dev/ashmem: the Android shared memory ioctl interface over shmem files,
++ * for running Android userspace on a mainline kernel.
++ */
++
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/mm.h>
++#include <linux/mman.h>
++#include <linux/shmem_fs.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++#include <uapi/linux/android/ashmem.h>
++
++struct ashmem_area {
++	struct file *backing;
++	size_t size;
++	unsigned long prot_mask;
++	char name[ASHMEM_NAME_LEN];
++};
++
++/* Allocate an area with the default name and full protection. */
++static int ashmem_open(struct inode *inode, struct file *file)
++{
++	struct ashmem_area *asma;
++
++	asma = kzalloc_obj(*asma);
++	if (!asma)
++		return -ENOMEM;
++
++	asma->prot_mask = PROT_READ | PROT_WRITE | PROT_EXEC;
++	strscpy(asma->name, ASHMEM_NAME_DEF);
++	file->private_data = asma;
++	return 0;
++}
++
++/* Free the area and drop its backing file. */
++static int ashmem_release(struct inode *inode, struct file *file)
++{
++	struct ashmem_area *asma = file->private_data;
++
++	if (asma->backing)
++		fput(asma->backing);
++	kfree(asma);
++	return 0;
++}
++
++/* Name and size the area once; pinning is accepted and never purges. */
++static long ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	struct ashmem_area *asma = file->private_data;
++	char name[ASHMEM_NAME_LEN];
++	struct file *backing;
++
++	switch (cmd) {
++	case ASHMEM_SET_NAME:
++		if (asma->backing)
++			return -EINVAL;
++		if (copy_from_user(name, (void __user *)arg, ASHMEM_NAME_LEN))
++			return -EFAULT;
++		name[ASHMEM_NAME_LEN - 1] = '\0';
++		strscpy(asma->name, name);
++		return 0;
++	case ASHMEM_GET_NAME:
++		if (copy_to_user((void __user *)arg, asma->name, ASHMEM_NAME_LEN))
++			return -EFAULT;
++		return 0;
++	case ASHMEM_SET_SIZE:
++		if (asma->backing || !arg)
++			return -EINVAL;
++		backing = shmem_file_setup(asma->name, arg,
++					   mk_vma_flags(VMA_NORESERVE_BIT));
++		if (IS_ERR(backing))
++			return PTR_ERR(backing);
++		asma->backing = backing;
++		asma->size = arg;
++		return 0;
++	case ASHMEM_GET_SIZE:
++		return asma->size;
++	case ASHMEM_SET_PROT_MASK:
++		if ((asma->prot_mask & arg) != arg)
++			return -EINVAL;
++		asma->prot_mask = arg;
++		return 0;
++	case ASHMEM_GET_PROT_MASK:
++		return asma->prot_mask;
++	case ASHMEM_PIN:
++	case ASHMEM_UNPIN:
++		return ASHMEM_NOT_PURGED;
++	case ASHMEM_GET_PIN_STATUS:
++		return ASHMEM_IS_PINNED;
++	case ASHMEM_PURGE_ALL_CACHES:
++		return 0;
++	default:
++		return -ENOTTY;
++	}
++}
++
++/* Map the backing file, refusing protections outside the area's mask. */
++static int ashmem_mmap(struct file *file, struct vm_area_struct *vma)
++{
++	struct ashmem_area *asma = file->private_data;
++
++	if (!asma->backing)
++		return -EINVAL;
++	if (vma->vm_flags & (VM_READ | VM_WRITE | VM_EXEC) &
++	    ~calc_vm_prot_bits(asma->prot_mask, 0))
++		return -EPERM;
++	if (vma->vm_pgoff > (asma->size >> PAGE_SHIFT))
++		return -EINVAL;
++
++	vma_set_file(vma, asma->backing);
++	return vfs_mmap(vma->vm_file, vma);
++}
++
++static const struct file_operations ashmem_fops = {
++	.open = ashmem_open,
++	.release = ashmem_release,
++	.unlocked_ioctl = ashmem_ioctl,
++	.compat_ioctl = ashmem_ioctl,
++	.mmap = ashmem_mmap,
++};
++
++static struct miscdevice ashmem_misc = {
++	.minor = MISC_DYNAMIC_MINOR,
++	.name = "ashmem",
++	.fops = &ashmem_fops,
++	.mode = 0666,
++};
++
++builtin_misc_device(ashmem_misc);
+diff --git a/include/uapi/linux/android/ashmem.h b/include/uapi/linux/android/ashmem.h
+new file mode 100644
+index 00000000000..632e6e28f1d
+--- /dev/null
++++ b/include/uapi/linux/android/ashmem.h
+@@ -0,0 +1,42 @@
++/* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR Apache-2.0) */
++/*
++ * Copyright 2008 Google Inc.
++ * Author: Robert Love
++ */
++
++#ifndef _UAPI_LINUX_ANDROID_ASHMEM_H
++#define _UAPI_LINUX_ANDROID_ASHMEM_H
++
++#include <linux/ioctl.h>
++#include <linux/types.h>
++
++#define ASHMEM_NAME_LEN		256
++#define ASHMEM_NAME_DEF		"dev/ashmem"
++
++/* Return values from ASHMEM_PIN: was the mapping purged while unpinned? */
++#define ASHMEM_NOT_PURGED	0
++#define ASHMEM_WAS_PURGED	1
++
++/* Return values from ASHMEM_GET_PIN_STATUS: is the mapping pinned? */
++#define ASHMEM_IS_UNPINNED	0
++#define ASHMEM_IS_PINNED	1
++
++struct ashmem_pin {
++	__u32 offset;	/* offset into region, in bytes, page-aligned */
++	__u32 len;	/* length forward from offset, in bytes, page-aligned */
++};
++
++#define __ASHMEMIOC		0x77
++
++#define ASHMEM_SET_NAME		_IOW(__ASHMEMIOC, 1, char[ASHMEM_NAME_LEN])
++#define ASHMEM_GET_NAME		_IOR(__ASHMEMIOC, 2, char[ASHMEM_NAME_LEN])
++#define ASHMEM_SET_SIZE		_IOW(__ASHMEMIOC, 3, __kernel_size_t)
++#define ASHMEM_GET_SIZE		_IO(__ASHMEMIOC, 4)
++#define ASHMEM_SET_PROT_MASK	_IOW(__ASHMEMIOC, 5, unsigned long)
++#define ASHMEM_GET_PROT_MASK	_IO(__ASHMEMIOC, 6)
++#define ASHMEM_PIN		_IOW(__ASHMEMIOC, 7, struct ashmem_pin)
++#define ASHMEM_UNPIN		_IOW(__ASHMEMIOC, 8, struct ashmem_pin)
++#define ASHMEM_GET_PIN_STATUS	_IO(__ASHMEMIOC, 9)
++#define ASHMEM_PURGE_ALL_CACHES	_IO(__ASHMEMIOC, 10)
++
++#endif /* _UAPI_LINUX_ANDROID_ASHMEM_H */

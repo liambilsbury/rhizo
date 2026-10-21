@@ -1,0 +1,2 @@
+rm_conffile /etc/apt/apt.conf.d/50rhizo 0.1.4~
+rm_conffile /etc/profile.d/rhizo-console-vt.sh 0.1.4~

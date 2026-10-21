@@ -1,0 +1,2 @@
+d /run/rhizo-desktop 0755 1000 - -
+d /run/rhizo-desk-notify 0700 1000 - -

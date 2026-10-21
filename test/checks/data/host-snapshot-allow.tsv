@@ -1,0 +1,32 @@
+remove	dpkg\trhizo.status	a plain remove leaves the package config-files-only in dpkg's own database	deinstall ok config-files
+remove	dpkg\trhizo.version	dpkg keeps a config-files-only package's version recorded; no value pinned here since it moves with the shipped version
+
+remove	rhizo_dirs\t/var/lib/rhizo	must exist to hold data.img, which a plain remove keeps on purpose
+remove	rhizo_dirs\t/var/lib/rhizo/data.img	a plain apt remove keeps Android data on purpose
+remove	rhizo_dirs\t/var/lib/rhizo/data.img.meta	the sidecar recording data.img's template provenance, kept for the same reason as data.img itself
+remove?	rhizo_dirs\t/var/lib/rhizo/androidd-runtime.env	the release keys Rhizo writes at runtime, which a plain remove keeps beside /etc/rhizo and purge deletes
+remove@installer	rhizo_dirs\t/var/lib/rhizo/.test-remove-marker	installer.sh step 12a's own scaffolding, written to prove a remove+reinstall keeps data.img's own content -- never a Rhizo mutation, and outside DEFERRED so a plain remove leaves it in place like any other file under /var/lib/rhizo it did not create
+remove	rhizo_dirs\t/etc/rhizo*	a plain apt remove keeps your /etc/rhizo configuration on purpose
+remove	rhizo_dirs\t/srv/rhizo	must exist to hold the fetched GSI tree, which a plain remove keeps on purpose
+remove	etc\t/etc/rhizo*	the same kept /etc/rhizo, seen by the etc section's own walk of /etc -- the rhizo_dirs row above covers only that section's listing
+remove	etc\t/etc/xdg/menus/applications-merged/rhizo.menu	the app menu's merge file, a dpkg conffile a plain remove keeps and purge deletes; with the launchers gone it lists nothing
+remove?	etc\t/etc/xdg/menus	the merge file's parent, made for it by dpkg where no desktop made it first, kept with it
+remove?	etc\t/etc/xdg/menus/applications-merged	the same, one level down
+remove	rhizo_dirs\t/srv/rhizo/gsi_system*	a plain apt remove keeps the downloaded, sha256-verified GSI tree on purpose -- re-fetchable, but a multi-GB re-download
+remove?	rhizo_dirs\t/var/lib/rhizo/instances*	each added instance's own data.img, which a plain remove keeps like instance 0's; its launch trees go
+remove?	rhizo_dirs\t/var/lib/rhizo/device-state*	the device profile `rhizo device set` wrote for an instance, kept with that instance's data
+remove?	rhizo_dirs\t/var/lib/rhizo/pool*	the server pool's record of the kept instances, kept with them
+remove?	rhizo_dirs\t/var/lib/rhizo/update*	`rhizo gsi update`'s state and its trial and rollback copies of /data, user data a plain remove keeps
+remove?	dpkg\tlinux-image-*rhizo.*	the Rhizo kernel's image packages, which installer.sh and the lifecycle cycle install because rhizo depends on them: a plain remove of rhizo keeps them, as apt removes a kernel only by name; installer.sh step 12h and cycle step 9 purge them by name
+remove?	dpkg\tlinux-headers-*rhizo.*	the Rhizo kernel's headers packages, kept by a plain remove for the same reason as its image packages
+remove?	usr_src\t/usr/src/linux-headers-*rhizo*	the installed Rhizo kernel headers' own tree under /usr/src, there until installer.sh step 12h or cycle step 9 purges the headers packages by name
+
+*	grub\tcmdline	update-grub's regeneration rewrites the cloud image's root=LABEL= as root=UUID= (and a kernel update moves BOOT_IMAGE); Rhizo's own tokens stay caught by the etc/listing rows for /etc/default/grub* and the lsm row
+remove	grub\tcfg.sha256	the same regeneration, byte for byte, listing the Rhizo kernel a plain remove keeps: grub.cfg is update-grub's output from the host's own /etc/default/grub, never a file Rhizo writes
+purge?@cycle	grub\tcfg.sha256	the cycle's own kernel update moves BOOT_IMAGE, so update-grub's output after purge differs from the BEFORE snapshot's
+
+*?	state_dirs\t/var/lib/apt*	apt's own state, rewritten by every apt/dpkg operation the system test itself runs before and after Rhizo
+*?	state_dirs\t/var/cache/apt*	apt's own archive cache, same as /var/lib/apt above
+*?	state_dirs\t/var/lib/systemd*	systemd rewrites its random seed every boot; covers other systemd-owned state under here too
+*?	state_dirs\t/var/log*	the journal rotates and the rest of /var/log grows on every boot and every unit that logs; /var/log/rhizo itself is a SEPARATE row (section rhizo_dirs) this pattern does not reach, and that row is never allowlisted
+*?	home_root\t/root/.bash_history	an interactive shell's own history, not a Rhizo mutation

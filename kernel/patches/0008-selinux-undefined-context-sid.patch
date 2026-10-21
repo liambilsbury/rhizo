@@ -1,0 +1,17 @@
+diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
+index b30c293e9..dfe535f77 100644
+--- a/security/selinux/global_sidtab.c
++++ b/security/selinux/global_sidtab.c
+@@ -355,9 +355,10 @@ int security_context_to_sid_default(struct selinux_state *state,
+ 		if (rc)
+ 			return rc;
+ 
++		/* keep the string of a context this policy does not define */
+ 		rcu_read_lock();
+-		rc = selinux_ss_sid_to_context(state, ss_sid, &ctx,
+-					       &scontext_len);
++		rc = selinux_ss_sid_to_context_force(state, ss_sid, &ctx,
++						     &scontext_len);
+ 		if (rc)
+ 			goto err_unlock;
+ 		scontext = kmemdup(ctx, scontext_len, GFP_ATOMIC);

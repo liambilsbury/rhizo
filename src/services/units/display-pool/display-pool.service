@@ -1,0 +1,13 @@
+[Unit]
+Description=Rhizo display pool refill
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RuntimeDirectory=rhizo-display-pool
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/dash /root/rhizo-fill-display-pool.sh
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes

@@ -1,0 +1,84 @@
+#!/bin/sh
+# run the rhizo package pre-install steps
+set -e
+
+PROG=rhizo
+
+SHIPPED_RELEASE=a16
+
+# move the release keys from the conffile to the state file
+rhizo_migrate_env_keys() {
+  _keys='RHIZO_GSI|RHIZO_RELEASE|RHIZO_DATA_IMG|RHIZO_DATA_RELEASE_CHANGE|RHIZO_WIPE_DATA|RHIZO_RESIDENT_G|RHIZO_RESIDENT_DISPATCH'
+  [ -f "$1" ] || return 0
+  grep -Eq "^($_keys)=" "$1" || return 0
+  grep -E "^($_keys)=" "$1" > "$2.migrated" || return 1
+  { cat "$2.migrated"; [ ! -f "$2" ] || cat "$2"; } > "$2.migrate" || return 1
+  mv "$2.migrate" "$2" || return 1
+  _rc=0
+  grep -Ev "^($_keys)=" "$1" > "$1.rhizo-migrate" || _rc=$?
+  [ "$_rc" -le 1 ] || return 1
+  mv "$1.rhizo-migrate" "$1"
+}
+
+case "$1" in
+  install|upgrade)
+    if [ -e /etc/systemd/system/rhizo-final-cleanup.service ]; then
+      systemctl disable --now rhizo-final-cleanup.service >/dev/null 2>&1 || true
+      rm -f /etc/systemd/system/rhizo-final-cleanup.service
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      echo "[$PROG] canceled a pending post-removal cleanup from an earlier 'apt remove' -- this install keeps its files"
+    fi
+
+    if [ -n "${2:-}" ]; then
+      mkdir -p /var/lib/rhizo
+      printf '%s\n' "$2" > /var/lib/rhizo/.upgrade-from
+    fi
+
+    RECORD=/var/lib/rhizo/.created-by-install
+    if [ -n "${2:-}" ] && dpkg --compare-versions "$2" lt 0.1.1 \
+       && ! grep -qx user:rhizo-appwatch "$RECORD" 2>/dev/null; then
+      entry=$(getent passwd rhizo-appwatch || true)
+      if [ "$(echo "$entry" | cut -d: -f3,6,7)" = "1000:/nonexistent:/usr/sbin/nologin" ]; then
+        mkdir -p /var/lib/rhizo
+        echo user:rhizo-appwatch >> "$RECORD"
+        if [ "$(getent group rhizo-appwatch | cut -d: -f3)" = "$(echo "$entry" | cut -d: -f4)" ] \
+           && ! grep -qx group:rhizo-appwatch "$RECORD"; then
+          echo group:rhizo-appwatch >> "$RECORD"
+        fi
+        echo "[$PROG] recorded uid 1000's rhizo-appwatch as this install's own: Rhizo $2 created it before installs recorded that"
+      fi
+    fi
+    if [ -n "${2:-}" ] && ! grep -qx user:rhizo-netbridged "$RECORD" 2>/dev/null \
+       && dpkg --compare-versions "$2" lt 0.1.2; then
+      nb=$(getent passwd rhizo-netbridged || true)
+      nb_uid=$(echo "$nb" | cut -d: -f3)
+      if [ "$(echo "$nb" | cut -d: -f6,7)" = "/nonexistent:/usr/sbin/nologin" ] \
+         && [ -n "$nb_uid" ] && [ "$nb_uid" -lt 1000 ]; then
+        mkdir -p /var/lib/rhizo
+        echo user:rhizo-netbridged >> "$RECORD"
+        if [ "$(getent group rhizo-netbridged | cut -d: -f3)" = "$(echo "$nb" | cut -d: -f4)" ] \
+           && ! grep -qx group:rhizo-netbridged "$RECORD"; then
+          echo group:rhizo-netbridged >> "$RECORD"
+        fi
+        echo "[$PROG] recorded rhizo-netbridged as this install's own: Rhizo $2 created it before installs recorded that"
+      fi
+    fi
+
+    META=/var/lib/rhizo/data.img.meta
+    if [ -s "$META" ] && [ "${RHIZO_WIPE_DATA:-0}" != 1 ]; then
+      meta_release=$(sed -n 's/^release=//p' "$META" | tail -1)
+      if [ -n "$meta_release" ] && [ "$meta_release" != "$SHIPPED_RELEASE" ]; then
+        echo "[$PROG] REFUSED: /var/lib/rhizo/data.img was instantiated for release=$meta_release, this package prepares release=$SHIPPED_RELEASE by default." >&2
+        echo "[$PROG] set RHIZO_WIPE_DATA=1 before this install/upgrade to replace it (irreversible -- every app and its data goes), or run 'rhizo gsi update --release $meta_release' first to stay on the release your data already has." >&2
+        exit 1
+      fi
+    fi
+
+    if [ -n "${2:-}" ]; then
+      rhizo_migrate_env_keys /etc/rhizo/androidd.env /var/lib/rhizo/androidd-runtime.env
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

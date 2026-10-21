@@ -1,0 +1,20 @@
+[Unit]
+Description=Rhizo server idle stop
+After=androidd.service
+PartOf=androidd.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/server-idle/server-idle.py
+Environment=PYTHONPATH=/usr/lib/rhizo
+Restart=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+Environment=PYTHONNOUSERSITE=1
+ProtectHome=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=androidd.service

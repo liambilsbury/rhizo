@@ -1,0 +1,34 @@
+[Unit]
+Description=Rhizo Android sandbox (androidd), instance %i
+# rhizo-template-allowlist: ConditionPathExists -- a launcher script on disk, execed identically by all of the instances
+ConditionPathExists=/root/launcher3.py
+After=systemd-modules-load.service
+After=rhizo-policy.service
+Wants=rhizo-policy.service
+Wants=rhizo-update-begin.service
+After=rhizo-update-begin.service
+After=rhizo-selinux-mode.service rhizo-host-labels.service
+
+[Service]
+Type=exec
+NotifyAccess=all
+Delegate=yes
+# rhizo-template-allowlist: ExecStart -- a launcher script and interpreter, execed identically by all of the instances
+ExecStart=/usr/bin/python3 /root/launcher3.py selinux_setup
+# rhizo-template-allowlist: EnvironmentFile -- /root/androidd.env and /var/lib/rhizo/androidd-runtime.env are the host-wide config all of the instances read
+EnvironmentFile=-/root/androidd.env
+EnvironmentFile=-/var/lib/rhizo/androidd-runtime.env
+EnvironmentFile=-/etc/rhizo/instances/%i.env
+Environment=RHIZO_SANDBOX_ID=%i
+RuntimeDirectory=rhizo-wayland-%i
+RuntimeDirectoryPreserve=yes
+StandardInput=null
+StandardOutput=append:/root/boot-%i.log
+StandardError=append:/root/boot-%i.log
+TimeoutStartSec=300
+TimeoutStopSec=60
+# rhizo-template-allowlist: ExecStop -- a launcher script and interpreter, execed identically by all of the instances
+ExecStop=/usr/bin/python3 /root/launcher3.py androidd-stop
+# rhizo-template-allowlist: ExecStopPost -- a launcher script and interpreter, execed identically by all of the instances
+ExecStopPost=/usr/bin/python3 /root/launcher3.py release-staging
+KillMode=mixed

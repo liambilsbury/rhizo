@@ -1,0 +1,10 @@
+[Unit]
+Description=Rhizo removed-app watcher
+StartLimitIntervalSec=0
+
+[Path]
+PathModified=/run/rhizo-app-events/trigger
+Unit=rhizo-remove-entries.service
+
+[Install]
+WantedBy=multi-user.target

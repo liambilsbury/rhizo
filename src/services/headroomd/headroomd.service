@@ -1,0 +1,21 @@
+[Unit]
+Description=Rhizo CPU headroom daemon
+Before=androidd.service
+PartOf=androidd.service
+Wants=rhizo-selinux-mode.service
+After=rhizo-selinux-mode.service
+
+[Service]
+Type=notify
+RuntimeDirectory=rhizo-headroom rhizo-headroomd
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+Restart=on-failure
+RestartSec=1
+RestartPreventExitStatus=78
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh power.cpu_headroom
+ExecStart=/usr/lib/rhizo/rhizo-headroomd --socket /run/rhizo-headroom/headroomd --status-path /run/rhizo-headroomd/status.json
+StandardOutput=append:/var/log/rhizo/rhizo-headroomd.log
+StandardError=append:/var/log/rhizo/rhizo-headroomd.log
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX

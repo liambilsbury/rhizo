@@ -1,0 +1,34 @@
+[Unit]
+Description=Rhizo desktop session lookup
+ConditionUser=1000
+After=rhizo-desktop-session.path
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '\
+  set -eu; \
+  RUNTIME_DIR="/run/user/$(id -u)"; \
+  OUT_DIR=/run/rhizo-desktop; \
+  [ -d "$OUT_DIR" ] && [ -w "$OUT_DIR" ] || { echo "rhizo-desktop-session: $OUT_DIR is missing or not writable by uid $(id -u) -- rhizo-desktop-session.tmpfiles makes it at boot (systemd-tmpfiles --create rhizo-desktop-session.conf)" >&2; exit 1; }; \
+  SOCK=""; \
+  for f in "$RUNTIME_DIR"/wayland-[0-9]*; do \
+    case "$f" in *"["*) continue ;; esac; \
+    [ -S "$f" ] || continue; \
+    python3 -c "import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect(sys.argv[1])" "$f" 2>/dev/null || continue; \
+    SOCK="$f"; break; \
+  done; \
+  [ -n "$SOCK" ] || { echo "rhizo-desktop-session: no LIVE wayland-[0-9]* socket in $RUNTIME_DIR (a socket-type file with nothing listening does not count -- a dead compositor left it behind)" >&2; exit 1; }; \
+  HOME_DIR=$(getent passwd "$(id -u)" | cut -d: -f6); \
+  { \
+    printf "XDG_RUNTIME_DIR=%%s\n" "$RUNTIME_DIR"; \
+    printf "WAYLAND_DISPLAY=%%s\n" "$(basename "$SOCK")"; \
+    printf "RHIZO_WAYLAND_HOST_SOCKET=%%s\n" "$SOCK"; \
+    printf "DBUS_SESSION_BUS_ADDRESS=unix:path=%%s/bus\n" "$RUNTIME_DIR"; \
+    printf "HOME=%%s\n" "$${HOME_DIR:-/home/rhizo}"; \
+  } > "$OUT_DIR/session.env.tmp"; \
+  chmod 0644 "$OUT_DIR/session.env.tmp"; \
+  mv "$OUT_DIR/session.env.tmp" "$OUT_DIR/session.env"; \
+  echo "rhizo-desktop-session: resolved $SOCK"'
+ExecStop=/bin/rm -f /run/rhizo-desktop/session.env
+NoNewPrivileges=yes

@@ -1,0 +1,187 @@
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index bf0a2e634..1842f134b 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -784,15 +784,70 @@ static bool sb_labels_by_transition(const struct cred_security_struct *crsec,
+ 	       sb_behavior_seen(crsec, sb) == SECURITY_FS_USE_TRANS;
+ }
+ 
++/* return whether @state is a namespace below @ancestor */
++static bool state_is_below(const struct selinux_state *state,
++			   const struct selinux_state *ancestor)
++{
++	for (state = state ? state->parent : NULL; state; state = state->parent)
++		if (state == ancestor)
++			return true;
++	return false;
++}
++
++/* return the namespace below @state that set up @sb, or NULL */
++static struct selinux_state *
++sb_namespace_below(const struct super_block *sb,
++		   const struct selinux_state *state)
++{
++	struct selinux_state *ns = READ_ONCE(selinux_superblock(sb)->ns_state);
++
++	return ns && state_is_below(ns, state) ? ns : NULL;
++}
++
++/* return @sid with each namespace's transition from below @crsec's down to @dir's sb owner */
++static u32 sid_with_sb_namespace(const struct cred_security_struct *crsec,
++				 struct inode *dir, u32 dsid, u32 sid,
++				 u16 tclass, const struct qstr *name)
++{
++	struct selinux_state *ns = sb_namespace_below(dir->i_sb, crsec->state);
++	u32 tsid, view, out;
++
++	for (; ns && ns != crsec->state; ns = ns->parent) {
++		if (!selinux_initialized(ns))
++			continue;
++		tsid = dsid;
++		/* a parent this namespace has not labelled: its own label of the superblock */
++		if (security_sid_for_state(tsid, ns) <= SECINITSID_NUM)
++			tsid = sb_sid_for_state(ns, dir->i_sb);
++		if (security_transition_sid(ns, crsec->sid, tsid, tclass, name,
++					    &view) ||
++		    security_sid_add_record(sid, ns->id, view, &out))
++			continue;
++		sid = out;
++	}
++	return sid;
++}
++
+ /* return @newsid with each level's unchanged view of an in-memory inode's @oldsid */
+ static u32 relabel_sid(const struct inode *inode, u32 oldsid, u32 newsid)
+ {
+ 	const struct cred_security_struct *crsec = selinux_cred(current_cred());
++	const struct selinux_state *ns;
++	u32 out;
+ 
+ 	newsid = security_sid_primary(newsid);
+ 	if (!sb_labels_by_transition(crsec, inode->i_sb))
+ 		return newsid;
+-	return sid_with_levels(crsec, newsid, level_previous_sid, &oldsid);
++	newsid = sid_with_levels(crsec, newsid, level_previous_sid, &oldsid);
++	/* each namespace from here down to the superblock's owner keeps its view too */
++	for (ns = sb_namespace_below(inode->i_sb, crsec->state);
++	     ns && ns != crsec->state; ns = ns->parent)
++		if (selinux_initialized(ns) &&
++		    !security_sid_add_record(newsid, ns->id,
++					     security_sid_for_state(oldsid, ns),
++					     &out))
++			newsid = out;
++	return newsid;
+ }
+ 
+ /* return @sid with each ancestor of @state's transition from @task_sid to its own label of @sb */
+@@ -977,6 +1032,15 @@ static int bad_option(struct superblock_security_struct *sbsec, char flag,
+ 	return 0;
+ }
+ 
++/* mark @sbsec as set up below init, owned by the current namespace unless the host deferred it */
++static void sb_set_ns_state(struct superblock_security_struct *sbsec)
++{
++	sbsec->flags |= SE_SBNSLABEL;
++	if (!(sbsec->flags & SE_SBINITNSDEFER) && !sbsec->ns_state)
++		WRITE_ONCE(sbsec->ns_state,
++			   get_selinux_state(current_selinux_state));
++}
++
+ /*
+  * Allow filesystems with binary mount data to explicitly set mount point
+  * labeling information.
+@@ -1087,7 +1151,7 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
+ 
+ 	sbsec->creator_sid = creator_sid;
+ 	if (current_selinux_state != init_selinux_state)
+-		sbsec->flags |= SE_SBNSLABEL;
++		sb_set_ns_state(sbsec);
+ 
+ 	if (strcmp(sb->s_type->name, "proc") == 0)
+ 		sbsec->flags |= SE_SBPROC | SE_SBGENFS;
+@@ -1383,6 +1447,10 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
+ 	newsbsec->flags = oldsbsec->flags;
+ 	if (current_selinux_state != init_selinux_state)
+ 		newsbsec->flags |= SE_SBNSLABEL;
++	/* a clone shares its source's owner */
++	if (oldsbsec->ns_state && !newsbsec->ns_state)
++		WRITE_ONCE(newsbsec->ns_state,
++			   get_selinux_state(oldsbsec->ns_state));
+ 
+ 	newsbsec->sid = oldsbsec->sid;
+ 	newsbsec->def_sid = oldsbsec->def_sid;
+@@ -2446,8 +2514,8 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+ {
+ 	const struct superblock_security_struct *sbsec =
+ 						selinux_superblock(dir->i_sb);
+-
+ 	const struct inode_security_struct *dsec = inode_security(dir);
++	bool trans = sb_labels_by_transition(crsec, dir->i_sb);
+ 	struct level_trans_arg arg = {
+ 		.tsid = dsec->sid, .tclass = tclass, .name = name,
+ 		.sb = dir->i_sb,
+@@ -2469,9 +2537,10 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+ 		   crsec->create_sid) {
+ 		*_new_isid = security_sid_primary(crsec->create_sid);
+ 		/* records the kernel built from the original caller's chain stay */
+-		if (*_new_isid != crsec->create_sid &&
+-		    sb_labels_by_transition(crsec, dir->i_sb)) {
+-			*_new_isid = crsec->create_sid;
++		if (*_new_isid != crsec->create_sid && trans) {
++			*_new_isid = sid_with_sb_namespace(crsec, dir, dsec->sid,
++							   crsec->create_sid,
++							   tclass, name);
+ 			return 0;
+ 		}
+ 	} else {
+@@ -2482,10 +2551,13 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+ 			return rc;
+ 	}
+ 
+-	/* each level labels an in-memory inode by its own transition */
+-	if (sb_labels_by_transition(crsec, dir->i_sb))
++	/* each level labels an in-memory inode by its own transition, and so do namespaces below */
++	if (trans) {
+ 		*_new_isid = sid_with_levels(crsec, *_new_isid,
+ 					     level_transition_sid, &arg);
++		*_new_isid = sid_with_sb_namespace(crsec, dir, dsec->sid,
++						   *_new_isid, tclass, name);
++	}
+ 	return 0;
+ }
+ 
+@@ -3302,6 +3374,14 @@ static void selinux_bprm_committed_creds(const struct linux_binprm *bprm)
+ 
+ /* superblock security operations */
+ 
++static void selinux_sb_free_security(struct super_block *sb)
++{
++	struct superblock_security_struct *sbsec = selinux_superblock(sb);
++
++	if (sbsec->ns_state)
++		put_selinux_state(sbsec->ns_state);
++}
++
+ static int selinux_sb_alloc_security(struct super_block *sb)
+ {
+ 	struct superblock_security_struct *sbsec = selinux_superblock(sb);
+@@ -8721,6 +8801,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
+ 	LSM_HOOK_INIT(bprm_committing_creds, selinux_bprm_committing_creds),
+ 	LSM_HOOK_INIT(bprm_committed_creds, selinux_bprm_committed_creds),
+ 
++	LSM_HOOK_INIT(sb_free_security, selinux_sb_free_security),
+ 	LSM_HOOK_INIT(sb_free_mnt_opts, selinux_free_mnt_opts),
+ 	LSM_HOOK_INIT(sb_mnt_opts_compat, selinux_sb_mnt_opts_compat),
+ 	LSM_HOOK_INIT(sb_remount, selinux_sb_remount),
+diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
+index 06653b8e1..3e89f0ffa 100644
+--- a/security/selinux/include/objsec.h
++++ b/security/selinux/include/objsec.h
+@@ -110,6 +110,7 @@ struct superblock_security_struct {
+ 	u32 creator_sid; /* SID of privileged process */
+ 	unsigned short behavior; /* labeling behavior */
+ 	unsigned short flags; /* which mount options were specified */
++	struct selinux_state *ns_state; /* namespace below init that set it up */
+ 	struct mutex lock;
+ 	struct list_head isec_head;
+ 	spinlock_t isec_lock;

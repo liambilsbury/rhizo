@@ -1,0 +1,13 @@
+link radv against libdrm_amdgpu
+
+--- a/src/amd/vulkan/meson.build
++++ b/src/amd/vulkan/meson.build
+@@ -252,7 +252,7 @@
+   ],
+   dependencies : [
+     dep_llvm, dep_thread, dep_elf, dep_dl, dep_m,
+-    dep_valgrind, radv_deps, idep_aco,
++    dep_valgrind, radv_deps, idep_aco, dep_libdrm_amdgpu,
+     idep_mesautil, idep_nir, idep_vulkan_util, idep_vulkan_wsi,
+     idep_vulkan_runtime, idep_amdgfxregs_h, idep_xmlconfig,
+   ],

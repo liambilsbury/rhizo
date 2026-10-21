@@ -1,0 +1,40 @@
+src/services/rtd/rtd.py	sched_setattr/sched_getattr have no glibc wrapper and a different raw syscall number per architecture; rhizo-rtd ships for x86_64 only
+tools/build/hal/hal.sh	NDK host triples and the two ABI directory names the launcher reads
+tools/build/test-apps/fpsapp.sh	the NDK triple the fixture APK is compiled with
+tools/build/hal/keymint.sh	the AOSP lunch target the port is built from
+tools/build/image/gsi.sh	the AOSP lunch target and product name
+tools/build/toolchain/llvm-android.sh	an LLVM cross-compilation target triple
+tools/build/graphics/mesa.sh	the Mesa cross file and driver directory names
+tools/build/hal/bpf-preload.sh	an NDK triple
+tools/build/hal/netbpfload-preload.sh	an NDK triple
+tools/fetch/images/gsi.sh	the GSI image is named for its architecture
+tools/fetch/test-apk.sh	the APK's own per-ABI name
+tools/build/hal/relink-keymint-static.py	the linker target
+test/checks/android/hal/keymint-boot-calls.sh	runs the x86_64 KeyMint build under the x86_64 GSI's own bionic, with the NDK compiler for that target
+test/vm/image/release-map.sh	the per-release GSI names, now read through GSI_ARCH
+src/androidd/sandbox/core.py	the one place the launcher names the host architecture it can host a guest on
+test/checks/tree/repo/arch-neutral.py	the checker names the literal it searches for, in its own pattern and its fixtures
+src/androidd/sandbox/hals.py	the one comparison that says which host architecture can carry a guest bridge
+src/services/hostfs/hostfsd.c	a seccomp filter must compare seccomp_data.arch or a foreign-arch syscall bypasses it, so AUDIT_ARCH_* is the one architecture name this daemon needs
+src/android/hal/bpf-preload/src/bpf_preload.c	a raw six-argument syscall shim needs the target's own calling convention and syscall number, same shape as hostfsd.c's seccomp filter above
+tools/build/graphics/gpu-driver.sh	the two driver ABIs the GSI hosts and the NDK sysroot path for its libc++
+tools/build/toolchain/wayland-android.sh	the NDK triple the composer's static libraries are cross-built for
+test/checks/build/clean-clone-build.sh	the two Mesa cross files it asserts name no machine, and the SDK build-tools path
+tools/build/image/extract-gsi-libs.sh	the ELF class each extracted library must have
+tools/fetch/gsi-pins.sh	the GSI image is named for its architecture
+test/checks/vm/boot/boot-refusal-labeled.sh	qemu-system-x86_64 is the binary run-vm.sh always execs, stubbed by name in this checker's own fixtures
+test/checks/build/abi-arm64.py	names the x86_64 baseline it deliberately does NOT diff against, since arm64 needs no comparable baseline
+test/checks/build/host-elf-links.py	ALLOWLIST names ld-linux-x86-64.so.2 and ld-linux-aarch64.so.1, the two real per-architecture loader SONAMEs a shipped host ELF actually links against -- both listed, so the check itself is arch-neutral
+src/services/inputd/inputd.c	a seccomp filter must compare seccomp_data.arch, so it names the AUDIT_ARCH_* of the architecture it is compiled for
+test/checks/services/inputd/inputd.py	it evaluates the launcher's seccomp program under every AUDIT_ARCH_* value that program names
+tools/build/vm/cachyos-base.sh	the pinned x86_64 CachyOS ISO's installer takes x86-64-v3 repositories, so the build requires a host cpu with x86-64-v3 and gives its installer guest a Zen 2 cpu without avx512, which the installer takes for a v3 machine on a Zen 4 or 5 host
+test/vm/guest-os/cachyos-guest-lib.sh	qemu-system-x86_64 runs the pinned x86_64 CachyOS ISO, its installer and the images it makes; the guest target is x86_64 like run-vm.sh's, independent of host arch
+test/vm/rhizo-kernel-vm.sh	qemu-system-x86_64 boots its two guest disks, the rig's x86_64 CachyOS mirror and the noble amd64 cloud image, under KVM with -cpu host; the guest target is x86_64 like run-vm.sh's
+src/install/tests/test-cli.sh	fixtures: a stubbed uname -m and the platform lines that name its answer
+tools/build/test-apps/headroomprobe.sh	the headroom probe is a system test fixture for the x86_64 vm guests: its JNI library targets the NDK x86_64 triple and ABI directory, and the build names the x86_64 NDK host prebuilts
+test/checks/vm/guest-os/build-cachyos-base-args.sh	it names the x86-64-v3 level and the x86-64 loader, gated on the host, to test the build for the x86_64-only CachyOS ISO
+test/checks/vm/guest-os/cachyos-guest-lib.sh	its checks.tsv needs name qemu-system-x86_64, the emulator the lib under test runs for the x86_64-only CachyOS guest
+test/checks/launcher/selinuxns/hardening/handle-filter.py	the checker feeds the open_by_handle_at seccomp filter each architecture's audit value and syscall number, which must name x86_64 to prove a foreign-arch call is not allowed through
+test/checks/launcher/selinuxns/mode/command-path.py	the fixture compares the GSI's own device_name, AOSP on x86_64
+tools/build/toolchain/plat-pub-versioned.sh	the m4 target_arch soong passed when it built the frozen 202404 policy the tracked file came from, so the output stays byte-identical
+tools/build/image/gsi-source.sh	the GSI product out directory the source list reads is named for its architecture

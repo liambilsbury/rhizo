@@ -1,0 +1,13 @@
+[Unit]
+Description=Rhizo background Android start
+After=rhizo-policy.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/test -e /run/rhizo-desktop/session.env
+ExecCondition=/bin/sh -c '! /usr/bin/systemctl is-active --quiet androidd.service'
+ExecStart=/usr/bin/systemctl start --no-block androidd.service
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

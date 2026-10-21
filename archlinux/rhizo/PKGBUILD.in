@@ -1,0 +1,28 @@
+pkgname=rhizo
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Android on Linux'
+arch=('x86_64')
+license=('LicenseRef-BUSL-1.1' 'Apache-2.0' 'Apache-2.0 WITH LLVM-exception' 'BSD-2-Clause' 'BSD-3-Clause'
+         'BSL-1.0' 'libpng-2.0' 'MIT' 'Zlib' 'LicenseRef-Jimenez-MLAA' 'LicenseRef-PublicDomain')
+depends=('linux-rhizo>=7.1.0_rc1_rhizo-42' 'linux-rhizo-headers>=7.1.0_rc1_rhizo-42' 'python>=3.12'
+         'systemd' 'kmod' 'fuse3'
+         'iproute2' 'iptables' 'e2fsprogs' 'zstd' 'util-linux' 'shadow' 'curl' 'attr' 'acl' 'dash' 'procps-ng'
+         'glibc' 'gcc-libs' 'libva' 'libxkbcommon' 'libpipewire' 'wayland')
+optdepends=('xdg-utils: open links from Android on the host'
+            'desktop-file-utils: refresh the MIME cache after an app install'
+            'shared-mime-info' 'hicolor-icon-theme'
+            'intel-media-driver: VA-API for stream.enabled on Intel'
+            'mesa: VA-API for stream.enabled on AMD'
+            'pipewire: audio out' 'wireplumber: audio out'
+            'btrfs-progs: keep /var/lib/rhizo out of root snapshots')
+backup=('etc/rhizo/androidd.env' 'etc/xdg/menus/applications-merged/rhizo.menu')
+install=rhizo.install
+options=('!strip' '!debug' '!zipman' '!purge' 'libtool' 'staticlibs')
+source=("rhizo-payload-$pkgver.tar.zst")
+sha256sums=('@PAYLOAD_SHA256@')
+
+# copy the staged payload into the package directory
+package() {
+  cp -a "$srcdir/payload/." "$pkgdir/"
+}

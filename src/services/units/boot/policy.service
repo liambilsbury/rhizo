@@ -1,0 +1,26 @@
+[Unit]
+Description=Rhizo Android policy load
+ConditionPathExists=/usr/lib/rhizo/launcher3.py
+ConditionPathExists=/sys/fs/selinux/enforce
+Wants=rhizo-selinuxfs.service
+Wants=proc-sys-fs-binfmt_misc.mount
+After=rhizo-prepare.service rhizo-update-begin.service systemd-modules-load.service local-fs.target rhizo-selinuxfs.service
+After=proc-sys-fs-binfmt_misc.mount
+Before=display-manager.service getty.target systemd-user-sessions.service ssh.service sshd.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/lib/rhizo/rhizo-selinux-mode --is host
+RemainAfterExit=yes
+EnvironmentFile=-/etc/rhizo/androidd.env
+EnvironmentFile=-/var/lib/rhizo/androidd-runtime.env
+EnvironmentFile=-/var/lib/rhizo/host-mode-kept.env
+Environment=RHIZO_FLIP_EARLY=1
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/launcher3.py selinux_setup --policy-only
+ExecStop=/usr/bin/python3 /usr/lib/rhizo/launcher3.py policy-stop
+StandardOutput=append:/var/log/rhizo/policy.log
+StandardError=append:/var/log/rhizo/policy.log
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

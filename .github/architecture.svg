@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 884 640" width="884" height="640" role="img" aria-label="Rhizo architecture">
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px; fill: #1e293b; dominant-baseline: central; text-anchor: middle; }
+  .title { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; fill: #64748b; text-anchor: start; }
+  .hostgroup { fill: #f5f9ff; stroke: #93c5fd; }
+  .hosttitle { fill: #2563eb; }
+  .sandbox { fill: #f0fdf4; stroke: #86efac; }
+  .halgroup { fill: #faf5ff; stroke: #d8b4fe; }
+  .host { fill: #eff6ff; stroke: #60a5fa; }
+  .android { fill: #dcfce7; stroke: #22c55e; }
+  .hal { fill: #f3e8ff; stroke: #a855f7; }
+  .entry { fill: #2563eb; stroke: #1d4ed8; }
+  .aentry { fill: #16a34a; stroke: #15803d; }
+  .entry + text, .aentry + text { fill: #ffffff; font-weight: 600; }
+  .edge { stroke: #94a3b8; stroke-width: 1.4; fill: none; }
+  .arrow { fill: #94a3b8; }
+  @media (prefers-color-scheme: dark) {
+    text { fill: #e2e8f0; }
+    .title { fill: #94a3b8; }
+    .hostgroup { fill: #0b1730; stroke: #1e40af; }
+    .hosttitle { fill: #60a5fa; }
+    .sandbox { fill: #052e16; stroke: #166534; }
+    .halgroup { fill: #2e1065; stroke: #6b21a8; }
+    .host { fill: #172554; stroke: #3b82f6; }
+    .android { fill: #14532d; stroke: #22c55e; }
+    .hal { fill: #3b0764; stroke: #a855f7; }
+    .edge { stroke: #64748b; }
+    .arrow { fill: #64748b; }
+  }
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0 0L10 5L0 10z"/></marker></defs>
+<rect class="hostgroup" x="10" y="10" width="864" height="620" rx="12" stroke-width="1.2"/>
+<text class="title hosttitle" x="26" y="32">Host</text>
+<rect class="entry" x="44" y="277.0" width="136" height="30" rx="15" stroke-width="1.2"/>
+<text x="112.0" y="292.0">rhizo CLI</text>
+<rect class="host" x="44" y="331.0" width="136" height="30" rx="7" stroke-width="1.2"/>
+<text x="112.0" y="346.0">rhizo-brokerd</text>
+<rect class="host" x="44" y="385.0" width="136" height="30" rx="7" stroke-width="1.2"/>
+<text x="112.0" y="400.0">launcher</text>
+<path class="edge" d="M112.0 307.0V331.0" marker-end="url(#a)"/>
+<path class="edge" d="M112.0 361.0V385.0" marker-end="url(#a)"/>
+<rect class="sandbox" x="222" y="52" width="432" height="550" rx="10" stroke-width="1.2"/>
+<text class="title" x="236" y="70">Android sandbox</text>
+<rect class="aentry" x="242" y="385.0" width="116" height="30" rx="15" stroke-width="1.2"/>
+<text x="300.0" y="400.0">Android init</text>
+<path class="edge" d="M180 400.0H242" marker-end="url(#a)"/>
+<rect class="android" x="414" y="92" width="212" height="114" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="149.0">Android apps</text>
+<rect class="android" x="414" y="218" width="212" height="30" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="233.0">desktop bridge app</text>
+<rect class="halgroup" x="400" y="268" width="240" height="324" rx="9" stroke-width="1.2"/>
+<text class="title" x="412" y="281">HALs</text>
+<rect class="hal" x="414" y="294" width="212" height="30" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="309.0">graphics composer</text>
+<rect class="hal" x="414" y="336" width="212" height="30" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="351.0">graphics allocator</text>
+<rect class="hal" x="414" y="378" width="212" height="30" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="393.0">audio</text>
+<rect class="hal" x="414" y="420" width="212" height="72" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="456.0">power</text>
+<rect class="hal" x="414" y="504" width="212" height="30" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="519.0">bluetooth</text>
+<rect class="hal" x="414" y="546" width="212" height="44" rx="7" stroke-width="1.2"/>
+<text x="520.0" y="560.0">keymint · gatekeeper · health</text>
+<text x="520.0" y="576.0">thermal · gnss · bootcontrol</text>
+<path class="edge" d="M358 400.0H384"/>
+<path class="edge" d="M384 149.0V400.0"/>
+<path class="edge" d="M384 149.0H414" marker-end="url(#a)"/>
+<path class="edge" d="M384 233.0H414" marker-end="url(#a)"/>
+<path class="edge" d="M384 308H400" marker-end="url(#a)"/>
+<rect class="host" x="700" y="92" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="107.0">rhizo-netbridged</text>
+<path class="edge" d="M626 107.0H700" marker-start="url(#a)" marker-end="url(#a)"/>
+<rect class="host" x="700" y="134" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="149.0">rhizo-hostfsd</text>
+<path class="edge" d="M626 149.0H700" marker-start="url(#a)" marker-end="url(#a)"/>
+<rect class="host" x="700" y="176" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="191.0">rhizo-inputd</text>
+<path class="edge" d="M626 191.0H700" marker-start="url(#a)" marker-end="url(#a)"/>
+<rect class="host" x="700" y="218" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="233.0">rhizo-deskd</text>
+<path class="edge" d="M626 233.0H700" marker-start="url(#a)" marker-end="url(#a)"/>
+<rect class="host" x="700" y="294" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="309.0">Wayland compositor</text>
+<path class="edge" d="M626 309.0H700" marker-end="url(#a)"/>
+<rect class="host" x="700" y="336" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="351.0">GPU</text>
+<path class="edge" d="M626 351.0H700" marker-end="url(#a)"/>
+<rect class="host" x="700" y="378" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="393.0">rhizo-audiod</text>
+<path class="edge" d="M626 393.0H700" marker-end="url(#a)"/>
+<rect class="host" x="700" y="420" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="435.0">rhizo-rtd</text>
+<path class="edge" d="M626 435.0H700" marker-end="url(#a)"/>
+<rect class="host" x="700" y="462" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="477.0">rhizo-headroomd</text>
+<path class="edge" d="M626 477.0H700" marker-end="url(#a)"/>
+<rect class="host" x="700" y="504" width="140" height="30" rx="7" stroke-width="1.2"/>
+<text x="770.0" y="519.0">rhizo-btd</text>
+<path class="edge" d="M626 519.0H700" marker-start="url(#a)" marker-end="url(#a)"/>
+</svg>

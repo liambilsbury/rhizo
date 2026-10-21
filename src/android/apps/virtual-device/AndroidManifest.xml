@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.rhizo.virtualdevice">
+
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_SELF_MANAGED"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-feature android:name="android.software.companion_device_setup" android:required="false"/>
+
+    <application android:label="Rhizo Virtual Device" android:allowBackup="false">
+
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
+        <service android:name=".VirtualDeviceService" android:exported="false"/>
+
+    </application>
+</manifest>

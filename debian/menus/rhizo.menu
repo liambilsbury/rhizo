@@ -1,0 +1,11 @@
+<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN" "http://www.freedesktop.org/standards/menu-spec/menu-1.0.dtd">
+<Menu>
+  <Name>Applications</Name>
+  <Menu>
+    <Name>Rhizo</Name>
+    <Directory>rhizo.directory</Directory>
+    <Include>
+      <Category>X-Rhizo</Category>
+    </Include>
+  </Menu>
+</Menu>

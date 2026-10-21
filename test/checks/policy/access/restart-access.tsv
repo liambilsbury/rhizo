@@ -1,0 +1,204 @@
+domain	path-or-object	label	class	perms	code-site
+rhizo_host	/root/.rhizo_g_pid	unlabeled	file	open read getattr	src/androidd/boot.py:await_resident_g
+rhizo_host	/proc/<supervisor>	kernel	dir	getattr search	src/androidd/boot.py:pid_is_live
+rhizo_host	/proc/<supervisor>/stat	kernel	file	open read	src/androidd/boot.py:pid_is_live
+rhizo_host	/proc/<supervisor>/status	kernel	file	open read	src/androidd/boot.py:resident_g_pid
+rhizo_host	/proc/<supervisor>/comm	kernel	file	open read	src/androidd/boot.py:recorded_g_alive
+rhizo_host	/root/.rhizo_init_pid[-N]	unlabeled	file	create open write getattr	src/androidd/boot.py:ensure_init_pid_file
+rhizo_host	/root	unlabeled	dir	search write add_name	src/androidd/boot.py:ensure_init_pid_file
+rhizo_host	/root/.rhizo_handoff.d	unlabeled	dir	open read search	src/androidd/boot.py:open_handoff_entry
+rhizo_host	/root/.rhizo_handoff.d/.<id>.<pid>.tmp	unlabeled	file	create open write getattr	src/androidd/boot.py:open_handoff_entry
+rhizo_host	/root/.rhizo_handoff.d	unlabeled	dir	add_name write	src/androidd/boot.py:open_handoff_entry
+rhizo_host	/root/.rhizo_handoff.d/.<id>.<pid>.tmp	unlabeled	file	write	src/androidd/boot.py:hand_off_to_supervisor
+rhizo_host	/root/.rhizo_handoff.d/<id>	unlabeled	file	rename	src/androidd/boot.py:hand_off_to_supervisor
+rhizo_host	/root/.rhizo_handoff.d	unlabeled	dir	add_name remove_name write	src/androidd/boot.py:hand_off_to_supervisor
+rhizo_host	supervisor process	kernel	process	signal	src/androidd/boot.py:hand_off_to_supervisor
+rhizo_host	supervisor process	kernel	process	sigkill	src/androidd/boot.py:reap_resident_supervisor_if_shutting_down
+rhizo_host	/dev/kmsg (sandbox node)	kmsg_device	chr_file	open write getattr	src/androidd/sandbox/core.py:kmsg
+kernel	/proc/self/status	kernel	file	open read	src/androidd/boot.py park loop
+kernel	/root/.rhizo_supervisor_state	unlabeled	file	open write getattr	src/androidd/boot.py:_state
+kernel	/var/log/rhizo/supervisor.log	unlabeled	file	append	src/androidd/boot.py:slog
+kernel	/root	unlabeled	dir	search	src/androidd/boot.py:_state
+kernel	/root/.rhizo_handoff.d	unlabeled	dir	open read search	src/androidd/boot.py:drain_handoffs
+kernel	/root/.rhizo_handoff.d/<id>	unlabeled	file	open read getattr	src/androidd/boot.py:drain_handoffs
+kernel	/root/.rhizo_handoff.d	unlabeled	dir	write remove_name	src/androidd/boot.py:drain_handoffs
+kernel	/root/.rhizo_handoff.d/<id>	unlabeled	file	unlink	src/androidd/boot.py:drain_handoffs
+kernel	/proc/<gg>	rhizo_host	dir	getattr search	src/androidd/boot.py:pid_is_live
+kernel	/proc/<gg>/stat	rhizo_host	file	open read	src/androidd/boot.py:pid_is_live
+kernel	gg (namespace holder)	rhizo_host	process	sigkill	src/androidd/boot.py:release_namespace_holder
+kernel	/root/.rhizo_cgroup_root[-N]	unlabeled	file	open read getattr	src/androidd/boot.py:join_instance_init_cgroup
+kernel	/sys/fs/cgroup/rhizo[-N]/init	cgroup_v2	dir	search getattr	src/androidd/boot.py:join_instance_init_cgroup
+kernel	/sys/fs/cgroup/rhizo (the tree, bottom-up)	cgroup_v2	dir	read	src/androidd/boot.py:androidd_stop (_reset_delegated_controllers)
+kernel	/dev/kmsg (host devtmpfs node)	rhizo_host_kmsg_device	chr_file	write	src/androidd/sandbox/core.py:kmsg (via launcher3.py:androidd_stop, MainPID)
+kernel	/sys/fs/cgroup/rhizo[-N]/init/cgroup.procs	cgroup_v2	file	open write	src/androidd/sandbox/core.py:cgroup_write (via launcher3.py:join_cgroup)
+kernel	/root/.rhizo_init_pid[-N]	unlabeled	file	open write getattr	src/androidd/boot.py:_join_and_exec_init
+kernel	/proc/<gg>/ns	rhizo_host	dir	getattr open read search	src/androidd/boot.py:_join_and_exec_init
+kernel	/proc/<gg>/ns/{mnt,net,ipc,uts,cgroup}	rhizo_host	lnk_file	getattr read	src/androidd/boot.py:_join_and_exec_init
+kernel	/proc/<gg>/ns/{mnt,net,ipc,uts,cgroup}	rhizo_host	file	open read getattr	src/androidd/boot.py:_join_and_exec_init
+kernel	self	kernel	capability	sys_admin sys_chroot	src/androidd/boot.py:_join_and_exec_init
+kernel	self	kernel	capability	sys_admin	src/androidd/boot.py:_join_and_exec_init
+kernel	procfs superblock	proc	filesystem	mount	src/androidd/boot.py:_join_and_exec_init child
+kernel	<sandbox>/proc	rootfs	dir	mounton	src/androidd/boot.py:_join_and_exec_init child
+kernel	self	kernel	capability	setpcap	src/androidd/boot.py:enter_sandbox_init (drop_caps)
+kernel	/system/bin/init	init_exec	file	execute getattr open read map	src/androidd/boot.py:enter_sandbox_init
+kernel	init	init	process	transition siginh rlimitinh	src/androidd/boot.py:enter_sandbox_init
+kernel	/dev/kmsg (sandbox node)	kmsg_device	chr_file	write	src/androidd/sandbox/core.py:kmsg
+kernel	/dev/kmsg (host devtmpfs node)	rhizo_host_kmsg_device	chr_file	write	src/androidd/sandbox/core.py:kmsg (via launcher3.py:_join_and_exec_init)
+kernel	every other host devtmpfs char node (/dev/mem, /dev/tty*, /dev/sg*, ...)	rhizo_host_device	chr_file	!write !append	src/androidd/guest/sepolicy/policy.cil (rhizo_host_kmsg_device)
+kernel	every host devtmpfs block node (/dev/vda*, /dev/loop*, /dev/nvme*, ...)	rhizo_host_device	blk_file	!write !append	src/androidd/guest/sepolicy/policy.cil (typetransition kernel device blk_file rhizo_host_device)
+rhizo_host	/dev/kmsg (host devtmpfs node)	rhizo_host_device	chr_file	getattr relabelfrom	src/androidd/boot.py:HOST_PRIMER_SRC relabel_host_kmsg
+rhizo_host	/dev/kmsg (host devtmpfs node)	rhizo_host_kmsg_device	chr_file	getattr relabelto	src/androidd/boot.py:HOST_PRIMER_SRC relabel_host_kmsg
+rhizo_host_kmsg_device	the devtmpfs superblock	device	filesystem	associate	security/selinux/hooks.c:selinux_inode_setxattr
+rhizo_host	/dev/cuse and /dev/uhid (host devtmpfs nodes)	rhizo_host_device	chr_file	getattr relabelfrom	src/androidd/boot.py:HOST_PRIMER_SRC relabel_host_input_nodes
+rhizo_host	/dev/cuse (host devtmpfs node)	rhizo_cuse_host_device	chr_file	getattr relabelto	src/androidd/boot.py:HOST_PRIMER_SRC relabel_host_input_nodes
+rhizo_host	/dev/uhid (host devtmpfs node)	rhizo_uhid_host_device	chr_file	getattr relabelto	src/androidd/boot.py:HOST_PRIMER_SRC relabel_host_input_nodes
+rhizo_cuse_host_device	the devtmpfs superblock	device	filesystem	associate	security/selinux/hooks.c:selinux_inode_setxattr
+rhizo_uhid_host_device	the devtmpfs superblock	device	filesystem	associate	security/selinux/hooks.c:selinux_inode_setxattr
+rhizo_inputd	/dev/cuse (host devtmpfs node)	rhizo_cuse_host_device	chr_file	getattr open read write	src/services/inputd/inputd.c:cuse_open_init
+rhizo_uhidd	/dev/uhid (host devtmpfs node)	rhizo_uhid_host_device	chr_file	getattr open read write	src/services/inputd/inputd.c:open_uhid
+rhizo_inputd	$NOTIFY_SOCKET (/run/systemd/notify)	tmpfs	sock_file	write getattr	src/services/inputd/inputd.c:sd_notify_fd
+rhizo_inputd	host systemd's notify socket (pid 1, bound before the load, kept across daemon-reexec)	kernel	unix_dgram_socket	sendto	src/services/inputd/inputd.c:sd_notify_fd
+rhizo_inputd	self	rhizo_inputd	unix_dgram_socket	create connect write	src/services/inputd/inputd.c:sd_notify_fd
+rhizo_inputd	stdout/stderr (journald stream socket systemd made at the unit's start)	rhizo_host	unix_stream_socket	read write getattr	src/services/inputd/inputd.c:rz_log
+rhizo_uhidd	stdout/stderr (journald stream socket systemd made at the unit's start)	rhizo_host	unix_stream_socket	read write getattr	src/services/inputd/inputd.c:rz_log
+rhizo_inputd	/sys/devices/virtual/misc/uhid/<hid>	sysfs_uhid	dir	search getattr	src/services/inputd/inputd.c:owned_now, load_state
+rhizo_inputd	/sys/devices/virtual/misc/uhid/<hid>/uevent	sysfs_uhid	file	getattr open read	src/services/inputd/inputd.c:owned_now
+rhizo_host	/dev/kmsg (host devtmpfs node)	rhizo_host_kmsg_device	chr_file	getattr open read write ioctl append setattr watch mounton	journald, systemd, udev, logind, launcher3.py:prepare_host_and_data
+rhizo_host	/root/.rhizo_init_pid[-N]	unlabeled	file	open read getattr	src/androidd/boot.py:androidd_stop
+rhizo_host	/proc/<init>	init	dir	getattr open read search	src/androidd/boot.py:androidd_stop (sig)
+rhizo_host	/proc/<init>/stat	init	file	open read	src/androidd/boot.py:androidd_stop (sig)
+rhizo_host	/root/.rhizo_g_pid	unlabeled	file	open read getattr	src/androidd/boot.py:androidd_stop
+rhizo_host	/proc/<supervisor>/cgroup	kernel	file	open read	src/androidd/boot.py:androidd_stop
+rhizo_host	/sys/fs/cgroup/rhizo[-N]	cgroup_v2	dir	getattr setattr search	src/androidd/boot.py:reclaim_cgroup_root
+rhizo_host	/sys/fs/cgroup/rhizo[-N]/cgroup.procs	cgroup_v2	file	getattr setattr	src/androidd/boot.py:reclaim_cgroup_root
+rhizo_host	/sys/fs/cgroup/rhizo[-N]/supervisor	cgroup_v2	dir	create add_name write search getattr	src/androidd/boot.py:androidd_stop
+rhizo_host	/sys/fs/cgroup/rhizo[-N]/supervisor/cgroup.procs	cgroup_v2	file	open write	src/androidd/boot.py:androidd_stop
+rhizo_host	/usr/bin/nsenter	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:androidd_stop
+rhizo_host	/system/bin/setprop	toolbox_exec	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:androidd_stop
+rhizo_host	/dev/socket/property_service	property_socket	sock_file	write	src/androidd/boot.py:androidd_stop
+rhizo_host	init	init	unix_stream_socket	connectto	src/androidd/boot.py:androidd_stop
+rhizo_host	sys.powerctl	powerctl_prop	property_service	set	src/androidd/boot.py:androidd_stop
+rhizo_host	init (sandbox pid 1)	init	process	sigkill	src/androidd/boot.py:androidd_stop
+rhizo_host	/root/.rhizo_cgroup_root[-N]	unlabeled	file	open read getattr	src/androidd/boot.py:androidd_stop (_android_cgroup)
+rhizo_host	/sys/fs/cgroup/rhizo[-N]	cgroup_v2	dir	open read search getattr	src/androidd/boot.py:androidd_stop (_cgroup_populated)
+rhizo_host	/sys/fs/cgroup/rhizo[-N]/**/cgroup.procs	cgroup_v2	file	open read	src/androidd/boot.py:androidd_stop (_cgroup_populated)
+rhizo_host	/sys/fs/cgroup/rhizo[-N]/**/cgroup.subtree_control	cgroup_v2	file	open write	src/androidd/boot.py:androidd_stop (_reset_delegated_controllers)
+rhizo_host	/proc/self/mountinfo	rhizo_host	file	open read getattr	src/androidd/boot.py:release_host_staging (_mounts_at_or_under)
+rhizo_host	the RUN_ROOT staging superblock	tmpfs	filesystem	unmount	src/androidd/boot.py:release_host_staging
+rhizo_host	the /data ext4 superblock	labeledfs	filesystem	unmount	src/androidd/boot.py:release_host_staging
+rhizo_host	the vendor and apex_override binds	labeledfs	filesystem	unmount	src/androidd/boot.py:release_host_staging
+rhizo_host	/usr/sbin/losetup	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:release_host_staging (_losetup)
+rhizo_host	/sys/block/loopN	sysfs_loop	dir	search getattr	src/androidd/boot.py:release_host_staging (losetup -j, _loop_holders)
+rhizo_host	/sys/block/loopN/loop/backing_file	sysfs_loop	file	open read	src/androidd/boot.py:release_host_staging (losetup -j)
+rhizo_host	/dev/loopN (host devtmpfs)	rhizo_host_device	blk_file	open read ioctl getattr	src/androidd/boot.py:release_host_staging (losetup -d)
+rhizo_host	self	rhizo_host	capability	sys_admin	src/androidd/boot.py:release_host_staging
+rhizo_host	/run/rhizo-host.lock	tmpfs	file	lock	src/androidd/sandbox/hostlock.py:acquire_host_lock
+rhizo_host	/run/rhizo-host.lock	tmpfs	file	open read write getattr	src/androidd/sandbox/hostlock.py:acquire_host_lock
+rhizo_host	/run/rhizo-host.lock	tmpfs	file	create	src/androidd/sandbox/hostlock.py:acquire_host_lock
+rhizo_host	/run	tmpfs	dir	search write add_name	src/androidd/sandbox/hostlock.py:acquire_host_lock
+kernel	/usr/bin/python3	rhizo_host_exec	file	execute getattr open read map	src/androidd/boot.py:main (launcher_must_reexec)
+kernel	rhizo_host	rhizo_host	process	transition siginh rlimitinh	src/androidd/boot.py:main (launcher_must_reexec)
+rhizo_host	/proc/self/cgroup	rhizo_host	file	open read getattr	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	<unit cgroup>/android	cgroup_v2	dir	create add_name write search getattr	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	/sys/fs/cgroup/rhizo-N	cgroup_v2	dir	create	src/androidd/boot.py:prepare_host_and_data (keeps_literal_cgroup_root)
+rhizo_host	/sys/fs/cgroup	cgroup_v2	dir	add_name write	src/androidd/boot.py:prepare_host_and_data (keeps_literal_cgroup_root)
+rhizo_host	<ceiling_root>/cgroup.controllers	cgroup_v2	file	open read	src/androidd/boot.py:write_cgroup_ceilings
+rhizo_host	<ceiling_root>/{memory.max,pids.max,cpu.max}	cgroup_v2	file	open write read	src/androidd/boot.py:write_cgroup_ceilings (_confirm_ceiling)
+rhizo_host	/root/.rhizo_cgroup_root-N	unlabeled	file	create open write getattr	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	<cgroup_root>/launcher	cgroup_v2	dir	create add_name write	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	<cgroup_root>/launcher/cgroup.procs	cgroup_v2	file	open write	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	<cgroup_root>/system	cgroup_v2	dir	create add_name write	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	<cgroup_root>/cgroup.procs	cgroup_v2	file	open write	src/androidd/boot.py:join_cgroup (from run_sandbox's g)
+rhizo_host	<cgroup_root>/cgroup.subtree_control	cgroup_v2	file	open read	src/androidd/boot.py:run_sandbox
+rhizo_host	<cgroup_root>/init	cgroup_v2	dir	create add_name write	src/androidd/boot.py:run_sandbox (g, post-unshare)
+rhizo_host	<cgroup_root>/init/cgroup.procs	cgroup_v2	file	open write	src/androidd/boot.py:run_sandbox (g, post-unshare)
+rhizo_host	{NEWROOT}/sys/fs/cgroup	tmpfs	dir	mounton	src/androidd/sandbox/rootfs.py:build_root_and_pivot
+rhizo_host	the sandbox's cgroup2 superblock	cgroup_v2	filesystem	mount	src/androidd/sandbox/rootfs.py:build_root_and_pivot
+rhizo_host	{NEWROOT}/sys/fs/cgroup	cgroup_v2	dir	setattr	src/androidd/sandbox/rootfs.py:_setup_cgroups_and_selinuxfs
+rhizo_host	{NEWROOT}/sys/fs/cgroup/cgroup.procs	cgroup_v2	file	setattr	src/androidd/sandbox/rootfs.py:_setup_cgroups_and_selinuxfs
+rhizo_host	{NEWROOT}/sys/fs/cgroup/cgroup.subtree_control	cgroup_v2	file	open write	src/androidd/sandbox/rootfs.py:_setup_cgroups_and_selinuxfs
+rhizo_host	{NEWROOT}/sys/fs/cgroup/apps	cgroup_v2	dir	create add_name write setattr	src/androidd/sandbox/rootfs.py:_setup_cgroups_and_selinuxfs
+rhizo_host	{NEWROOT}/sys/fs/cgroup/apps/cgroup.procs	cgroup_v2	file	setattr	src/androidd/sandbox/rootfs.py:_setup_cgroups_and_selinuxfs
+rhizo_host	{NEWROOT}/sys/fs/cgroup/{apps,system}/cgroup.subtree_control	cgroup_v2	file	open write	src/androidd/sandbox/rootfs.py:_setup_cgroups_and_selinuxfs
+rhizo_host	/var/lib/rhizo	unlabeled	dir	search write add_name	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	/var/lib/rhizo/instances/N	unlabeled	dir	create add_name write search getattr	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	/usr/sbin/mkfs.ext4	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:prepare_host_and_data (_mount_data_tier)
+rhizo_host	/var/lib/rhizo/instances/N/data.img	unlabeled	file	create open read write getattr	src/androidd/boot.py:prepare_host_and_data (_mount_data_tier)
+rhizo_host	/var/lib/rhizo/templates/data-template.<key>.img	unlabeled	file	open read getattr	src/androidd/boot.py:prepare_host_and_data (_instantiate_data_template)
+rhizo_host	/usr/sbin/losetup	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:prepare_host_and_data (_mount_data_tier)
+rhizo_host	/dev/loop-control	device	chr_file	open read write ioctl getattr	src/androidd/boot.py:prepare_host_and_data (via losetup)
+rhizo_host	/dev/loopN (host devtmpfs)	device	blk_file	open read write ioctl getattr	src/androidd/boot.py:prepare_host_and_data (_mount_data_tier)
+rhizo_host	self	rhizo_host	capability	sys_admin	src/androidd/boot.py:prepare_host_and_data (_mount_data_tier)
+rhizo_host	the /data ext4 superblock	labeledfs	filesystem	mount	src/androidd/boot.py:prepare_host_and_data (_mount_data_tier)
+rhizo_host	/run/rhizo-N/data	tmpfs	dir	mounton	src/androidd/boot.py:prepare_host_and_data (_mount_data_tier)
+rhizo_host	/run (the vbmeta loop record's dir)	tmpfs	dir	write add_name remove_name search getattr	src/androidd/boot.py:setup_loop_and_netfilter, release_own_vbmeta_loop
+rhizo_host	/run/rhizo-vbmeta-loop-N	rhizo_host	file	create open read write getattr unlink	src/androidd/boot.py:setup_loop_and_netfilter, release_own_vbmeta_loop
+rhizo_host	{NEWROOT}/dev/block/by-name/vbmeta	tmpfs	blk_file	create setattr getattr	src/androidd/sandbox/rootfs.py:build_root_and_pivot
+rhizo_host	/run/rhizo-N	tmpfs	dir	create add_name write search getattr	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	/run/rhizo-N	tmpfs	dir	mounton	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	the staging tmpfs superblock	tmpfs	filesystem	mount unmount	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	/run/rhizo-wayland-N	tmpfs	dir	mounton	src/androidd/sandbox/core.py:share_run_dir
+rhizo_host	/usr/bin/ip	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	self	rhizo_host	capability	net_admin	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	self	rhizo_host	netlink_route_socket	create bind write read nlmsg_write nlmsg_read	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	/usr/bin/nsenter	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	/proc/<g>/ns/net	rhizo_host	file	open read getattr	src/androidd/boot.py:setup_veth_and_nat (via nsenter)
+rhizo_host	/proc/sys/net/ipv4/ip_forward	proc_net	file	open write getattr	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	/usr/sbin/iptables, /usr/sbin/ip6tables	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	/usr/bin/systemctl, /usr/bin/systemd-run	unlabeled	file	execute execute_no_trans open read getattr map	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	/run/systemd/private	tmpfs	sock_file	write getattr	src/androidd/boot.py:setup_veth_and_nat (systemctl/systemd-run)
+rhizo_host	host systemd (pid 1)	rhizo_host	unix_stream_socket	connectto	src/androidd/boot.py:setup_veth_and_nat (systemctl/systemd-run)
+rhizo_host	/tmp/rhizo-netbridged-N.log	unlabeled	file	unlink getattr	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	/tmp	unlabeled	dir	search write remove_name	src/androidd/boot.py:setup_veth_and_nat
+rhizo_host	$NOTIFY_SOCKET (/run/systemd/notify)	tmpfs	sock_file	write getattr	src/androidd/boot.py:connect_notify_socket
+rhizo_host	self	rhizo_host	unix_dgram_socket	create connect write sendto	src/androidd/boot.py:connect_notify_socket, sd_notify
+rhizo_host	/root/boot-N.log	unlabeled	file	create open append getattr	androidd@N.service StandardOutput/StandardError=append
+rhizo_host	/root	unlabeled	dir	search write add_name	androidd@N.service StandardOutput=append
+rhizo_host	/etc/rhizo/policy.conf	unlabeled	file	getattr open read	src/androidd/sandbox/capabilities.py:read_policy
+rhizo_host	/etc/rhizo/instances	unlabeled	dir	search getattr open read	src/androidd/sandbox/capabilities.py:instance_config_path
+rhizo_host	/etc/rhizo/instances/N.conf	unlabeled	file	getattr open read	src/androidd/sandbox/capabilities.py:policy_or_deny(instance_id=N)
+rhizo_host	/var/lib/rhizo/device-state-N	unlabeled	dir	create add_name write search getattr	src/androidd/sandbox/rootfs.py:build_root_and_pivot
+rhizo_host	{NEWROOT}/rhizo-device-state	tmpfs	dir	mounton	src/androidd/sandbox/rootfs.py:build_root_and_pivot
+rhizo_host	/var/lib/rhizo/vendor/etc/rhizo-device-state	rhizo_device_state_file	dir	rmdir	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	/run/rhizo-N/vendor/etc/rhizo-device-state	unlabeled	lnk_file	create relabelfrom	src/androidd/boot.py:_stage_vendor_scaffold
+rhizo_host	/var/lib/rhizo/prepared/<key>/{bin,lib,lib64,apex_override}	unlabeled	dir	getattr open read search	src/androidd/boot.py:prepare_host_and_data (validate_prepared)
+rhizo_host	/run/rhizo-N/vendor/{bin,lib,lib64}	unlabeled	dir	mounton	src/androidd/boot.py:prepare_host_and_data
+rhizo_host	/run/rhizo-N/vendor/{bin,lib,lib64}	vendor_file	dir	mounton	src/androidd/sandbox/core.py:bind_private
+kernel	the host's ELF interpreter (selinux_labels.host_ld_so)	rhizo_host_exec	file	execute map	src/androidd/boot.py:main (launcher_must_reexec)
+rhizo_host	/usr/bin/python3	rhizo_host_exec	file	entrypoint	src/androidd/boot.py:main (launcher_must_reexec)
+kernel	/proc/self/attr/current	kernel	file	open read	src/androidd/boot.py:own_domain, policy_is_loaded
+rhizo_host	/run/rhizo-N/data/.rhizo_data_release	unlabeled	file	create open read write getattr	src/androidd/sandbox/rootfs.py:check_data_release_marker
+rhizo_host	/run/rhizo-N/data	unlabeled	dir	search write add_name getattr	src/androidd/sandbox/rootfs.py:check_data_release_marker
+kernel	the host's own xkb keymap tree (e.g. /usr/share/X11/xkb/rules/evdev)	unlabeled	file	map	test/vm/start/start-sway.sh
+rhizo_host	rhizo-inputd@N's process	rhizo_inputd	process	sigkill sigstop signull signal getattr getpgid getsession	systemd src/core/service.c (stop, kill, liveness)
+rhizo_host	/proc/<pid of rhizo-inputd@N>	rhizo_inputd	dir	search getattr open read	systemd cg_pid_get_path, launcher3.py _units_still_kernel
+rhizo_host	/proc/<pid of rhizo-inputd@N>/{stat,status,cgroup,cmdline,attr/current}	rhizo_inputd	file	open read getattr	launcher3.py _units_still_kernel
+rhizo_inputd	rhizo-inputd@N's parent	rhizo_host	process	sigchld	kernel/exit.c do_notify_parent
+kernel	rhizo-inputd@N's process	rhizo_inputd	process	sigkill sigstop signull signal getattr getpgid getsession	systemd src/core/service.c (stop, kill, liveness)
+kernel	/proc/<pid of rhizo-inputd@N>	rhizo_inputd	dir	search getattr open read	systemd cg_pid_get_path, launcher3.py _units_still_kernel
+kernel	/proc/<pid of rhizo-inputd@N>/{stat,status,cgroup,cmdline,attr/current}	rhizo_inputd	file	open read getattr	launcher3.py _units_still_kernel
+rhizo_inputd	rhizo-inputd@N's parent	kernel	process	sigchld	kernel/exit.c do_notify_parent
+rhizo_host	rhizo-inputd-uhid@N's process	rhizo_uhidd	process	sigkill sigstop signull signal getattr getpgid getsession	systemd src/core/service.c (stop, kill, liveness)
+rhizo_host	/proc/<pid of rhizo-inputd-uhid@N>	rhizo_uhidd	dir	search getattr open read	systemd cg_pid_get_path, launcher3.py _units_still_kernel
+rhizo_host	/proc/<pid of rhizo-inputd-uhid@N>/{stat,status,cgroup,cmdline,attr/current}	rhizo_uhidd	file	open read getattr	launcher3.py _units_still_kernel
+rhizo_uhidd	rhizo-inputd-uhid@N's parent	rhizo_host	process	sigchld	kernel/exit.c do_notify_parent
+kernel	rhizo-inputd-uhid@N's process	rhizo_uhidd	process	sigkill sigstop signull signal getattr getpgid getsession	systemd src/core/service.c (stop, kill, liveness)
+kernel	/proc/<pid of rhizo-inputd-uhid@N>	rhizo_uhidd	dir	search getattr open read	systemd cg_pid_get_path, launcher3.py _units_still_kernel
+kernel	/proc/<pid of rhizo-inputd-uhid@N>/{stat,status,cgroup,cmdline,attr/current}	rhizo_uhidd	file	open read getattr	launcher3.py _units_still_kernel
+rhizo_uhidd	rhizo-inputd-uhid@N's parent	kernel	process	sigchld	kernel/exit.c do_notify_parent
+rhizo_inputd	the seccomp listener fd	kernel	fd	use	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	the seccomp listener fd on a restart	rhizo_host	fd	use	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	self	rhizo_inputd	capability	sys_ptrace	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	rhizo_composer's process	rhizo_composer	process	ptrace	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	rhizo_composer's /dev/uinput fd	rhizo_composer	fd	use	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	system_server's process	system_server	process	ptrace	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	system_server's /dev/uinput fd	system_server	fd	use	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	shell's process	shell	process	ptrace	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	shell's /dev/uinput fd	shell	fd	use	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	the sandbox's /dev/uinput	uhid_device	chr_file	read write ioctl getattr	src/services/inputd/inputd.c:handle_notification
+rhizo_inputd	/proc/<tid of rhizo_composer's creating thread>	rhizo_composer	dir	search	src/services/inputd/inputd.c:tgid_of
+rhizo_inputd	/proc/<tid of system_server's creating thread>	system_server	dir	search	src/services/inputd/inputd.c:tgid_of
+rhizo_inputd	/proc/<tid of shell's creating thread>	shell	dir	search	src/services/inputd/inputd.c:tgid_of
+rhizo_inputd	/proc/<tid of rhizo_composer's creating thread>/status	rhizo_composer	file	open read	src/services/inputd/inputd.c:tgid_of
+rhizo_inputd	/proc/<tid of system_server's creating thread>/status	system_server	file	open read	src/services/inputd/inputd.c:tgid_of
+rhizo_inputd	/proc/<tid of shell's creating thread>/status	shell	file	open read	src/services/inputd/inputd.c:tgid_of

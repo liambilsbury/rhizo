@@ -1,0 +1,4 @@
+(allow rhizo_host domain (dir (search open read getattr)))
+(allow rhizo_host domain (file (open read getattr)))
+(allow rhizo_host domain (lnk_file (read getattr)))
+(typeattributeset mlstrustedobject (appdomain))

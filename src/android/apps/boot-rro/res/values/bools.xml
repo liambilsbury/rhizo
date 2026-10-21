@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="config_enableWallpaperService">false</bool>
+    <bool name="config_checkWallpaperAtBoot">false</bool>
+    <bool name="config_disableLockscreenByDefault">true</bool>
+</resources>

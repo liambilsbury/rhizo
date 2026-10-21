@@ -1,0 +1,7 @@
+{
+  "uuid": "rhizo-harness@rhizo",
+  "name": "Rhizo Harness",
+  "description": "Headless D-Bus surface (org.rhizo.Harness) for Rhizo's GNOME-parity system test harness: window enumeration/ops, seat devices and Main.messageTray notifications. Vm-only debug aid, never shipped -- see test/system/guest/gnome-harness.py and test/system/lib/gnome-lib.sh.",
+  "shell-version": ["46"],
+  "version": 1
+}

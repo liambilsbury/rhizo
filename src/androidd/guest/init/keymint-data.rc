@@ -1,0 +1,3 @@
+on post-fs-data
+    mkdir /data/rhizo_keymint 0700 nobody nobody encryption=None
+    restorecon /data/rhizo_keymint

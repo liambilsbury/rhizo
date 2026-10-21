@@ -1,0 +1,11 @@
+[Unit]
+Description=Rhizo selinuxfs mount
+DefaultDependencies=no
+ConditionPathIsDirectory=/sys/fs/selinux
+ConditionPathIsMountPoint=!/sys/fs/selinux
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/lib/rhizo/rhizo-selinux-mode --is host
+RemainAfterExit=yes
+ExecStart=/usr/bin/mount -t selinuxfs -o nosuid,noexec selinuxfs /sys/fs/selinux

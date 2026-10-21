@@ -1,0 +1,14 @@
+[Unit]
+Description=Rhizo display density
+After=androidd.service
+PartOf=androidd.service
+
+[Service]
+Type=simple
+Environment=RHIZO_SANDBOX_ID=0
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/displayd/displayd.py
+StandardOutput=append:/var/log/rhizo/rhizo-displayd.log
+StandardError=append:/var/log/rhizo/rhizo-displayd.log
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/rhizo

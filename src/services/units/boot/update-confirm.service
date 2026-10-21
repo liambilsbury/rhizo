@@ -1,0 +1,11 @@
+[Unit]
+Description=Rhizo GSI update confirm
+After=androidd.service
+BindsTo=androidd.service
+ConditionPathExists=/var/lib/rhizo/update/state
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bash /usr/lib/rhizo/install/update/gsi-update.sh confirm --timeout 900
+StandardOutput=journal
+StandardError=journal

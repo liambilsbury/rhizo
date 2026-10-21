@@ -1,0 +1,10 @@
+[Unit]
+Description=Rhizo desktop session watcher
+StartLimitIntervalSec=0
+
+[Path]
+PathChanged=/run/rhizo-desktop/session.env
+Unit=rhizo-desktop-attach.service
+
+[Install]
+WantedBy=multi-user.target
