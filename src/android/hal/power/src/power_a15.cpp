@@ -1,9 +1,11 @@
 #include "aidl/android/hardware/power/BnPower.h"
 #include "aidl/android/hardware/power/BnPowerHintSession.h"
+#include "rtd_link.h"
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <atomic>
 #include <cstdio>
 
 using namespace aidl::android::hardware::power;
@@ -20,37 +22,73 @@ void klog(const char* msg) {
   }
 }
 
-// IPowerHintSession for Android 15
+constexpr char kRtdSocketPath[] = "/dev/socket/rhizo_rt/rtd";
+
+using rhizo_rtd::RtdLink;
+
+// IPowerHintSession for Android 15 and rhizo-rtd
 class RhizoPowerHintSession : public BnPowerHintSession {
  public:
-  // ignore the target work duration
-  ScopedAStatus updateTargetWorkDuration(int64_t) override { return ScopedAStatus::ok(); }
-  // ignore the actual work durations
-  ScopedAStatus reportActualWorkDuration(const std::vector<WorkDuration>&) override {
+  // store the session id and the link
+  RhizoPowerHintSession(int32_t sid, RtdLink* link) : sid_(sid), link_(link) {}
+  // close the session on the link
+  ~RhizoPowerHintSession() override { link_->Close(sid_); }
+
+  int32_t sid() const { return sid_; }
+
+  // send the target work duration for the session
+  ScopedAStatus updateTargetWorkDuration(int64_t targetDurationNanos) override {
+    link_->Target(sid_, targetDurationNanos);
     return ScopedAStatus::ok();
   }
-  // ignore a pause
-  ScopedAStatus pause() override { return ScopedAStatus::ok(); }
-  // ignore a resume
-  ScopedAStatus resume() override { return ScopedAStatus::ok(); }
-  // ignore a close
-  ScopedAStatus close() override { return ScopedAStatus::ok(); }
+  // send the actual work durations for the session
+  ScopedAStatus reportActualWorkDuration(const std::vector<WorkDuration>& durations) override {
+    std::vector<int64_t> nanos;
+    nanos.reserve(durations.size());
+    for (const auto& d : durations) nanos.push_back(d.durationNanos);
+    link_->Actual(sid_, nanos);
+    return ScopedAStatus::ok();
+  }
+  // send a pause for the session
+  ScopedAStatus pause() override {
+    link_->SetPaused(sid_, true);
+    return ScopedAStatus::ok();
+  }
+  // send a resume for the session
+  ScopedAStatus resume() override {
+    link_->SetPaused(sid_, false);
+    return ScopedAStatus::ok();
+  }
+  // send a close for the session and log it
+  ScopedAStatus close() override {
+    link_->Close(sid_);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "session %d close", sid_);
+    klog(buf);
+    return ScopedAStatus::ok();
+  }
   // ignore a session hint
   ScopedAStatus sendHint(SessionHint) override { return ScopedAStatus::ok(); }
-  // reject an empty thread id list
+  // send the session thread ids to rhizo-rtd
   ScopedAStatus setThreads(const std::vector<int32_t>& tids) override {
     if (tids.empty()) {
       return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_ARGUMENT);
     }
+    link_->Threads(sid_, tids);
     return ScopedAStatus::ok();
   }
   // ignore the session mode
   ScopedAStatus setMode(SessionMode, bool) override { return ScopedAStatus::ok(); }
-  // return an empty session config
+  // return a session config holding the session id
   ScopedAStatus getSessionConfig(SessionConfig* out) override {
     *out = SessionConfig();
+    out->id = sid_;
     return ScopedAStatus::ok();
   }
+
+ private:
+  int32_t sid_;
+  RtdLink* link_;
 };
 
 // IPower HAL for Android 15
@@ -68,25 +106,32 @@ class RhizoPower : public BnPower {
   // report that boosts are unsupported
   ScopedAStatus isBoostSupported(Boost, bool* out) override { *out = false; return ScopedAStatus::ok(); }
 
-  // return unsupported for hint sessions
-  ScopedAStatus createHintSession(int32_t, int32_t, const std::vector<int32_t>& tids, int64_t,
+  // open a hint session on rhizo-rtd
+  ScopedAStatus createHintSession(int32_t tgid, int32_t uid, const std::vector<int32_t>& tids,
+                                   int64_t durationNanos,
                                    std::shared_ptr<IPowerHintSession>* out) override {
-    (void)out;
     if (tids.empty()) return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_ARGUMENT);
-    return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
+    if (!rtd_.TryConnect()) return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
+    *out = OpenSession(tgid, uid, tids, durationNanos);
+    return ScopedAStatus::ok();
   }
   // return the preferred session update interval
   ScopedAStatus getHintSessionPreferredRate(int64_t* out) override {
     *out = 16666667;
     return ScopedAStatus::ok();
   }
-  // report that hint sessions are unsupported
-  ScopedAStatus createHintSessionWithConfig(int32_t, int32_t, const std::vector<int32_t>& tids,
-                                             int64_t, SessionTag, SessionConfig* config,
-                                             std::shared_ptr<IPowerHintSession>* out) override {
-    (void)config; (void)out;
+  // open a hint session and return its config
+  ScopedAStatus createHintSessionWithConfig(int32_t tgid, int32_t uid,
+                                            const std::vector<int32_t>& tids, int64_t durationNanos,
+                                            SessionTag, SessionConfig* config,
+                                            std::shared_ptr<IPowerHintSession>* out) override {
     if (tids.empty()) return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_ARGUMENT);
-    return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
+    if (!rtd_.TryConnect()) return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
+    auto session = OpenSession(tgid, uid, tids, durationNanos);
+    *config = SessionConfig();
+    config->id = session->sid();
+    *out = session;
+    return ScopedAStatus::ok();
   }
   // return unsupported for session channels
   ScopedAStatus getSessionChannel(int32_t, int32_t, ChannelConfig*) override {
@@ -94,6 +139,23 @@ class RhizoPower : public BnPower {
   }
   // ignore closing a session channel
   ScopedAStatus closeSessionChannel(int32_t, int32_t) override { return ScopedAStatus::ok(); }
+
+ private:
+  // open a session on rhizo-rtd
+  std::shared_ptr<RhizoPowerHintSession> OpenSession(int32_t tgid, int32_t uid,
+                                                      const std::vector<int32_t>& tids,
+                                                      int64_t durationNanos) {
+    int32_t sid = next_sid_.fetch_add(1);
+    rtd_.Open(sid, tgid, uid, durationNanos, tids);
+    char buf[160];
+    snprintf(buf, sizeof(buf), "session %d open tgid=%d uid=%d tids=%zu target=%lld", sid, tgid,
+             uid, tids.size(), static_cast<long long>(durationNanos));
+    klog(buf);
+    return ndk::SharedRefBase::make<RhizoPowerHintSession>(sid, &rtd_);
+  }
+
+  RtdLink rtd_{kRtdSocketPath, klog};
+  std::atomic<int32_t> next_sid_{1};
 };
 
 }

@@ -994,6 +994,28 @@ def _chown_node_fd(path, dev, ino, uid, gid, fd_ops):
         fd_ops.close(fd)
 
 
+def _make_input_node(path, dev, st, ops):
+    """mknod path or adopt the node ueventd made for dev"""
+    for retry in (False, True):
+        if st is not None:
+            ops.unlink(path)
+        old = ops.umask(0)
+        try:
+            ops.mknod(path, stat.S_IFCHR | INPUT_NODE_MODE, dev)
+            return
+        except FileExistsError:
+            if retry:
+                raise
+        finally:
+            ops.umask(old)
+        try:
+            st = ops.lstat(path)
+        except FileNotFoundError:
+            st = None
+        if st is not None and stat.S_ISCHR(st.st_mode) and st.st_rdev == dev:
+            return
+
+
 def apply_input_decision(fence, decision, root="", log=None, ops=os, labels=None, fd_ops=None):
     """make or remove a node under root"""
     log = log or kmsg
@@ -1026,13 +1048,7 @@ def apply_input_decision(fence, decision, root="", log=None, ops=os, labels=None
         log(f"RHIZO_MARKER input_fence=failed reason=label:{labels.unusable()} node={node}")
         return
     try:
-        if st is not None:
-            ops.unlink(path)
-        old = ops.umask(0)
-        try:
-            ops.mknod(path, stat.S_IFCHR | INPUT_NODE_MODE, dev)
-        finally:
-            ops.umask(old)
+        _make_input_node(path, dev, st, ops)
     except OSError as e:
         log(f"RHIZO_MARKER input_fence=failed reason=mknod:{e.errno} node={node}")
         return

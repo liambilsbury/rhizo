@@ -471,6 +471,7 @@ else
     || fail "the [$SHARE_NAME] share never attached before the stop (status said: ${POLL_READ:-<no answer>})"
 
   stock_pkg=""
+  STOCK_PKG=com.android.settings
   manifest_epoch=$(stat -c %Y "$LAUNCHER_MANIFEST" 2>/dev/null || echo 0)
   if (( verdict_ok )); then manifest_ref=$guest_boot_epoch; else manifest_ref=$(stat -c %Y "$WORKDIR/test-start"); fi
   if (( manifest_epoch <= manifest_ref )); then
@@ -479,11 +480,9 @@ else
     stock_pkg=$(python3 -c "
 import json
 apps = json.load(open('$LAUNCHER_MANIFEST'))['apps']
-for a in apps:
-    if a['package'] not in ('$PKG', '$DESKAPP_PKG'):
-        print(a['package']); break
+print(next((a['package'] for a in apps if a['package'] == '$STOCK_PKG'), ''))
 ")
-    [[ -n "$stock_pkg" ]] || fail "test-launcher's manifest names no stock package to launch"
+    [[ -n "$stock_pkg" ]] || fail "test-launcher's manifest has no entry for $STOCK_PKG"
   fi
   if [[ -n "$stock_pkg" ]]; then
     stock_entry="$APPS_DIR/rhizo-$stock_pkg.desktop"
@@ -653,18 +652,22 @@ else
   primary_before="?"
 fi
 CLOSE_SINCE=$(logcat_since_marker "$INIT")
-close_ids=$(rhizo_app_window_ids) || close_ids=""
-printf '%s\n' "${close_ids:-<none>}" > "$EV/app-windows-closed.txt"
-while IFS= read -r _id; do
-  [[ -n "$_id" ]] && desk_window_op "$_id" close >/dev/null 2>&1
-done <<<"$close_ids"
+close_ids=""
 left=""
 for _ in $(seq 1 40); do
   ids=$(rhizo_app_window_ids) || { left=""; sleep 1; continue; }
+  # close all of the rhizo-* toplevels
+  while IFS= read -r _id; do
+    [[ -z "$_id" ]] && continue
+    grep -Fxq -- "$_id" <<<"$close_ids" && continue
+    desk_window_op "$_id" close >/dev/null 2>&1
+    close_ids+="${close_ids:+$'\n'}$_id"
+  done <<<"$ids"
   left=$(grep -c . <<<"$ids")
   [[ "$left" == "0" ]] && break
   sleep 1
 done
+printf '%s\n' "${close_ids:-<none>}" > "$EV/app-windows-closed.txt"
 if left_json=$(desk_windows 2>/dev/null); then
   survivors=$(python3 -c "
 import json, sys

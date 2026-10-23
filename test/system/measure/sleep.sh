@@ -150,10 +150,15 @@ frozen_app_cgroups() {
     done" 2>/dev/null
 }
 
+STACK_METER=/root/stack-meter.py
+if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+  STACK_METER=/root/share/stack-meter.py
+  guest_mount_share || { fail "the installed guest has no 9p share to run $STACK_METER from"; exit 1; }
+fi
 # take and pull a stack-meter.py sample
 meter() {
   local secs="$1" name="$2"
-  ssh_vm -t $((secs + 120)) "python3 /root/stack-meter.py --sample $secs --format json --out /tmp/meter-$name.json" >/dev/null 2>&1
+  ssh_vm -t $((secs + 120)) "python3 $STACK_METER --sample $secs --format json --out /tmp/meter-$name.json" >/dev/null 2>&1
   pull "/tmp/meter-$name.json" "$EV/meter-$name.json" || return 1
   echo "$EV/meter-$name.json"
 }
@@ -224,6 +229,10 @@ while [ -n "$mp" ] && [ "$mp" != 0 ] && [ -n "$p" ] && [ "$p" -gt 1 ]; do
   p=$(awk "/^PPid/{print \$2}" /proc/$p/status 2>/dev/null)
 done
 true')
+if [[ -z "$STACK_UNIT" && "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+  STACK_UNIT=androidd.service
+  log "    installed: the stack runs as androidd.service"
+fi
 log "stack cgroup: $CG${STACK_UNIT:+ (unit: $STACK_UNIT)}"
 record stack_cgroup "$CG"
 record stack_unit "${STACK_UNIT:-<none, pre-unit launch path>}"
@@ -538,15 +547,17 @@ relaunch_and_prove() {
     nb=$(echo "$stats" | grep '^nonblack_pct=' | cut -d= -f2)
     dis=$(echo "$stats" | grep '^distinct=' | cut -d= -f2)
     awk -v v="${nb:-0}" 'BEGIN{exit !(v>50)}' && [[ "${dis:-0}" -gt 20 ]] && break
+    # re-read the rect: mutter can place a new window after its first map
+    got=$(desktop_mapped_window_rect "$cdisp" 5) && read -r wx wy ww wh <<<"$got" && region="$wx,$wy,$ww,$wh"
     sleep 1
   done
   t1=$(date +%s%N)
   RELAUNCH_MS=$(( (t1 - t0) / 1000000 ))
   RELAUNCH_DISP="$cdisp"
   awk -v v="${nb:-0}" 'BEGIN{exit !(v>50)}' \
-    || { fail "$label: relaunched window is not showing real content (${nb:-<no shot>}% nonblack)"; return 1; }
+    || { fail "$label: relaunched window is not showing real content (${nb:-<no shot>}% nonblack over $region)"; return 1; }
   [[ "${dis:-0}" -gt 20 ]] \
-    || { fail "$label: relaunched window looks like a flat fill (${dis:-<no shot>} distinct colors)"; return 1; }
+    || { fail "$label: relaunched window looks like a flat fill (${dis:-<no shot>} distinct colors over $region)"; return 1; }
   return 0
 }
 

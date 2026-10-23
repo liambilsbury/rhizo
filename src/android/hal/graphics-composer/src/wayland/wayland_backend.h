@@ -194,6 +194,8 @@ class WaylandBackend {
 
   bool ActivateDisplay(int64_t displayId, const std::string& token, bool* held = nullptr);
 
+  bool MinimizeDisplay(int64_t displayId);
+
   bool AcceptsBuffer(uint32_t drmFormat, uint64_t modifier) const;
 
   bool AcceptsShmFormat(uint32_t drmFormat) const;
@@ -217,6 +219,8 @@ class WaylandBackend {
 
   bool SetCursorSurface(int64_t displayId, const uint8_t* pixelsArgb8888, int32_t width,
                         int32_t height, int32_t strideBytes, int32_t hotspotX, int32_t hotspotY);
+
+  bool SetCursorType(int64_t displayId, int32_t pointerType);
 
   std::vector<uint64_t> NegotiatedModifiers(uint32_t drmFormat) const;
 

@@ -10,7 +10,9 @@ PUBLIC_CIL_FILENAME = "plat_pub_versioned.cil"
 
 DEV_TYPES = ("port_device", "udmabuf_device")
 
-OPTIONAL_TYPES = ("sysfs_ublk",)
+OPTIONAL_TYPES = ("sysfs_ublk", "priv_app_36")
+
+OPTIONAL_POLICYCAPS = ("netlink_xperm",)
 
 CAP2_ALL = ("block_suspend", "audit_read", "syslog", "wake_alarm", "bpf",
             "perfmon", "checkpoint_restore")
@@ -286,6 +288,18 @@ def declares_type(cils, type_name):
     return any(needle in open(c).read() for c in cils)
 
 
+def declares_policycap(cils, cap):
+    """search the CILs for a policy capability"""
+    needle = f"(policycap {cap})"
+    return any(needle in open(c).read() for c in cils)
+
+
+def platform_opens_ashmem(cils):
+    """search the CILs for an open of the libcutils ashmem device granted to domain"""
+    rule = re.compile(r"\(allow domain ashmem_libcutils_device \(chr_file \(([^)]*)\)\)\)")
+    return any("open" in m.group(1).split() for c in cils for m in rule.finditer(open(c).read()))
+
+
 def declares_perm(cils, common_name, perm):
     """search the common for a permission"""
     needle = f"(common {common_name} ("
@@ -390,6 +404,18 @@ def render(template, dev_carveout, cap2, declared=frozenset(), ftrace=False, nam
             "(deny vold sysfs_ublk (file (write append)))\n"
             "(dontaudit vold sysfs_ublk (file (write append)))\n"
             if "sysfs_ublk" in declared else "",
+        "priv_app_36_grants":
+            "".join(line.replace("(allow priv_app ", "(allow priv_app_36 ", 1)
+                    for line in template.splitlines(keepends=True) if line.startswith("(allow priv_app "))
+            if "priv_app_36" in declared else "",
+        "host_netlink_nlmsg":
+            "(allow rhizo_host self (netlink_route_socket (nlmsg)))\n"
+            "(allowx rhizo_host self (nlmsg netlink_route_socket ((range 0x0 0xffff))))\n"
+            "(allow rhizo_host self (netlink_audit_socket (nlmsg)))\n"
+            if "netlink_xperm" in declared else "",
+        "vendor_ashmem_open":
+            "(allow domain ashmem_libcutils_device (chr_file (open)))\n"
+            if "vendor_ashmem_open" in declared else "",
         "dev_ok_rule":
             f"(typeattributeset rhizo_dev_ok (and (dev_type) (not ({dev_carveout}))))\n"
             if dev_carveout else "(typeattributeset rhizo_dev_ok (dev_type))\n",
@@ -660,7 +686,9 @@ def build(cils, path=None, ftrace=False, namespace=True, wakeup_genfs=""):
     """return the rendered SELinux policy"""
     dev_carveout, cap2 = derive(cils)
     template = open(path).read() if path else guest_files.read(CIL_FILENAME)
-    declared = frozenset(t for t in OPTIONAL_TYPES if declares_type(cils, t))
+    declared = frozenset(t for t in OPTIONAL_TYPES if declares_type(cils, t)) | frozenset(
+        c for c in OPTIONAL_POLICYCAPS if declares_policycap(cils, c)) | (
+        frozenset() if platform_opens_ashmem(cils) else frozenset({"vendor_ashmem_open"}))
     rendered = render(template, dev_carveout, cap2, declared, ftrace, namespace, wakeup_genfs if namespace else "",
                       domain_walked_dir_rules(cils) if namespace else "")
     return render_sysfs_mirror(cils, rendered)

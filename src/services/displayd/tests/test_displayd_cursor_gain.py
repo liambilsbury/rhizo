@@ -103,8 +103,20 @@ def test_gain():
           got == (None, d.NO_CONSTANT_GAIN), "got %r" % (got,))
     got = d.cursor_gain(dump([MOUSE_1]), 1, acceleration_off=True)
     check("a16/a17 with acceleration off: the flat gain", got == (2250, None), "got %r" % (got,))
+    check("a15 curve's slowest-segment gain is 0.204 at speed -7, 2.0416 at 0, 4.083 at 7",
+          [round(d.curve_base_gain(s), 4) for s in (-7, 0, 7)] == [0.2042, 2.0416, 4.0832],
+          "got %r" % [d.curve_base_gain(s) for s in (-7, 0, 7)])
     got = d.cursor_gain(dump([MOUSE_1], release="a15"), 1, acceleration_off=True)
-    check("a15, display not exempt: accelerated whatever the (absent) setting says",
+    check("a15, display not exempt: the curve's base gain, marked accelerated",
+          got == (2042, d.ACCELERATED), "got %r" % (got,))
+    got = d.cursor_gain(dump([MOUSE_0], release="a15"), 0, acceleration_off=False)
+    check("a15 multiplies the mapper's XScale into the base gain",
+          got == (2552, d.ACCELERATED), "got %r" % (got,))
+    got = d.cursor_gain(dump([MOUSE_1], release="a15", speed="-2"), 1, acceleration_off=False)
+    check("a15 reads the dumped pointer speed into the base gain", got == (1633, d.ACCELERATED),
+          "got %r" % (got,))
+    got = d.cursor_gain(dump([MOUSE_1], release="a15", speed="9"), 1, acceleration_off=False)
+    check("a15 with a pointer speed off the curve's range: no constant gain",
           got == (None, d.NO_CONSTANT_GAIN), "got %r" % (got,))
     got = d.cursor_gain(dump([MOUSE_1], release="a15", unscaled="2"), 1, acceleration_off=False)
     check("a15, display exempt from acceleration: XScale alone", got == (1000, None), "got %r" % (got,))
@@ -201,8 +213,9 @@ def test_acceleration_turned_off():
     sent = []
     stub_android(d, [dump([MOUSE_1], release="a15")], sent, accel=["null"])
     told = d.tell_composer_cursor_scale(2, 1)
-    check("a15: no setting touched, no cursor scale sent, the display reported non-constant",
-          told == d.NO_CONSTANT_GAIN and puts(sent) == [] and writes(sent) == []
+    check("a15: no setting touched, the base gain sent marked accelerated",
+          told == "told" and puts(sent) == []
+          and writes(sent) == ["echo display cursor-scale 2 2042 1 > %s" % d.CONTROL_IN]
           and not any("mouse_pointer_acceleration" in c for c in sent),
           "told=%r sent=%r" % (told, sent))
 

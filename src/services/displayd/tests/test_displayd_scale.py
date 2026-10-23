@@ -85,6 +85,67 @@ def main():
     check("apply.next-pass-writes-the-scaled-density", second is True and writes == [546, 1092],
           "apply -> %r after writing %r" % (second, writes))
 
+    d._base.clear()
+    d._base[1] = (213, 117.0)
+    kept = d.wanted_density(1, 213, 176, 175.5)
+    check("base.framework-kept-its-density-scales-from-the-base-dpi", kept == 320,
+          "got %r, want 320 (213 x 176 / 117)" % kept)
+    followed = d.wanted_density(1, 320, 176, 175.5)
+    check("base.framework-followed-the-dpi-scales-from-the-base", followed == 320,
+          "got %r, want 320 (213 x 176 / 117)" % followed)
+    unmoved = d.wanted_density(1, 213, 117, 117.0)
+    check("base.dpi-unchanged-keeps-the-held-rule", unmoved == 213, "got %r" % unmoved)
+    d._base.clear()
+    nobase = d.wanted_density(1, 213, 176, 175.5)
+    check("base.no-base-recorded-keeps-the-held-rule", nobase == 214, "got %r" % nobase)
+
+    state.update(physical=213, override=None)
+    writes.clear()
+    dump15 = DUMP.replace("800.0 x 800.0 dpi, address {port=1}", "%s x %s dpi, address {port=1}")
+    held = {"dpi": "117.0"}
+
+    def android15(cmd):
+        """fake a framework that keeps its density while the DPI changes"""
+        if cmd.startswith("dumpsys display"):
+            return dump15 % (held["dpi"], held["dpi"])
+        if cmd.startswith("wm density -d"):
+            out = "Physical density: %d" % state["physical"]
+            return out + ("\nOverride density: %d" % state["override"] if state["override"] else "")
+        if cmd.startswith("wm density reset"):
+            state["override"] = None
+            return ""
+        if cmd.startswith("wm density "):
+            state["override"] = int(cmd.split()[2])
+            writes.append(state["override"])
+            return ""
+        return None
+    d.android = android15
+    check("born.records-the-base", d.reset_density_override(1) and d._base.get(1) == (213, 117.0),
+          "base %r" % (d._base.get(1),))
+    held["dpi"] = "175.5"
+    ok = d.apply(2, 1, 1.5, 176)
+    check("apply.a15-kept-density-is-scaled-from-the-base", ok is True and writes == [320],
+          "apply -> %r after writing %r" % (ok, writes))
+
+    d._base.clear()
+    d._base[1] = (213, 117.0)
+    state.update(physical=213, override=266)
+    writes.clear()
+    held["dpi"] = "146.25"
+    back = d.apply(2, 1, 1.0, 117)
+    check("base.scale-one-read-after-the-next-scale-keeps-the-old-base",
+          back is True and d._base.get(1) == (213, 117.0),
+          "apply -> %r, base %r (the framework already held the next scale's 146.25dpi)"
+          % (back, d._base.get(1)))
+    again = d.apply(2, 1, 1.25, 146)
+    check("apply.next-scale-after-a-late-scale-one-scales-from-the-base", again is True and writes == [266],
+          "apply -> %r after writing %r, want [266] (213 x 146 / 117)" % (again, writes))
+    state.update(override=None)
+    held["dpi"] = "117.0"
+    d._base[1] = (213, 100.0)
+    check("base.scale-one-read-at-its-own-dpi-records-the-base", d.apply(2, 1, 1.0, 117) is True
+          and d._base.get(1) == (213, 117.0), "base %r" % (d._base.get(1),))
+
     if failures:
         print("test_displayd_scale: %d failure(s)" % len(failures))
         return 1

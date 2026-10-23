@@ -26,6 +26,7 @@ android/composer/display-pool-invisible.py	selftest	-	display-pool-invisible che
 android/composer/display-pool-invisible.py	run	-	spare display has no wayland surface	-	-
 android/composer/pointer-observation.sh	run	-	cursor position read as sprite origin	-	-
 android/composer/pointer-observation.sh	selftest	-	pointer-observation check	--selftest	-
+android/composer/pointer-icon.sh	run	-	android pointer types map to host cursor shapes	-	-
 android/composer/release-spare-atomic.py	selftest	-	release-spare-atomic check	--selftest	-
 android/composer/release-spare-atomic.py	run	-	release-spare's claimed check is atomic with its teardown	-	-
 android/composer/selection-read.sh	run	-	composer reads the newest complete selection	-	-
@@ -37,6 +38,8 @@ android/display/display-port-lifetime.py	selftest	-	display-port-lifetime check	
 android/display/display-port-lifetime.py	run	-	display ports live as long as their display	-	-
 android/display/display-port-source.py	selftest	-	display-port-source check	--selftest	-
 android/display/display-port-source.py	run	-	display lookups key on the reported port	-	-
+android/display/home-minimizes-windows.sh	selftest	-	home-minimizes-windows check	--selftest	-
+android/display/home-minimizes-windows.sh	run	-	HOME minimizes every app window	-	-
 android/hal/allocator-ring.py	selftest	-	allocator-ring check	--selftest	-
 android/hal/allocator-ring.py	run	-	allocator inode ring is wired, gated and joinable	-	-
 android/hal/gnss-extension-nulls.py	selftest	-	GNSS extension null check	--selftest	-
@@ -57,6 +60,8 @@ android/hal/keymint-migration.sh	selftest	-	keymint-migration check	--selftest	-
 android/hal/keymint-migration.sh	run	-	keystore state migrated once	-	-
 android/hal/mapper-inventory.py	selftest	-	mapper-inventory check	--selftest	-
 android/hal/mapper-inventory.py	run	-	mapper buffer inventory	-	-
+android/hal/mapper-exit-destructors.py	selftest	volatile	mapper exit-destructor check	--selftest	toolchain/ndk_extract/android-ndk-r27c/ toolchain/gfx_aidl_src/mapper/stable-c/
+android/hal/mapper-exit-destructors.py	run	volatile	mapper state outlives exit()	-	toolchain/ndk_extract/android-ndk-r27c/ toolchain/gfx_aidl_src/mapper/stable-c/
 android/hal/mapper-xfer-errors.py	selftest	-	mapper transfer-error check	--selftest	-
 android/hal/mapper-xfer-errors.py	run	-	mapper transfer errors fail no_resources	-	-
 android/hal/power-headroom-link.sh	run	-	power hal headroom link reconnects	-	-

@@ -78,7 +78,7 @@ def virtual_device_cases():
         with tempfile.TemporaryDirectory() as tmp:
             off_conf = os.path.join(tmp, "off.conf")
             with open(off_conf, "w") as h:
-                h.write("[devices]\nvirtual = no\nbluetooth = no\n")
+                h.write("[devices]\nvirtual = no\n")
             os.environ[capabilities.PATH_ENV] = off_conf
             off_text = hals.vendor_manifest_xml()
             base_text = hals.guest_files.read("vendor/manifest.xml")
@@ -89,7 +89,7 @@ def virtual_device_cases():
 
             on_conf = os.path.join(tmp, "on.conf")
             with open(on_conf, "w") as h:
-                h.write("[devices]\nvirtual = yes\nbluetooth = no\n")
+                h.write("[devices]\nvirtual = yes\n")
             os.environ[capabilities.PATH_ENV] = on_conf
             on_text = hals.vendor_manifest_xml()
             cases.append(("the camera provider HAL is present when on",
@@ -111,7 +111,7 @@ def virtual_device_cases():
         with tempfile.TemporaryDirectory() as tmp:
             off_conf = os.path.join(tmp, "off.conf")
             with open(off_conf, "w") as h:
-                h.write("[devices]\nvirtual = no\nbluetooth = no\n")
+                h.write("[devices]\nvirtual = no\n")
             os.environ[capabilities.PATH_ENV] = off_conf
             off_result = hals.stage_virtual_device()
             cases.append(("stage_virtual_device() off returns False", off_result is False))
@@ -119,7 +119,7 @@ def virtual_device_cases():
 
             on_conf = os.path.join(tmp, "on.conf")
             with open(on_conf, "w") as h:
-                h.write("[devices]\nvirtual = yes\nbluetooth = no\n")
+                h.write("[devices]\nvirtual = yes\n")
             os.environ[capabilities.PATH_ENV] = on_conf
             on_result = hals.stage_virtual_device()
             cases.append(("stage_virtual_device() on calls _stage_virtual_device once", len(calls) == 1))
@@ -385,16 +385,19 @@ def bluetooth_cases():
                     hals.BLUETOOTH_SYSFS = sysfs
                     want = granted == "yes" and controller
                     declared = "IBluetoothHci/default" in hals.vendor_manifest_xml()
-                    cases.append(("bluetooth=%s, controller=%s: the manifest declares IBluetoothHci exactly when armed"
-                                  % (granted, controller), declared == want and hals.bluetooth_armed() == want))
+                    cases.append(("bluetooth=%s, controller=%s: the manifest declares IBluetoothHci and armed is %s"
+                                  % (granted, controller, want), declared and hals.bluetooth_armed() == want))
     finally:
         hals.BLUETOOTH_SYSFS = prev_sysfs
         if prev_conf is None:
             os.environ.pop(capabilities.PATH_ENV, None)
         else:
             os.environ[capabilities.PATH_ENV] = prev_conf
-    cases.append(("the staged manifest hardcodes no Bluetooth HAL",
-                  "IBluetoothHci" not in hals.guest_files.read("vendor/manifest.xml")))
+    boot_text = read_text(os.path.join(REPO, "src", "androidd", "boot.py"))
+    cases.append(("the primer is told whether Bluetooth is armed",
+                  '.replace("@RHIZO_BLUETOOTH_ARMED@", "1" if bluetooth_armed() else "0")' in boot_text))
+    cases.append(("the primer turns bluetooth_on off only when Bluetooth is not armed",
+                  '"@RHIZO_BLUETOOTH_ARMED@" == "0"' in boot_text and "settings put global bluetooth_on 0" in boot_text))
     return cases
 
 def check():

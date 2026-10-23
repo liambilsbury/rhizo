@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+using rhizo::CanSendUnaccelerated;
 using rhizo::ReconcileObservedAxis;
 
 static int failures = 0;
@@ -30,6 +31,19 @@ int main() {
   check(got == 439, "with no model the origin is taken", got);
   got = ReconcileObservedAxis(true, 12, 0, 82);
   check(got == 12, "a sprite clipped at the edge still bounds a model inside it", got);
+  const int64_t ms = 1000000;
+  got = CanSendUnaccelerated(45 * ms, 900, 0);
+  check(got, "a move after the 40ms stop time is sent", got);
+  got = CanSendUnaccelerated(8 * ms, 5, 0);
+  check(got, "a slow move (625 counts/s) is sent at once", got);
+  got = CanSendUnaccelerated(8 * ms, 6, 0);
+  check(!got, "a move faster than the flat segment is held", got);
+  got = CanSendUnaccelerated(8 * ms, 3, 4);
+  check(got, "the speed is the length of the move, not one axis", got);
+  got = CanSendUnaccelerated(8 * ms, -4, -4);
+  check(!got, "a diagonal over the limit is held", got);
+  got = CanSendUnaccelerated(0, 1, 0);
+  check(!got, "a move in the same instant as the last one is held", got);
   if (failures) {
     std::printf("pointer_observation_test: %d failure(s)\n", failures);
     return 1;

@@ -81,7 +81,8 @@ WINDOWS_BODY = """return workspace.windowList().map(w => ({
     internalId: String(w.internalId), resourceClass: w.resourceClass, desktopFileName: w.desktopFileName,
     caption: w.caption, pid: w.pid, rect: {x: w.clientGeometry.x, y: w.clientGeometry.y,
     width: w.clientGeometry.width, height: w.clientGeometry.height},
-    frameHeight: w.frameGeometry.height, fullScreen: w.fullScreen,
+    frameHeight: w.frameGeometry.height, frameWidth: w.frameGeometry.width, fullScreen: w.fullScreen,
+    maximizeArea: workspace.clientArea(KWin.MaximizeArea, w),
     maximizeMode: w.maximizeMode, active: w.active, minimized: w.minimized,
     output: w.output ? w.output.name : "", normalWindow: w.normalWindow, dialog: w.dialog,
     popupWindow: w.popupWindow, notification: w.notification,
@@ -386,7 +387,7 @@ def is_app_window(w):
 def window_json(w):
     """map a KWin window to harness JSON"""
     f = w.get("rect") or {}
-    return {
+    out = {
         "id": str(w.get("internalId", "")).strip("{}"),
         "app_id": w.get("resourceClass") or w.get("desktopFileName") or "",
         "title": w.get("caption") or "",
@@ -398,6 +399,11 @@ def window_json(w):
         "focused": bool(w.get("active")),
         "monitor": w.get("output") or "",
     }
+    area = w.get("maximizeArea")
+    if area and area.get("width") and area.get("height"):
+        out["work_area"] = {"w": round(area["width"] - (w.get("frameWidth", f.get("width", 0)) - f.get("width", 0))),
+                            "h": round(area["height"] - (w.get("frameHeight", f.get("height", 0)) - f.get("height", 0)))}
+    return out
 
 
 def windows_json(raw):
@@ -854,6 +860,8 @@ def selftest():
                    "x": 652, "y": 296, "w": 696, "h": 532, "decoration_h": 36, "fullscreen": False, "maximized": True,
                    "focused": True, "monitor": "Virtual-0"}], "windows: %r" % got)
     check(window_json(dict(foot, maximizeMode=1))["maximized"] is False, "vertical-only maximize read as maximized")
+    paneled = window_json(dict(foot, frameWidth=696, maximizeArea={"x": 0, "y": 0, "width": 1280, "height": 754}))
+    check(paneled["work_area"] == {"w": 1280, "h": 718}, "the maximize area less the frame: %r" % paneled)
     check(window_json(dict(foot, resourceClass="", desktopFileName="org.x"))["app_id"] == "org.x",
           "app_id falls back to desktopFileName")
 

@@ -5,6 +5,9 @@ import io
 import json
 import os
 import re
+import select
+import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -12,14 +15,16 @@ import time
 USAGE = """Usage:
   gnome-harness.py ping
   gnome-harness.py shot OUT.png [x y w h] [--output NAME]
-  gnome-harness.py pointer abs X Y | rel DX DY | btn CODE 0|1 | axis h|v VALUE
+  gnome-harness.py pointer abs X Y | rel DX DY | btn CODE 0|1 | axis h|v VALUE | axis-discrete h|v STEPS
                           | drag SX SY DX DY
-  gnome-harness.py pointer-session   stdin: press X Y | moveto X Y | abs X Y | release | quit
+  gnome-harness.py pointer-session   stdin: press X Y | moveto X Y | abs X Y | release
+                                     | btn CODE 0|1 | key CODE 0|1 | quit
   gnome-harness.py key single CODE 0|1 | chord CODE [CODE...]
   gnome-harness.py windows
   gnome-harness.py window-op ID fullscreen|unfullscreen|maximize|unmaximize|
                              move X Y|resize W H|to_monitor NAME|activate|close|above
   gnome-harness.py outputs list|remove NAME|add WxH|scale NAME N
+  gnome-harness.py virtual-monitor WxH   hold a ScreenCast virtual monitor until SIGTERM
   gnome-harness.py seat-devices
   gnome-harness.py notifications list|activate ID [KEY]
   gnome-harness.py --selftest"""
@@ -47,6 +52,8 @@ SC_DEST = "org.gnome.Mutter.ScreenCast"
 SC_PATH = "/org/gnome/Mutter/ScreenCast"
 SC_IFACE = "org.gnome.Mutter.ScreenCast"
 SC_SESSION_IFACE = "org.gnome.Mutter.ScreenCast.Session"
+SC_STREAM_IFACE = "org.gnome.Mutter.ScreenCast.Stream"
+SC_CURSOR_EMBEDDED = 1
 
 DC_DEST = "org.gnome.Mutter.DisplayConfig"
 DC_PATH = "/org/gnome/Mutter/DisplayConfig"
@@ -225,6 +232,8 @@ class PointerSession:
             raise RuntimeError("GetCurrentState reported no logical monitors at all")
         self.rd, self.streams = rd_stream_session(conn, [lm["connector"] for lm in self.layout])
         self.pressed = False
+        self.plain = None
+        self.held = set()
 
     def _abs(self, x, y):
         """move the pointer to an absolute point and check where it landed"""
@@ -246,6 +255,19 @@ class PointerSession:
         self.conn.call(RD_DEST, self.rd, RD_SESSION_IFACE, "NotifyPointerButton", "ib", [272, down])
         self.pressed = down
 
+    def plain_event(self, kind, code, down):
+        """send a button or key event through a stream-less session held across calls"""
+        if self.plain is None:
+            self.plain = rd_create_session(self.conn)
+        if kind == "button":
+            self.conn.call(RD_DEST, self.plain, RD_SESSION_IFACE, "NotifyPointerButton", "ib", [code, down])
+        else:
+            self.conn.call(RD_DEST, self.plain, RD_SESSION_IFACE, "NotifyKeyboardKeycode", "ub", [code, down])
+        if down:
+            self.held.add((kind, code))
+        else:
+            self.held.discard((kind, code))
+
     def handle(self, line):
         """return the result line for a command"""
         words = line.split()
@@ -263,15 +285,26 @@ class PointerSession:
         if verb == "release" and not args:
             self.button(False)
             return "released"
-        raise ValueError("unknown command %r (press X Y | moveto X Y | abs X Y | release | quit)" % line)
+        if verb in ("btn", "key") and len(args) == 2 and args[1] in ("0", "1"):
+            kind = "button" if verb == "btn" else "key"
+            self.plain_event(kind, int(args[0]), args[1] == "1")
+            return "%s %d %s" % (kind, int(args[0]), args[1])
+        raise ValueError("unknown command %r (press X Y | moveto X Y | abs X Y | release | "
+                         "btn CODE 0|1 | key CODE 0|1 | quit)" % line)
 
     def close(self):
-        """release a held button and stop the session"""
+        """release the held buttons and keys and stop the sessions"""
         try:
             if self.pressed:
                 self.button(False)
+            for kind, code in sorted(self.held):
+                self.plain_event(kind, code, False)
         finally:
-            rd_stop(self.conn, self.rd)
+            try:
+                if self.plain is not None:
+                    rd_stop(self.conn, self.plain)
+            finally:
+                rd_stop(self.conn, self.rd)
 
 
 def cmd_pointer_session(conn, stdin=None, stdout=None):
@@ -327,6 +360,16 @@ def cmd_pointer_axis(conn, axis, value):
         rd_stop(conn, rd_path)
 
 
+def cmd_pointer_axis_discrete(conn, axis, steps):
+    """send a discrete wheel step on an axis in a new session"""
+    rd_path = rd_create_session(conn)
+    try:
+        conn.call(RD_DEST, rd_path, RD_SESSION_IFACE, "NotifyPointerAxisDiscrete",
+                  "ui", [1 if axis == "h" else 0, int(steps)])
+    finally:
+        rd_stop(conn, rd_path)
+
+
 def cmd_key(conn, code, state):
     """send a key press or release in a new session"""
     rd_path = rd_create_session(conn)
@@ -350,15 +393,38 @@ def cmd_key_chord(conn, codes):
 
 
 
-def _output_rect(conn, connector):
-    """return the logical rect of a connector"""
-    for lm in logical_layout(get_state(conn)):
-        if lm["connector"] == connector:
-            return int(lm["x"]), int(lm["y"]), lm["w"], lm["h"]
-    raise RuntimeError("shot --output %s: no active logical monitor uses that connector" % connector)
+def output_crop_box(img_w, img_h, layout, connector):
+    """return the box of a connector's output in a whole-stage image and the output's pixel size"""
+    lm = next((lm for lm in layout if lm["connector"] == connector), None)
+    if lm is None:
+        raise RuntimeError("shot --output %s: no active logical monitor uses that connector" % connector)
+    minx = min(int(m["x"]) for m in layout)
+    miny = min(int(m["y"]) for m in layout)
+    stage_w = max(int(m["x"]) + m["w"] for m in layout) - minx
+    stage_h = max(int(m["y"]) + m["h"] for m in layout) - miny
+    fx, fy = img_w / stage_w, img_h / stage_h
+    box = (int(round((int(lm["x"]) - minx) * fx)), int(round((int(lm["y"]) - miny) * fy)),
+           int(round(lm["w"] * fx)), int(round(lm["h"] * fy)))
+    if box[0] + box[2] > img_w or box[1] + box[3] > img_h:
+        raise RuntimeError("shot --output %s: its box %r is outside the %dx%d stage image"
+                           % (connector, box, img_w, img_h))
+    return box, (int(lm["mode_w"]), int(lm["mode_h"]))
 
 
-def cmd_shot(conn, out_path, region, output=None):
+def crop_png(src, dst, img_box_for):
+    """write dst as the box of src that img_box_for(width, height) names"""
+    import gi
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+    pb = GdkPixbuf.Pixbuf.new_from_file(src)
+    (x, y, w, h), (dw, dh) = img_box_for(pb.get_width(), pb.get_height())
+    sub = pb.new_subpixbuf(x, y, w, h)
+    if (w, h) != (dw, dh):
+        sub = sub.scale_simple(dw, dh, GdkPixbuf.InterpType.NEAREST)
+    sub.savev(dst, "png", [], [])
+
+
+def cmd_shot(conn, out_path, region, output=None, crop=crop_png):
     """write a screenshot to out_path"""
     code = conn.request_name(SCREENSHOT_OWN_NAME, dbus_min.NAME_FLAG_DO_NOT_QUEUE)
     if code != dbus_min.REQUEST_NAME_REPLY_PRIMARY_OWNER:
@@ -369,9 +435,22 @@ def cmd_shot(conn, out_path, region, output=None):
     except FileNotFoundError:
         pass
     if output:
-        x, y, w, h = _output_rect(conn, output)
-        ok, filename = conn.call(SHELL_DEST, SCREENSHOT_PATH, SCREENSHOT_IFACE, "ScreenshotArea",
-                                  "iiiibs", [x, y, w, h, False, out_path])
+        # ScreenshotArea draws no cursor: shoot the whole stage, then crop to the output
+        layout = logical_layout(get_state(conn))
+        if not any(lm["connector"] == output for lm in layout):
+            raise RuntimeError("shot --output %s: no active logical monitor uses that connector" % output)
+        full_path = out_path + ".stage.png"
+        try:
+            ok, filename = conn.call(SHELL_DEST, SCREENSHOT_PATH, SCREENSHOT_IFACE, "Screenshot",
+                                      "bbs", [True, False, full_path])
+            if ok and filename == full_path:
+                crop(full_path, out_path, lambda iw, ih: output_crop_box(iw, ih, layout, output))
+                filename = out_path
+        finally:
+            try:
+                os.unlink(full_path)
+            except FileNotFoundError:
+                pass
     elif region:
         x, y, w, h = region
         ok, filename = conn.call(SHELL_DEST, SCREENSHOT_PATH, SCREENSHOT_IFACE, "ScreenshotArea",
@@ -402,11 +481,23 @@ def cmd_ping(conn):
 def cmd_windows(conn):
     """return the harness's window list"""
     (windows_json,) = conn.call(HARNESS_DEST, HARNESS_PATH, HARNESS_IFACE, "GetWindows", "", [])
-    return json.loads(windows_json)
+    windows = json.loads(windows_json)
+    if any("monitor_rect" in w for w in windows):
+        at = {(int(lm["x"]), int(lm["y"])): lm["connector"] for lm in logical_layout(get_state(conn))}
+        for w in windows:
+            r = w.pop("monitor_rect", None) or {}
+            w["monitor"] = at.get((r.get("x"), r.get("y")), w.get("monitor"))
+    return windows
 
 
 def cmd_window_op(conn, win_id, op, args):
     """run an operation on a window through the harness"""
+    if op == "to_monitor":
+        lm = next((lm for lm in logical_layout(get_state(conn)) if lm["connector"] == args.get("monitor")), None)
+        if lm is None:
+            raise RuntimeError("window-op to_monitor %s: no active logical monitor uses that connector"
+                               % args.get("monitor"))
+        args = dict(args, at={"x": int(lm["x"]), "y": int(lm["y"])})
     conn.call(HARNESS_DEST, HARNESS_PATH, HARNESS_IFACE, "WindowOp",
               "uss", [int(win_id), op, json.dumps(args)])
 
@@ -472,43 +563,53 @@ def apply_monitors(conn, serial, logical_monitors):
               [serial, METHOD_TEMPORARY, logical_monitors, {}])
 
 
-def cmd_outputs_add(conn, size):
-    """add a virtual monitor to the layout"""
-    w, h = (int(v) for v in size.split("x"))
-    state = get_state(conn)
-    serial, monitors, _logical_monitors, _props = state
-    layout = logical_layout(state)
-    used = {lm["connector"] for lm in layout}
-    connector = mode_id = None
-    for spec, modes, _mprops in monitors:
-        if spec[0] in used:
+def connector_with_mode(state, w, h, skip=()):
+    """return the first connector outside skip offering a WxH mode, and that mode's id"""
+    for spec, modes, _mprops in state[1]:
+        if spec[0] in skip:
             continue
         for mid, mw, mh, *_rest in modes:
             if mw == w and mh == h:
-                connector, mode_id = spec[0], mid
-                break
-        if connector:
-            break
+                return spec[0], mid
+    return None, None
+
+
+def cmd_outputs_add(conn, size, spawn=None):
+    """add an unused or virtual monitor to the layout"""
+    w, h = (int(v) for v in size.split("x"))
+    state = get_state(conn)
+    used = {lm["connector"] for lm in logical_layout(state)}
+    connector, mode_id = connector_with_mode(state, w, h, used)
     if connector is None:
-        raise RuntimeError(
-            "outputs add %dx%d: no unused virtual monitor offers that mode" % (w, h))
+        connector = (spawn or spawn_virtual_monitor)(size)
+        state = get_state(conn)
+        found, mode_id = connector_with_mode(state, w, h, used - {connector})
+        if found != connector:
+            raise RuntimeError("outputs add %s: the virtual monitor %s offers no %s mode" % (size, connector, size))
+    layout = [lm for lm in logical_layout(state) if lm["connector"] != connector]
 
     maxx = int(max((lm["x"] + lm["w"] for lm in layout), default=0))
     new_logical = [apply_entry(lm) for lm in layout] + [(maxx, 0, 1.0, 0, False, [(connector, mode_id, {})])]
-    apply_monitors(conn, serial, new_logical)
+    apply_monitors(conn, state[0], new_logical)
 
     def connector_present(state):
-        """return whether the connector is in the logical layout"""
-        return any(lm["connector"] == connector for lm in logical_layout(state))
+        """return whether the connector is in the logical layout at the new position"""
+        return any(lm["connector"] == connector and lm["x"] == maxx and lm["y"] == 0
+                   for lm in logical_layout(state))
 
     if _poll_state_until(conn, connector_present) is None:
         raise RuntimeError("outputs add %s: ApplyMonitorsConfig did not bring %s into the "
-                            "logical layout within 5s" % (size, connector))
+                            "logical layout at %d,0 within 5s" % (size, connector, maxx))
     return connector
 
 
-def cmd_outputs_remove(conn, name):
+def cmd_outputs_remove(conn, name, stop_held=None):
     """remove a connector's logical monitor"""
+    if (stop_held or stop_virtual_monitor)(name):
+        if _poll_state_until(conn, lambda st: name not in connectors_of(st)) is None:
+            raise RuntimeError("outputs remove %s: the virtual monitor is still listed 5s after "
+                                "its holder ended" % name)
+        return
     state = get_state(conn)
     layout = logical_layout(state)
     kept = [apply_entry(lm) for lm in layout if lm["connector"] != name]
@@ -548,6 +649,189 @@ def cmd_outputs_scale(conn, name, scale):
 
 
 
+VMON_DIR = os.path.join(tempfile.gettempdir(), "rhizo-gnome-vmon")
+VMON_READY_S = 30.0
+
+
+def connectors_of(state):
+    """return all of the connectors the display configuration lists"""
+    return {spec[0] for spec, _modes, _mprops in state[1]}
+
+
+def _vmon_pidfile(connector):
+    """return the pid file of a connector's virtual-monitor holder"""
+    return os.path.join(VMON_DIR, connector + ".pid")
+
+
+def spawn_virtual_monitor(size):
+    """start a detached virtual-monitor holder and return its connector once it is ready"""
+    os.makedirs(VMON_DIR, exist_ok=True)
+    log_path = os.path.join(VMON_DIR, "%s-%d.log" % (size, time.time_ns()))
+    with open(log_path, "w") as log, open(os.devnull) as null:
+        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "virtual-monitor", size],
+                                stdin=null, stdout=log, stderr=log, start_new_session=True)
+    deadline = time.monotonic() + VMON_READY_S
+    while True:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        m = re.search(r"^ready (\S+)$", text, re.M)
+        if m:
+            return m.group(1)
+        if proc.poll() is not None:
+            raise RuntimeError("virtual-monitor %s exited %d before it was ready: %s"
+                               % (size, proc.returncode, " ".join(text.split()[-40:])))
+        if time.monotonic() >= deadline:
+            proc.terminate()
+            raise RuntimeError("virtual-monitor %s was not ready within %ds: %s"
+                               % (size, VMON_READY_S, " ".join(text.split()[-40:])))
+        time.sleep(0.25)
+
+
+def stop_virtual_monitor(connector, timeout_s=10.0):
+    """end the holder of a connector's virtual monitor and return whether one was running"""
+    try:
+        with open(_vmon_pidfile(connector), encoding="ascii") as fh:
+            pid = int(fh.read().strip())
+        with open("/proc/%d/cmdline" % pid, "rb") as fh:
+            argv = fh.read().split(b"\0")
+        if b"virtual-monitor" not in argv:
+            return False
+        os.kill(pid, signal.SIGTERM)
+    except (FileNotFoundError, ValueError, ProcessLookupError):
+        return False
+    deadline = time.monotonic() + timeout_s
+    while os.path.exists("/proc/%d" % pid):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("the virtual-monitor holder of %s (pid %d) still runs %ds after SIGTERM"
+                               % (connector, pid, timeout_s))
+        time.sleep(0.1)
+    return True
+
+
+def _await_signal(conn, path, iface, member, timeout_s, closed_path=None):
+    """return the body of the first matching signal"""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        for m in conn.dispatch():
+            if m.mtype != dbus_min.SIGNAL:
+                continue
+            if m.path == path and m.interface == iface and m.member == member:
+                return m.body
+            if closed_path and m.path == closed_path and m.member == "Closed":
+                raise RuntimeError("mutter closed the ScreenCast session %s" % closed_path)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("no %s.%s on %s within %.0fs" % (iface, member, path, timeout_s))
+        select.select([conn.fileno()], [], [], min(remaining, 0.25))
+
+
+def vmon_open(conn):
+    """start a ScreenCast session recording a virtual monitor and return it and its PipeWire node"""
+    (sc_path,) = conn.call(SC_DEST, SC_PATH, SC_IFACE, "CreateSession", "a{sv}", [{}])
+    try:
+        props = {"cursor-mode": dbus_min.Variant("u", SC_CURSOR_EMBEDDED),
+                 "is-platform": dbus_min.Variant("b", True)}
+        (stream_path,) = conn.call(SC_DEST, sc_path, SC_SESSION_IFACE, "RecordVirtual", "a{sv}", [props])
+        conn.add_match("type='signal',interface='%s',member='PipeWireStreamAdded',path='%s'"
+                       % (SC_STREAM_IFACE, stream_path))
+        conn.add_match("type='signal',interface='%s',member='Closed',path='%s'" % (SC_SESSION_IFACE, sc_path))
+        conn.call(SC_DEST, sc_path, SC_SESSION_IFACE, "Start", "", [])
+        (node_id,) = _await_signal(conn, stream_path, SC_STREAM_IFACE, "PipeWireStreamAdded", 10.0, sc_path)
+    except Exception:
+        try:
+            conn.call(SC_DEST, sc_path, SC_SESSION_IFACE, "Stop", "", [])
+        except (dbus_min.DBusError, TimeoutError, ConnectionError):
+            pass
+        raise
+    return sc_path, int(node_id)
+
+
+def vmon_consume(node_id, w, h):
+    """negotiate WxH on the PipeWire stream and return a failure poll and a stop"""
+    import gi
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    Gst.init(None)
+    pipeline = Gst.parse_launch(
+        "pipewiresrc path=%d ! video/x-raw,width=%d,height=%d,max-framerate=60/1 ! fakesink sync=false"
+        % (node_id, w, h))
+    if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+        raise RuntimeError("the pipewiresrc pipeline for node %d would not play" % node_id)
+    bus = pipeline.get_bus()
+
+    def poll(timeout_s):
+        """return why the pipeline stopped, or None"""
+        msg = bus.timed_pop_filtered(int(timeout_s * Gst.SECOND), Gst.MessageType.ERROR | Gst.MessageType.EOS)
+        if msg is None:
+            return None
+        if msg.type == Gst.MessageType.EOS:
+            return "end of stream"
+        err, dbg = msg.parse_error()
+        return "%s (%s)" % (err.message, dbg)
+
+    def stop():
+        """stop the pipeline"""
+        pipeline.set_state(Gst.State.NULL)
+
+    return poll, stop
+
+
+def vmon_hold(conn, sc_path, connector, poll, stopping, check_every_s=2.0):
+    """hold the virtual monitor until stopped"""
+    next_check = time.monotonic() + check_every_s
+    while not stopping():
+        why = poll(0.5)
+        if why:
+            raise RuntimeError("the virtual monitor's PipeWire stream stopped: %s" % why)
+        for m in conn.dispatch():
+            if m.mtype == dbus_min.SIGNAL and m.path == sc_path and m.member == "Closed":
+                raise RuntimeError("mutter closed the ScreenCast session of %s" % connector)
+        if time.monotonic() >= next_check:
+            if connector not in connectors_of(get_state(conn)):
+                raise RuntimeError("%s is no longer in the display configuration" % connector)
+            next_check = time.monotonic() + check_every_s
+
+
+def cmd_virtual_monitor(conn, size, out=None, consume=vmon_consume, stopping=None):
+    """create a WxH virtual monitor, print its connector and hold it until SIGTERM"""
+    out = out or sys.stdout
+    w, h = (int(v) for v in size.split("x"))
+    if stopping is None:
+        stop_flag = []
+        signal.signal(signal.SIGTERM, lambda *_a: stop_flag.append(1))
+        stopping = lambda: bool(stop_flag)  # noqa: E731
+    before = connectors_of(get_state(conn))
+    sc_path, node_id = vmon_open(conn)
+    stop_pipeline = None
+    pidfile = None
+    try:
+        poll, stop_pipeline = consume(node_id, w, h)
+        state = _poll_state_until(conn, lambda st: connector_with_mode(st, w, h, before)[0], deadline_s=20.0)
+        if state is None:
+            why = poll(0) or "no pipeline error"
+            raise RuntimeError("no new %s connector appeared within 20s of PipeWire node %d (%s)"
+                               % (size, node_id, why))
+        connector = connector_with_mode(state, w, h, before)[0]
+        os.makedirs(VMON_DIR, exist_ok=True)
+        pidfile = _vmon_pidfile(connector)
+        with open(pidfile, "w", encoding="ascii") as fh:
+            fh.write("%d\n" % os.getpid())
+        print("ready %s" % connector, file=out, flush=True)
+        vmon_hold(conn, sc_path, connector, poll, stopping)
+    finally:
+        if pidfile:
+            try:
+                os.unlink(pidfile)
+            except FileNotFoundError:
+                pass
+        if stop_pipeline:
+            stop_pipeline()
+        try:
+            conn.call(SC_DEST, sc_path, SC_SESSION_IFACE, "Stop", "", [])
+        except (dbus_min.DBusError, TimeoutError, ConnectionError, OSError):
+            pass
+
+
 def connect():
     """connect to the session bus and say hello"""
     conn = dbus_min.Connection.connect()
@@ -573,6 +857,8 @@ def main_run(args):
             cmd_pointer_btn(conn, args.code, args.state)
         elif args.pointer_verb == "axis":
             cmd_pointer_axis(conn, args.axis, args.value)
+        elif args.pointer_verb == "axis-discrete":
+            cmd_pointer_axis_discrete(conn, args.axis, args.steps)
         elif args.pointer_verb == "drag":
             cmd_pointer_drag(conn, args.sx, args.sy, args.dx, args.dy)
     elif args.cmd == "pointer-session":
@@ -612,6 +898,8 @@ def main_run(args):
             cmd_outputs_remove(conn, args.name)
         elif args.outputs_verb == "scale":
             cmd_outputs_scale(conn, args.name, args.n)
+    elif args.cmd == "virtual-monitor":
+        cmd_virtual_monitor(conn, args.size)
     else:
         raise AssertionError("unhandled cmd %r" % args.cmd)
     return 0
@@ -636,6 +924,7 @@ def build_parser():
     pr = psub.add_parser("rel"); pr.add_argument("dx", type=float); pr.add_argument("dy", type=float)
     pb = psub.add_parser("btn"); pb.add_argument("code", type=int); pb.add_argument("state", type=int)
     px = psub.add_parser("axis"); px.add_argument("axis", choices=["h", "v"]); px.add_argument("value", type=float)
+    pxd = psub.add_parser("axis-discrete"); pxd.add_argument("axis", choices=["h", "v"]); pxd.add_argument("steps", type=int)
     pd = psub.add_parser("drag")
     pd.add_argument("sx", type=float); pd.add_argument("sy", type=float)
     pd.add_argument("dx", type=float); pd.add_argument("dy", type=float)
@@ -668,6 +957,9 @@ def build_parser():
     oa = osub.add_parser("add"); oa.add_argument("size")
     orm = osub.add_parser("remove"); orm.add_argument("name")
     osc = osub.add_parser("scale"); osc.add_argument("name"); osc.add_argument("n", type=float)
+
+    p = sub.add_parser("virtual-monitor")
+    p.add_argument("size", help="WxH")
 
     return ap
 
@@ -761,7 +1053,7 @@ class _selftest:
                             "no handler registered for %s.%s in this test case" % (msg.interface, msg.member))
                 return
             try:
-                sig, reply_args = handler(msg)
+                sig, reply_args, *signals = handler(msg)
             except Exception as e:  # noqa: BLE001
                 sys.stderr.write("FakeBus: handler for %s.%s raised %r -- treating as NO_REPLY\n"
                                   % (msg.interface, msg.member, e))
@@ -772,6 +1064,11 @@ class _selftest:
                 self._error(msg, *reply_args)
                 return
             self._reply(msg, sig, reply_args)
+            for path, iface, member, ssig, sargs in (signals[0] if signals else []):
+                self._serial += 1
+                self.sock.sendall(dbus_min.build_message(dbus_min.SIGNAL, dbus_min.FLAG_NO_REPLY_EXPECTED,
+                                                         self._serial, ssig, sargs, path=path,
+                                                         interface=iface, member=member))
 
         def _reply(self, msg, sig, args):
             """send a method return for a message"""
@@ -979,19 +1276,34 @@ class _selftest:
             except RuntimeError as e:
                 check("failure" in str(e), "shot ok=False error did not say so: %r" % e)
 
-            def do_shot_output(conn):
-                """answer a screenshot call by writing a small PNG"""
-                with open(shot_tmp.name, "wb") as f:
+            def do_shot_output(msg):
+                """fake a whole-stage screenshot by writing a small PNG to the requested path"""
+                with open(msg.body[2], "wb") as f:
                     f.write(b"\x89PNG\r\n\x1a\nfake but non-empty")
-                return "bs", [True, shot_tmp.name]
+                return "bs", [True, msg.body[2]]
             handlers = {
                 (DC_IFACE, "GetCurrentState"): cls._ok(cls.STATE_SIG, cls.ONE_MONITOR_STATE),
-                (SCREENSHOT_IFACE, "ScreenshotArea"): do_shot_output,
+                (SCREENSHOT_IFACE, "Screenshot"): do_shot_output,
             }
-            filename, calls = cls._run_case(handlers, lambda conn: cmd_shot(conn, shot_tmp.name, None, "Meta-0"))
+            cropped = []
+
+            def fake_crop(src, dst, box_for):
+                """record the crop and write the output image"""
+                cropped.append((src, dst, box_for(3840, 2160), os.path.exists(src)))
+                with open(dst, "wb") as f:
+                    f.write(b"\x89PNG\r\n\x1a\ncropped")
+            filename, calls = cls._run_case(handlers, lambda conn: cmd_shot(conn, shot_tmp.name, None, "Meta-0",
+                                                                           crop=fake_crop))
             check(filename == shot_tmp.name, "shot --output returned %r" % (filename,))
-            cls._expect(check, calls, "ScreenshotArea", SHELL_DEST, SCREENSHOT_PATH, SCREENSHOT_IFACE,
-                        "iiiibs", body=[0, 0, 1920, 1080, False, shot_tmp.name])
+            cls._expect(check, calls, "Screenshot", SHELL_DEST, SCREENSHOT_PATH, SCREENSHOT_IFACE,
+                        "bbs", body=[True, False, shot_tmp.name + ".stage.png"])
+            check(cls._find(calls, "ScreenshotArea") is None, "shot --output still used ScreenshotArea, which draws no cursor")
+            check(len(cropped) == 1 and cropped[0][1] == shot_tmp.name and cropped[0][3],
+                  "shot --output did not crop the stage image into the output file: %r" % (cropped,))
+            if cropped:
+                check(cropped[0][2] == ((0, 0, 3840, 2160), (1920, 1080)),
+                      "shot --output crop of a 3840x2160 stage image of one 1920x1080 output: %r" % (cropped[0][2],))
+            check(not os.path.exists(shot_tmp.name + ".stage.png"), "shot --output left the stage image behind")
 
             try:
                 cls._run_case({(DC_IFACE, "GetCurrentState"): cls._ok(cls.STATE_SIG, cls.ONE_MONITOR_STATE)},
@@ -1085,7 +1397,8 @@ class _selftest:
 
         lines, calls = run_session(session_handlers(), "press 100 100\nmoveto 400 300\nwiggle\nrelease\nquit\n")
         check(lines == ["ready", "pressed 100 100", "movedto 400 300",
-                        "error wiggle: unknown command 'wiggle' (press X Y | moveto X Y | abs X Y | release | quit)",
+                        "error wiggle: unknown command 'wiggle' (press X Y | moveto X Y | abs X Y | release | "
+                        "btn CODE 0|1 | key CODE 0|1 | quit)",
                         "released"],
               "pointer-session answers %r" % (lines,))
         moves = [c[5] for c in calls if c[3] == "NotifyPointerMotionAbsolute"]
@@ -1104,6 +1417,24 @@ class _selftest:
         buttons = [c[5] for c in calls if c[3] == "NotifyPointerButton"]
         check(lines == ["ready", "pressed 50 60"] and buttons == [[272, True], [272, False]],
               "pointer-session at EOF with the button held: answers %r, buttons %r" % (lines, buttons))
+
+        handlers = session_handlers()
+        handlers[(RD_SESSION_IFACE, "NotifyKeyboardKeycode")] = cls._ok()
+        lines, calls = run_session(handlers, "btn 272 1\nbtn 272 0\nkey 29 1\nkey 30 1\nkey 30 0\nbtn 273 1\nquit\n")
+        check(lines == ["ready", "button 272 1", "button 272 0", "key 29 1", "key 30 1", "key 30 0", "button 273 1"],
+              "pointer-session btn/key answers %r" % (lines,))
+        creates = [c for c in calls if c[2] == RD_IFACE and c[3] == "CreateSession"]
+        check(len(creates) == 2, "pointer-session btn/key: want the stream session plus a plain session held "
+              "across all btn/key commands, got %d CreateSession" % len(creates))
+        events = [(c[3], c[5]) for c in calls if c[3] in ("NotifyPointerButton", "NotifyKeyboardKeycode")]
+        check(events == [("NotifyPointerButton", [272, True]), ("NotifyPointerButton", [272, False]),
+                         ("NotifyKeyboardKeycode", [29, True]), ("NotifyKeyboardKeycode", [30, True]),
+                         ("NotifyKeyboardKeycode", [30, False]), ("NotifyPointerButton", [273, True]),
+                         ("NotifyPointerButton", [273, False]), ("NotifyKeyboardKeycode", [29, False])],
+              "pointer-session btn/key events %r: want each press and release on a session and the held "
+              "button and key released at quit" % (events,))
+        stops = [c for c in calls if c[3] == "Stop" and c[2] == RD_SESSION_IFACE]
+        check(len(stops) == 2, "pointer-session btn/key: want both sessions stopped at quit, got %d Stop" % len(stops))
 
         lines, _ = run_session(session_handlers(land=lambda x, y: (x + 40, y)), "abs 200 200\nquit\n")
         check(len(lines) == 2 and lines[1].startswith("error abs: pointer landed at (240"),
@@ -1129,6 +1460,7 @@ class _selftest:
             (RD_SESSION_IFACE, "NotifyPointerMotionRelative"): cls._ok(),
             (RD_SESSION_IFACE, "NotifyPointerButton"): cls._ok(),
             (RD_SESSION_IFACE, "NotifyPointerAxis"): cls._ok(),
+            (RD_SESSION_IFACE, "NotifyPointerAxisDiscrete"): cls._ok(),
             (RD_SESSION_IFACE, "NotifyKeyboardKeycode"): cls._ok(),
         }
 
@@ -1143,6 +1475,13 @@ class _selftest:
         _, calls = cls._run_case(rd_only, lambda conn: cmd_pointer_axis(conn, "h", 3.0))
         cls._expect(check, calls, "NotifyPointerAxis", RD_DEST, "/rd/x", RD_SESSION_IFACE,
                     "ddu", body=[3.0, 0.0, 0])
+
+        _, calls = cls._run_case(rd_only, lambda conn: cmd_pointer_axis_discrete(conn, "v", 1))
+        cls._expect(check, calls, "NotifyPointerAxisDiscrete", RD_DEST, "/rd/x", RD_SESSION_IFACE,
+                    "ui", body=[0, 1])
+        _, calls = cls._run_case(rd_only, lambda conn: cmd_pointer_axis_discrete(conn, "h", -2))
+        cls._expect(check, calls, "NotifyPointerAxisDiscrete", RD_DEST, "/rd/x", RD_SESSION_IFACE,
+                    "ui", body=[1, -2])
 
         _, calls = cls._run_case(rd_only, lambda conn: cmd_key(conn, 30, 0))
         cls._expect(check, calls, "NotifyKeyboardKeycode", RD_DEST, "/rd/x", RD_SESSION_IFACE,
@@ -1167,9 +1506,27 @@ class _selftest:
         cls._expect(check, calls, "WindowOp", HARNESS_DEST, HARNESS_PATH, HARNESS_IFACE, "uss",
                     body=[7, "move", json.dumps({"x": 5, "y": 6})])
 
+        two_state = [5, cls.ONE_MONITOR_STATE[1] + [
+            (("Meta-1", "v", "p", "s1"), [("m1", 2560, 1440, 60.0, 1.0, [1.0], {"is-current": cls._v("b", True)})], {})],
+            cls.ONE_MONITOR_STATE[2] + [(1920, 0, 1.0, 0, False, [("Meta-1", "v", "p", "s1")], {})], {}]
+        handlers = {(HARNESS_IFACE, "WindowOp"): cls._ok(), (DC_IFACE, "GetCurrentState"): cls._ok(cls.STATE_SIG, two_state)}
         _, calls = cls._run_case(handlers, lambda conn: cmd_window_op(conn, 9, "to_monitor", {"monitor": "Meta-1"}))
         cls._expect(check, calls, "WindowOp", HARNESS_DEST, HARNESS_PATH, HARNESS_IFACE, "uss",
-                    body=[9, "to_monitor", json.dumps({"monitor": "Meta-1"})])
+                    body=[9, "to_monitor", json.dumps({"monitor": "Meta-1", "at": {"x": 1920, "y": 0}})])
+        try:
+            cls._run_case(handlers, lambda conn: cmd_window_op(conn, 9, "to_monitor", {"monitor": "Meta-9"}))
+            check(False, "window-op to_monitor on an unknown connector should have raised")
+        except RuntimeError as e:
+            check("Meta-9" in str(e), "to_monitor error did not name the connector: %r" % e)
+
+        placed = [dict(sample_windows[0], monitor="1", monitor_rect={"x": 1920, "y": 0, "w": 2560, "h": 1440}),
+                  dict(sample_windows[0], id=8, monitor="0", monitor_rect={"x": 0, "y": 0, "w": 1920, "h": 1080})]
+        handlers = {(HARNESS_IFACE, "GetWindows"): cls._ok("s", [json.dumps(placed)]),
+                    (DC_IFACE, "GetCurrentState"): cls._ok(cls.STATE_SIG, two_state)}
+        windows, _calls = cls._run_case(handlers, cmd_windows)
+        check([w.get("monitor") for w in windows] == ["Meta-1", "Meta-0"],
+              "windows did not name each monitor by the connector at its origin: %r" % (windows,))
+        check(not any("monitor_rect" in w for w in windows), "windows kept the extension's monitor_rect")
 
         sample_devices = [{"name": "rhizo virtual pointer", "device_type": 1, "vendor_id": "", "product_id": ""}]
         handlers = {(HARNESS_IFACE, "GetSeatDevices"): cls._ok("s", [json.dumps(sample_devices)])}
@@ -1300,6 +1657,163 @@ class _selftest:
             check(False, "outputs scale on an unknown connector should have raised")
         except RuntimeError as e:
             check("Meta-9" in str(e), "outputs scale error did not name the connector: %r" % e)
+
+
+        two_mode_monitor = (("Meta-1", "v", "p", "s1"),
+                            [("m1", 2560, 1440, 60.0, 1.0, [1.0], {"is-current": cls._v("b", True)})], {})
+        handlers, _holder = cls._stateful_outputs_handlers(cls.ONE_MONITOR_STATE)
+        spawned = []
+
+        def fake_spawn(size):
+            """add a virtual monitor the way mutter does once its stream is negotiated"""
+            spawned.append(size)
+            st = _holder["state"]
+            _holder["state"] = [st[0], st[1] + [two_mode_monitor],
+                                st[2] + [(0, 0, 1.0, 0, False, [two_mode_monitor[0]], {})], st[3]]
+            return "Meta-1"
+
+        connector, calls = cls._run_case(handlers, lambda conn: cmd_outputs_add(conn, "2560x1440", spawn=fake_spawn))
+        check(spawned == ["2560x1440"], "outputs add with no unused monitor did not spawn a virtual one: %r" % spawned)
+        check(connector == "Meta-1", "outputs add returned %r for the spawned virtual monitor, want Meta-1" % connector)
+        apply_call = cls._expect(check, calls, "ApplyMonitorsConfig", DC_DEST, DC_PATH, DC_IFACE, APPLY_MONITORS_SIG)
+        if apply_call is not None:
+            logical = apply_call[5][2]
+            names = [lm[5][0][0] for lm in logical]
+            check(names == ["Meta-0", "Meta-1"], "outputs add applied %r, want Meta-0 then Meta-1 once each" % names)
+            check(len(logical) == 2 and logical[1][0] == 1920 and logical[1][5][0][1] == "m1",
+                  "outputs add did not place the virtual monitor at x=1920 in its 2560x1440 mode: %r" % (logical,))
+
+        handlers, _holder = cls._stateful_outputs_handlers(cls.ONE_MONITOR_STATE)
+        try:
+            cls._run_case(handlers, lambda conn: cmd_outputs_add(conn, "2560x1440", spawn=lambda size: "Meta-7"))
+            check(False, "outputs add should fail when the spawned connector is not listed")
+        except RuntimeError as e:
+            check("Meta-7" in str(e), "outputs add error did not name the missing connector: %r" % e)
+
+        held_state = [4, cls.ONE_MONITOR_STATE[1] + [two_mode_monitor],
+                      cls.ONE_MONITOR_STATE[2] + [(1920, 0, 1.0, 0, False, [two_mode_monitor[0]], {})], {}]
+        handlers, _holder = cls._stateful_outputs_handlers(held_state)
+        stopped = []
+
+        def fake_stop(name):
+            """end a held virtual monitor"""
+            stopped.append(name)
+            st = _holder["state"]
+            _holder["state"] = [st[0], [m for m in st[1] if m[0][0] != name],
+                                [lm for lm in st[2] if lm[5][0][0] != name], st[3]]
+            return True
+
+        _, calls = cls._run_case(handlers, lambda conn: cmd_outputs_remove(conn, "Meta-1", stop_held=fake_stop))
+        check(stopped == ["Meta-1"], "outputs remove did not end the holder of Meta-1: %r" % stopped)
+        check(cls._find(calls, "ApplyMonitorsConfig") is None,
+              "outputs remove of a held virtual monitor also sent ApplyMonitorsConfig")
+        handlers, _holder = cls._stateful_outputs_handlers(held_state)
+        try:
+            cls._run_case(handlers, lambda conn: cmd_outputs_remove(conn, "Meta-1", stop_held=lambda n: True))
+            check(False, "outputs remove should fail when the virtual monitor outlives its holder")
+        except RuntimeError as e:
+            check("still listed" in str(e), "outputs remove error did not say the monitor is still listed: %r" % e)
+
+        def vmon_handlers(state_holder, signal_node=True):
+            """return the ScreenCast table for a virtual-monitor session"""
+            stream_signal = [("/sc/9/stream", SC_STREAM_IFACE, "PipeWireStreamAdded", "u", [77])]
+            return {
+                ("org.freedesktop.DBus", "AddMatch"): cls._ok(),
+                (SC_IFACE, "CreateSession"): cls._ok("o", ["/sc/9"]),
+                (SC_SESSION_IFACE, "RecordVirtual"): cls._ok("o", ["/sc/9/stream"]),
+                (SC_SESSION_IFACE, "Start"): lambda m: ("", [], stream_signal if signal_node else []),
+                (SC_SESSION_IFACE, "Stop"): cls._ok(),
+                (DC_IFACE, "GetCurrentState"): lambda m: (cls.STATE_SIG, state_holder["state"]),
+            }
+
+        holder = {"state": list(cls.ONE_MONITOR_STATE)}
+        out = io.StringIO()
+        consumed = []
+
+        def fake_consume(node_id, w, h):
+            """negotiate the size"""
+            consumed.append((node_id, w, h))
+            st = holder["state"]
+            holder["state"] = [st[0], st[1] + [two_mode_monitor], st[2], st[3]]
+            return (lambda t: time.sleep(min(t, 0.02))), (lambda: consumed.append("stopped"))
+
+        saved_dir = globals()["VMON_DIR"]
+        tmp = tempfile.TemporaryDirectory(prefix="vmon-selftest-")
+        tmpdir = globals()["VMON_DIR"] = tmp.name
+        try:
+            _, calls = cls._run_case(vmon_handlers(holder), lambda conn: cmd_virtual_monitor(
+                conn, "2560x1440", out=out, consume=fake_consume, stopping=lambda: "ready" in out.getvalue()))
+            check(out.getvalue() == "ready Meta-1\n", "virtual-monitor printed %r, want 'ready Meta-1'" % out.getvalue())
+            check(consumed[:1] == [(77, 2560, 1440)], "virtual-monitor consumed %r, want node 77 at 2560x1440" % consumed)
+            check(consumed[-1:] == ["stopped"], "virtual-monitor did not stop its pipeline: %r" % consumed)
+            rv = cls._expect(check, calls, "RecordVirtual", SC_DEST, "/sc/9", SC_SESSION_IFACE, "a{sv}")
+            if rv is not None:
+                props = rv[5][0]
+                check(_prop(props, "is-platform") is True and _prop(props, "cursor-mode") == SC_CURSOR_EMBEDDED,
+                      "RecordVirtual properties %r, want is-platform true and an embedded cursor" % (props,))
+            order = [c[3] for c in calls if c[3] in ("CreateSession", "RecordVirtual", "Start", "Stop")]
+            check(order == ["CreateSession", "RecordVirtual", "Start", "Stop"],
+                  "virtual-monitor ScreenCast call order %r" % order)
+            check(not os.path.exists(os.path.join(tmpdir, "Meta-1.pid")), "virtual-monitor left its pid file behind")
+
+            holder = {"state": list(cls.ONE_MONITOR_STATE)}
+            out = io.StringIO()
+            try:
+                cls._run_case(vmon_handlers(holder), lambda conn: cmd_virtual_monitor(
+                    conn, "2560x1440", out=out,
+                    consume=lambda n, w, h: (fake_consume(n, w, h) and (lambda t: "pipewiresrc: lost"), lambda: None),
+                    stopping=lambda: False))
+                check(False, "virtual-monitor should fail when its stream stops")
+            except RuntimeError as e:
+                check("lost" in str(e), "virtual-monitor stream failure did not carry the pipeline's reason: %r" % e)
+
+            holder = {"state": list(cls.ONE_MONITOR_STATE)}
+            try:
+                cls._run_case(vmon_handlers(holder, signal_node=False), lambda conn: _await_signal(
+                    conn, "/sc/9/stream", SC_STREAM_IFACE, "PipeWireStreamAdded", 0.5))
+                check(False, "waiting for a signal that never comes should time out")
+            except TimeoutError:
+                check(True, "")
+        finally:
+            globals()["VMON_DIR"] = saved_dir
+            tmp.cleanup()
+
+
+        two_layout = [
+            {"connector": "Virtual-1", "x": 0, "y": 0, "w": 1280, "h": 800, "mode_w": 1280, "mode_h": 800},
+            {"connector": "Meta-0", "x": 1280, "y": 0, "w": 1280, "h": 720, "mode_w": 2560, "mode_h": 1440},
+        ]
+        got = output_crop_box(5120, 1600, two_layout, "Meta-0")
+        check(got == ((2560, 0, 2560, 1440), (2560, 1440)),
+              "crop box of a scale-2 output in a 2x stage image: %r" % (got,))
+        got = output_crop_box(5120, 1600, two_layout, "Virtual-1")
+        check(got == ((0, 0, 2560, 1600), (1280, 800)),
+              "crop box of a scale-1 output in a 2x stage image, scaled back to its pixels: %r" % (got,))
+        got = output_crop_box(2560, 800, [dict(two_layout[0]), dict(two_layout[1], mode_w=1280, mode_h=720)], "Meta-0")
+        check(got == ((1280, 0, 1280, 720), (1280, 720)), "crop box of a scale-1 second output: %r" % (got,))
+        try:
+            output_crop_box(2560, 800, two_layout, "Meta-9")
+            check(False, "a crop box for an unknown connector should have raised")
+        except RuntimeError as e:
+            check("Meta-9" in str(e), "crop box error did not name the connector: %r" % e)
+        try:
+            import gi
+            gi.require_version("GdkPixbuf", "2.0")
+            from gi.repository import GdkPixbuf
+        except (ImportError, ValueError):
+            GdkPixbuf = None
+        if GdkPixbuf is not None:
+            with tempfile.TemporaryDirectory(prefix="crop-selftest-") as td:
+                src, dst = os.path.join(td, "s.png"), os.path.join(td, "d.png")
+                pb = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 8, 2)
+                pb.fill(0x000000ff)
+                pb.new_subpixbuf(4, 0, 4, 2).fill(0xff0000ff)
+                pb.savev(src, "png", [], [])
+                crop_png(src, dst, lambda iw, ih: ((4, 0, 4, 2), (2, 1)))
+                out = GdkPixbuf.Pixbuf.new_from_file(dst)
+                px = out.get_pixels()
+                check((out.get_width(), out.get_height()) == (2, 1) and px[0] == 0xff and px[1] == 0,
+                      "crop_png did not cut the red right half and scale it to 2x1")
 
         n = len(checks)
         failed = [why for ok, why in checks if not ok]

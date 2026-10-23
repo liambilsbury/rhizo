@@ -9,6 +9,8 @@ source ../../system/lib/desk-user-lib.sh
 
 HARNESS_DIR="/tmp/rhizo-plasma-harness"
 KDE_INJECT="/usr/local/bin/kde-inject"
+KDE_VOUT="/usr/local/bin/kde-virtual-output"
+VOUT_UNITS="rhizo-virtual-output-*"
 UNIT="rhizo-kwin"
 INJECT_UNIT="rhizo-kde-inject"
 INJECT_FIFO="/tmp/rhizo-plasma-inject.fifo"
@@ -105,16 +107,32 @@ stop_rig() {
     || { log_fail "could not remove $RUNTIME_DIR/$RIG_SOCKET after $UNIT stopped"; return 1; }
 }
 
+# succeed when the rig socket's only listener is the seat login's kwin
+seat_kwin_holds_rig_socket() {
+  local out
+  [[ "$(unit_state "$UNIT")" == inactive || "$(unit_state "$UNIT")" == no-manager ]] || return 1
+  out=$(ssh_vm -t 10 "rd=$RUNTIME_DIR; for pid in \$(pgrep -u $DESKTOP_UID -x kwin_wayland); do
+  socks=\$($KWIN_LISTENS)
+  case \" \$(echo \$socks) \" in *' $RIG_SOCKET '*) ;; *) continue ;; esac
+  case \"\$(cat /proc/\$pid/cgroup)\" in
+    */session.slice/plasma-kwin_wayland.service|*/session-*.scope) echo SEAT=\$pid ;;
+    *) echo OTHER=\$pid ;;
+  esac
+done" 2>/dev/null)
+  [[ "$out" == SEAT=* && "$out" != *$'\n'* ]] || return 1
+  log "the seat login's kwin (pid ${out#SEAT=}) holds $RUNTIME_DIR/$RIG_SOCKET with $UNIT inactive"
+}
+
 # stop the session's units and delete their files
 stop_helpers() {
   local out
   stop_system_unit "$INJECT_UNIT" || return 1
   stop_unit "$WATCH_UNIT" || return 1
   out=$(as_user 20 "if test -S \"\$XDG_RUNTIME_DIR/systemd/private\"; then
-  systemctl --user stop '$LAUNCHER_UNITS' || exit 1
-  left=\$(systemctl --user list-units --state=active,activating,deactivating,reloading --no-legend --plain '$LAUNCHER_UNITS') \
+  systemctl --user stop '$LAUNCHER_UNITS' '$VOUT_UNITS' || exit 1
+  left=\$(systemctl --user list-units --state=active,activating,deactivating,reloading --no-legend --plain '$LAUNCHER_UNITS' '$VOUT_UNITS') \
     || { echo 'systemctl --user list-units did not answer'; exit 1; }
-  [ -z \"\$left\" ] || { echo \"a launcher unit still runs: \$left\"; exit 1; }
+  [ -z \"\$left\" ] || { echo \"a launcher or virtual output unit still runs: \$left\"; exit 1; }
 fi
 rm -f $INJECT_FIFO $INJECT_OUT $NOTIFY_OUT $NOTIFY_REC $NOTIFY_SERVER /tmp/rhizo-plasma-launcher-*.out" 2>&1) \
     || { log_fail "the launchers' units or the helpers' files outlived the stop: $(tr '\n' ' ' <<<"$out")"; return 1; }
@@ -599,13 +617,16 @@ if grep -q '^MISSING' <<<"$out"; then
 fi
 ssh_vm -t 10 "mkdir -p $HARNESS_DIR && chmod 755 $HARNESS_DIR" || { log_fail "could not create $HARNESS_DIR"; exit 1; }
 timeout 30 scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" ../../system/guest/plasma-harness.py ../../system/guest/gnome-launcher.py ../../../src/services/deskbridge/dbus_min.py \
-  ../../system/inject/kde-inject.c ../../../tools/build/test-tools/kde-inject.sh "$SSH_TARGET:$HARNESS_DIR/" \
-  || { log_fail "could not stage plasma-harness.py, gnome-launcher.py, dbus_min.py and kde-inject's sources to $HARNESS_DIR"; exit 1; }
-ssh_vm -t 10 "chmod 644 $HARNESS_DIR/plasma-harness.py $HARNESS_DIR/gnome-launcher.py $HARNESS_DIR/dbus_min.py $HARNESS_DIR/kde-inject.c $HARNESS_DIR/kde-inject.sh" \
+  ../../system/inject/kde-inject.c ../../../tools/build/test-tools/kde-inject.sh \
+  ../../system/inject/kde-virtual-output.c ../../../tools/build/test-tools/kde-virtual-output.sh "$SSH_TARGET:$HARNESS_DIR/" \
+  || { log_fail "could not stage plasma-harness.py, gnome-launcher.py, dbus_min.py and the kde-inject and kde-virtual-output sources to $HARNESS_DIR"; exit 1; }
+ssh_vm -t 10 "chmod 644 $HARNESS_DIR/plasma-harness.py $HARNESS_DIR/gnome-launcher.py $HARNESS_DIR/dbus_min.py $HARNESS_DIR/kde-inject.c $HARNESS_DIR/kde-inject.sh $HARNESS_DIR/kde-virtual-output.c $HARNESS_DIR/kde-virtual-output.sh" \
   || { log_fail "could not make the staged harness readable"; exit 1; }
 out=$(ssh_vm -t 120 "bash $HARNESS_DIR/kde-inject.sh $HARNESS_DIR/kde-inject.c $KDE_INJECT && echo RHIZO_KDE_INJECT_BUILT" 2>&1)
 [[ "$out" == *RHIZO_KDE_INJECT_BUILT* ]] || { log_fail "kde-inject did not build on the guest: $out"; exit 1; }
-log "plasma-harness.py and gnome-launcher.py staged in $HARNESS_DIR, kde-inject built at $KDE_INJECT"
+out=$(ssh_vm -t 120 "bash $HARNESS_DIR/kde-virtual-output.sh $HARNESS_DIR/kde-virtual-output.c $KDE_VOUT && echo RHIZO_KDE_VOUT_BUILT" 2>&1)
+[[ "$out" == *RHIZO_KDE_VOUT_BUILT* ]] || { log_fail "kde-virtual-output did not build on the guest: $out"; exit 1; }
+log "plasma-harness.py and gnome-launcher.py staged in $HARNESS_DIR, kde-inject built at $KDE_INJECT, kde-virtual-output at $KDE_VOUT"
 if [[ "$MODE" == install-only ]]; then
   exit 0
 fi
@@ -752,7 +773,7 @@ if [[ "$SESSION_MODE" == login ]]; then
     [[ "$START_ARGS" != *--monitors* ]] || { log_fail "a seat login runs on the machine's own outputs and cannot take --monitors"; exit 1; }
     stop_helpers || exit 1
     unstage_sway_login || exit 1
-    stop_rig || exit 1
+    seat_kwin_holds_rig_socket || stop_rig || exit 1
     stage_login || exit 1
     await_login_session || exit 1
   elif [[ -n "$START_ARGS" ]]; then

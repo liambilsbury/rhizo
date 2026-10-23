@@ -89,8 +89,13 @@ desk_bridge_await_auth() {
 
 # write the post-flip AVC denials to a file
 avc_after_flip() {
-  local out="$1" raw
-  raw=$(ssh_vm -t 60 "cat /var/log/rhizo/rhizo-avc.log.1 /var/log/rhizo/rhizo-avc.log 2>/dev/null | awk '/enforcing=1 old_enforcing=0/ {flip=1; print \"RHIZO_AVC_FLIP\"; next} flip && !alive {alive=1; print \"RHIZO_AVC_ALIVE\"} flip && /avc: *denied/ {print}'; echo RHIZO_AVC_END")
+  local out="$1" raw mode
+  mode=$(guest_selinux_mode) || { printf '%s\n' "$mode" > "$out"; return 5; }
+  if [[ "$mode" == namespace ]]; then
+    raw=$(ssh_vm -t 60 "dmesg | awk '/RHIZO_MARKER selinuxns=android-enforce value=1/ && !flip {flip=1; print \"RHIZO_AVC_FLIP\"; next} flip && !alive {alive=1; print \"RHIZO_AVC_ALIVE\"} flip && /avc: *denied/ {print}'; echo RHIZO_AVC_END")
+  else
+    raw=$(ssh_vm -t 60 "cat /var/log/rhizo/rhizo-avc.log.1 /var/log/rhizo/rhizo-avc.log 2>/dev/null | awk '/enforcing=1 old_enforcing=0/ {flip=1; print \"RHIZO_AVC_FLIP\"; next} flip && !alive {alive=1; print \"RHIZO_AVC_ALIVE\"} flip && /avc: *denied/ {print}'; echo RHIZO_AVC_END")
+  fi
   if [[ "$raw" != *RHIZO_AVC_END ]]; then
     printf '<read cut off: no end marker>\n' > "$out"
     return 2

@@ -38,6 +38,7 @@
 #include "aidl/android/hardware/graphics/composer3/BnComposer.h"
 #include "aidl/android/hardware/graphics/composer3/BnComposerClient.h"
 
+#include "input/pointer_icon.h"
 #include "input/pointer_observation.h"
 #include "input/uinput.h"
 #include "input/us_kcm_table.h"
@@ -1373,6 +1374,7 @@ class RhizoComposerClient : public BnComposerClient {
     bool internal = false;
     float dpi = kBaseDpi;
     int32_t cursorScaleMilli = 1000;
+    bool cursorAccelerated = false;
     int32_t scale120 = 120;
     int32_t cropX = 0;
     int32_t cropY = 0;
@@ -1417,7 +1419,10 @@ class RhizoComposerClient : public BnComposerClient {
       int32_t height = 0;
       int32_t hotspotX = 0;
       int32_t hotspotY = 0;
+      bool hotspotMeasured = false;
       uint32_t digest = 0;
+      uint64_t imageChanges = 0;
+      rhizo::PointerTypeAsk typeAsk;
       uint64_t layerCmds = 0;
       uint64_t offered = 0;
       uint64_t seen = 0;
@@ -1715,27 +1720,26 @@ class RhizoComposerClient : public BnComposerClient {
     }
     munmap(s, srcSize);
 
+    // the hotspot is the pointer less the sprite origin
     int32_t hotspotX = 0, hotspotY = 0;
-    if (ls.haveCursorPos) {
-      hotspotX = ls.cursorPosX - ls.displayFrame.left;
-      hotspotY = ls.cursorPosY - ls.displayFrame.top;
-    } else {
-      int32_t px = 0, py = 0;
-      if (GetCursorPointerAbs(ds.id, &px, &py)) {
-        const int32_t scale120 = ds.scale120 > 0 ? ds.scale120 : 120;
-        hotspotX = (px * scale120 + 60) / 120 - ls.displayFrame.left;
-        hotspotY = (py * scale120 + 60) / 120 - ls.displayFrame.top;
-      }
+    int32_t px = 0, py = 0;
+    if (GetCursorPointerAbs(ds.id, &px, &py)) {
+      hotspotX = px - (ls.haveCursorPos ? ls.cursorPosX : ls.displayFrame.left);
+      hotspotY = py - (ls.haveCursorPos ? ls.cursorPosY : ls.displayFrame.top);
     }
+    const bool measured = hotspotX >= 0 && hotspotY >= 0 && hotspotX < d.width && hotspotY < d.height;
     if (hotspotX < 0) hotspotX = 0;
     if (hotspotY < 0) hotspotY = 0;
     if (hotspotX > d.width - 1) hotspotX = d.width - 1;
     if (hotspotY > d.height - 1) hotspotY = d.height - 1;
 
     const uint32_t digest = Fnv1a32(argb.data(), argb.size());
+    const bool newImage = !ds.cursor.valid || digest != ds.cursor.digest;
+    // keep an image's first hotspot; later ones differ only by pointer lag
     if (ds.cursor.valid && digest == ds.cursor.digest && d.width == ds.cursor.width &&
-        d.height == ds.cursor.height && hotspotX == ds.cursor.hotspotX &&
-        hotspotY == ds.cursor.hotspotY) {
+        d.height == ds.cursor.height &&
+        (ds.cursor.hotspotMeasured || !measured ||
+         (hotspotX == ds.cursor.hotspotX && hotspotY == ds.cursor.hotspotY))) {
       ds.cursor.bufferId = d.bufferId;
       return;
     }
@@ -1749,11 +1753,33 @@ class RhizoComposerClient : public BnComposerClient {
     ds.cursor.height = d.height;
     ds.cursor.hotspotX = hotspotX;
     ds.cursor.hotspotY = hotspotY;
+    ds.cursor.hotspotMeasured = measured;
     ds.cursor.digest = digest;
     ds.cursor.uploads++;
     klogf("cursor layer: display %lld upload #%llu %dx%d hotspot %d,%d digest %u (batches seen %llu)",
           static_cast<long long>(ds.id), (unsigned long long)ds.cursor.uploads, d.width, d.height,
           hotspotX, hotspotY, digest, (unsigned long long)ds.cursor.seen);
+    if (newImage) {
+      ds.cursor.imageChanges++;
+      ShowPointerTypeLocked(ds);
+    }
+  }
+
+  // show the host shape for the cursor image's pointer type
+  void ShowPointerTypeLocked(DisplayState& ds) {
+    auto known = pointerTypeByImage_.find(ds.cursor.digest);
+    if (known != pointerTypeByImage_.end()) {
+      wayland_.SetCursorType(ds.id, known->second);
+      return;
+    }
+    const int64_t now = NowNanos();
+    if (pointerTypeAsks_.size() >= kMaxPointerTypeImages) pointerTypeAsks_.clear();
+    int& attempts = pointerTypeAsks_[ds.cursor.digest];
+    if (!rhizo::ShouldAskPointerType(ds.cursor.typeAsk, now, attempts)) return;
+    attempts++;
+    ds.cursor.typeAsk = {true, ds.cursor.digest, ds.cursor.imageChanges, now};
+    WriteControlReply("display cursor-unknown id=" + std::to_string(ds.id) + " port=" +
+                      std::to_string(ds.port) + " digest=" + std::to_string(ds.cursor.digest));
   }
 
   // copy layer command fields into LayerState
@@ -2332,6 +2358,40 @@ class RhizoComposerClient : public BnComposerClient {
     *y = ds ? ds->cropY : 0;
   }
 
+  // remove a freeform display's task through the task helper before the display
+  bool RequestTaskClose(int64_t displayId) {
+    char path[96];
+    snprintf(path, sizeof(path), "/data/rhizo_control/task-close-%lld", static_cast<long long>(displayId));
+    const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+      klogf("freeform: cannot write %s: errno=%d", path, errno);
+      return false;
+    }
+    fchmod(fd, 0644);
+    const bool ok = write(fd, "close\n", 6) == 6;
+    close(fd);
+    if (!ok) {
+      unlink(path);
+      return false;
+    }
+    // remove the display if the helper has not within 3s
+    std::thread([this, displayId] {
+      std::this_thread::sleep_for(std::chrono::seconds(3));
+      {
+        std::lock_guard<std::mutex> lg(mutex_);
+        if (displays_.find(displayId) == displays_.end()) return;
+      }
+      klogf("freeform: display %lld still up 3s after its close request, removing it",
+            static_cast<long long>(displayId));
+      {
+        std::lock_guard<std::mutex> lg(workMutex_);
+        pendingRemovals_.push_back(displayId);
+      }
+      WakeControlThread();
+    }).detach();
+    return true;
+  }
+
   // grow the display to the work area for a freeform window
   void OnFreeformWindowSize(int64_t displayId, int32_t width, int32_t height, int32_t scale120) {
     int32_t boundsW = 0, boundsH = 0;
@@ -2343,7 +2403,7 @@ class RhizoComposerClient : public BnComposerClient {
     {
       std::lock_guard<std::mutex> lg(mutex_);
       if (DisplayState* ds = FindLocked(displayId)) {
-        grow = ds->width < workW || ds->height < workH;
+        grow = ds->width < workW || ds->height < workH || ds->scale120 != scale120;
         if (ds->taskW != width || ds->taskH != height) ds->taskDrawn = false;
         ds->taskW = width;
         ds->taskH = height;
@@ -2379,11 +2439,77 @@ class RhizoComposerClient : public BnComposerClient {
 
   // move Android's pointer to the target position
   void ResyncPointer(int64_t displayId, int32_t targetX, int32_t targetY) {
+    const bool accelerated = CursorAccelerated(displayId);
+    if (accelerated) DropHeldPointerMove(displayId);
     uinput_.MoveHome(displayId);
     const int32_t milli = CursorScaleMilli(displayId);
     const int32_t dx = static_cast<int32_t>(static_cast<int64_t>(targetX) * 1000 / milli);
     const int32_t dy = static_cast<int32_t>(static_cast<int64_t>(targetY) * 1000 / milli);
+    if (accelerated) {
+      // keep the move out of the speed estimate of the move home
+      std::this_thread::sleep_for(std::chrono::nanoseconds(rhizo::kVelocityResetNs));
+    }
     if (dx != 0 || dy != 0) uinput_.Move(displayId, dx, dy);
+    if (accelerated) {
+      std::lock_guard<std::mutex> lg(pacerMutex_);
+      pacer_[displayId].lastSendNs = NowNanos();
+    }
+  }
+
+  // return whether Android accelerates the display's mouse past a flat low-speed gain
+  bool CursorAccelerated(int64_t displayId) {
+    std::lock_guard<std::mutex> lg(mutex_);
+    const DisplayState* ds = FindLocked(displayId);
+    return ds && ds->cursorAccelerated;
+  }
+
+  // send a relative move to an accelerated display
+  void PaceAcceleratedMove(int64_t displayId, int32_t dx, int32_t dy) {
+    bool hold = false;
+    {
+      std::lock_guard<std::mutex> lg(pacerMutex_);
+      HeldPointerMove& p = pacer_[displayId];
+      p.dx += dx;
+      p.dy += dy;
+      const int64_t now = NowNanos();
+      if (!rhizo::CanSendUnaccelerated(now - p.lastSendNs, p.dx, p.dy)) {
+        p.dueNs = p.lastSendNs + rhizo::kVelocityResetNs;
+        hold = true;
+      } else {
+        if (p.dx != 0 || p.dy != 0) uinput_.Move(displayId, p.dx, p.dy);
+        p = HeldPointerMove{};
+        p.lastSendNs = now;
+      }
+    }
+    if (hold) WakeControlThread();
+  }
+
+  // drop a display's held move
+  void DropHeldPointerMove(int64_t displayId) {
+    std::lock_guard<std::mutex> lg(pacerMutex_);
+    auto it = pacer_.find(displayId);
+    if (it == pacer_.end()) return;
+    it->second.dx = it->second.dy = 0;
+    it->second.dueNs = 0;
+  }
+
+  // return whether a display has a held move
+  bool HoldingPointerMove(int64_t displayId) {
+    std::lock_guard<std::mutex> lg(pacerMutex_);
+    auto it = pacer_.find(displayId);
+    return it != pacer_.end() && it->second.dueNs != 0;
+  }
+
+  // send all of the held moves that are due
+  void SendDueHeldPointerMoves() {
+    std::lock_guard<std::mutex> lg(pacerMutex_);
+    const int64_t now = NowNanos();
+    for (auto& [id, p] : pacer_) {
+      if (p.dueNs == 0 || now < p.dueNs) continue;
+      if (p.dx != 0 || p.dy != 0) uinput_.Move(id, p.dx, p.dy);
+      p = HeldPointerMove{};
+      p.lastSendNs = now;
+    }
   }
 
   // return the display's cursor scale in thousandths
@@ -2404,7 +2530,13 @@ class RhizoComposerClient : public BnComposerClient {
     const int32_t dy = static_cast<int32_t>(ny / milli);
     rem = {static_cast<int32_t>(nx - static_cast<int64_t>(dx) * milli),
            static_cast<int32_t>(ny - static_cast<int64_t>(dy) * milli)};
-    if (dx != 0 || dy != 0) uinput_.Move(displayId, dx, dy);
+    if (dx != 0 || dy != 0) {
+      if (CursorAccelerated(displayId)) {
+        PaceAcceleratedMove(displayId, dx, dy);
+      } else {
+        uinput_.Move(displayId, dx, dy);
+      }
+    }
     ap = {mx, my};
   }
 
@@ -2465,8 +2597,10 @@ class RhizoComposerClient : public BnComposerClient {
         SetCursorPointerAbs(ev.displayId, x, y);
         int32_t obsX = 0, obsY = 0;
         if (TakeObservedPointer(ev.displayId, &obsX, &obsY)) {  // NOLINT
-          androidPointer_[ev.displayId] = {obsX, obsY};
-          pointerRemainder_[ev.displayId] = {0, 0};
+          if (!HoldingPointerMove(ev.displayId)) {
+            androidPointer_[ev.displayId] = {obsX, obsY};
+            pointerRemainder_[ev.displayId] = {0, 0};
+          }
           StepAndroidPointer(ev.displayId, mx, my);
         } else {
           ResyncPointer(ev.displayId, mx, my);
@@ -2486,7 +2620,7 @@ class RhizoComposerClient : public BnComposerClient {
           uinput_.Touch(ev.displayId, x, y,  true);
         } else if (haveLast && (x != lastX || y != lastY)) {
           int32_t obsX = 0, obsY = 0;
-          if (TakeObservedPointer(ev.displayId, &obsX, &obsY)) {
+          if (TakeObservedPointer(ev.displayId, &obsX, &obsY) && !HoldingPointerMove(ev.displayId)) {
             androidPointer_[ev.displayId] = {obsX, obsY};
             pointerRemainder_[ev.displayId] = {0, 0};
           }
@@ -2926,6 +3060,10 @@ class RhizoComposerClient : public BnComposerClient {
     lastPointerAbs_.erase(id);
     androidPointer_.erase(id);
     pointerRemainder_.erase(id);
+    {
+      std::lock_guard<std::mutex> lg(pacerMutex_);
+      pacer_.erase(id);
+    }
     {
       std::lock_guard<std::mutex> lg(observedPointerMutex_);
       observedPointer_.erase(id);
@@ -3470,9 +3608,48 @@ class RhizoComposerClient : public BnComposerClient {
       WriteControlReply("display identity set id=" + std::to_string(id));
       return;
     }
+    if (n >= 2 && !strcmp(verb, "display") && !strcmp(noun, "cursor-type")) {
+      long long id = 0;
+      unsigned int digest = 0;
+      int type = 0;
+      if (sscanf(line.c_str(), "%*31s %*31s %lld %u %d", &id, &digest, &type) != 3) {
+        WriteControlReply("display cursor-type-failed reason=bad-command");
+        return;
+      }
+      bool kept = false;
+      {
+        std::lock_guard<std::mutex> lg(mutex_);
+        DisplayState* ds = FindLocked(id);
+        if (!ds) {
+          WriteControlReply("display cursor-type-failed id=" + std::to_string(id) + " reason=no-display");
+          return;
+        }
+        auto& ask = ds->cursor.typeAsk;
+        if (!ask.outstanding || ask.digest != digest) {
+          WriteControlReply("display cursor-type id=" + std::to_string(id) + " digest=" +
+                            std::to_string(digest) + " type=" + std::to_string(type) + " kept=0 stale=1");
+          return;
+        }
+        kept = rhizo::PointerTypeAnswerFits(ask, digest, ds->cursor.digest, ds->cursor.imageChanges);
+        ask.outstanding = false;
+        if (kept) {
+          if (pointerTypeByImage_.size() >= kMaxPointerTypeImages) pointerTypeByImage_.clear();
+          pointerTypeByImage_[digest] = static_cast<int32_t>(type);
+        } else {
+          // the image changed during the read: show Android's newest type until the image is named
+          wayland_.SetCursorType(ds->id, static_cast<int32_t>(type));
+        }
+        ShowPointerTypeLocked(*ds);
+      }
+      WriteControlReply("display cursor-type id=" + std::to_string(id) + " digest=" + std::to_string(digest) +
+                        " type=" + std::to_string(type) + " kept=" + (kept ? "1" : "0"));
+      return;
+    }
     if (n >= 4 && !strcmp(verb, "display") && !strcmp(noun, "cursor-scale")) {
       const int64_t id = a;
       const int32_t milli = static_cast<int32_t>(b);
+      int accelerated = 0;
+      sscanf(line.c_str(), "%*s %*s %*d %*d %d", &accelerated);
       if (milli <= 0) {
         WriteControlReply("display cursor-scale-failed id=" + std::to_string(id) + " reason=bad-milli");
         return;
@@ -3485,6 +3662,7 @@ class RhizoComposerClient : public BnComposerClient {
           return;
         }
         ds->cursorScaleMilli = milli;
+        ds->cursorAccelerated = accelerated != 0;
       }
       int32_t hx = 0, hy = 0;
       if (GetCursorPointerAbs(id, &hx, &hy)) {
@@ -3494,7 +3672,8 @@ class RhizoComposerClient : public BnComposerClient {
         uinput_.MoveHome(id);
         SetObservedPointer(id, 0, 0);
       }
-      WriteControlReply("display cursor-scale id=" + std::to_string(id) + " milli=" + std::to_string(milli));
+      WriteControlReply("display cursor-scale id=" + std::to_string(id) + " milli=" + std::to_string(milli) +
+                        (accelerated ? " accelerated=1" : ""));
       return;
     }
     if (n >= 3 && !strcmp(verb, "display") && !strcmp(noun, "toplevel")) {
@@ -3543,6 +3722,10 @@ class RhizoComposerClient : public BnComposerClient {
                   " id_changes=" + std::to_string(ds->cursor.idChanges) +
                   " last_skip=" + std::string(ds->cursor.lastSkip) +
                   " layer=" + std::to_string(ds->cursor.layerId);
+          auto named = pointerTypeByImage_.find(ds->cursor.digest);
+          reply += " pointer_type=" +
+                   (named == pointerTypeByImage_.end() ? std::string("unnamed") : std::to_string(named->second)) +
+                   " type_ask=" + std::to_string(ds->cursor.typeAsk.outstanding);
         }
       }
       WriteControlReply(reply);
@@ -3682,6 +3865,21 @@ class RhizoComposerClient : public BnComposerClient {
       WriteControlReply(!ok ? "display activate-failed id=" + std::to_string(id) + " reason=refused"
                         : held ? "display activate-held id=" + std::to_string(id)
                                : "display activated id=" + std::to_string(id));
+      return;
+    }
+    if (n >= 2 && !strcmp(verb, "display") && !strcmp(noun, "minimize-all")) {
+      std::vector<int64_t> ids;
+      {
+        std::lock_guard<std::mutex> lg(mutex_);
+        for (const auto& kv : displays_) {
+          if (!kv.second.internal && kv.second.waylandBacked) ids.push_back(kv.first);
+        }
+      }
+      std::string minimized;
+      for (int64_t id : ids) {
+        if (wayland_.MinimizeDisplay(id)) minimized += (minimized.empty() ? "" : ",") + std::to_string(id);
+      }
+      WriteControlReply("display minimized ids=" + minimized);
       return;
     }
     if (n >= 2 && !strcmp(verb, "inject") && !strcmp(noun, "touch")) {
@@ -3861,6 +4059,16 @@ class RhizoComposerClient : public BnComposerClient {
             if (timeoutMs < 0 || remainMs < timeoutMs) timeoutMs = static_cast<int>(remainMs);
           }
         }
+        {
+          std::lock_guard<std::mutex> lg(pacerMutex_);
+          const int64_t now = NowNanos();
+          for (const auto& [id, p] : pacer_) {
+            if (p.dueNs == 0) continue;
+            int64_t remainMs = (p.dueNs - now + 999999) / 1000000;
+            if (remainMs < 0) remainMs = 0;
+            if (timeoutMs < 0 || remainMs < timeoutMs) timeoutMs = static_cast<int>(remainMs);
+          }
+        }
         struct pollfd pfds[2] = {{fd, POLLIN, 0}, {controlWakeFd_, POLLIN, 0}};
         poll(pfds, 2, timeoutMs);
         if (controlWakeFd_ >= 0 && (pfds[1].revents & POLLIN)) {
@@ -3931,6 +4139,7 @@ class RhizoComposerClient : public BnComposerClient {
           ApplyRefresh(id, refreshNs);
         }
         for (int64_t id : removals) RemoveDisplay(id);
+        SendDueHeldPointerMoves();
         ServiceSfReleases();
       }
       if (controlWakeFd_ >= 0) {
@@ -4022,6 +4231,7 @@ class RhizoComposerClient : public BnComposerClient {
         [this](int64_t displayId) {
           klogf("Wayland compositor requested close of display %lld",
                 static_cast<long long>(displayId));
+          if (freeformEnabled() && RequestTaskClose(displayId)) return;
           {
             std::lock_guard<std::mutex> lg(workMutex_);
             pendingRemovals_.push_back(displayId);
@@ -4397,9 +4607,20 @@ class RhizoComposerClient : public BnComposerClient {
   }
   std::mutex observedPointerMutex_;
   std::map<int64_t, ObservedPointer> observedPointer_;
+  // a relative move held for an accelerated display
+  struct HeldPointerMove {
+    int32_t dx = 0, dy = 0;
+    int64_t lastSendNs = 0, dueNs = 0;
+  };
+  std::mutex pacerMutex_;
+  std::map<int64_t, HeldPointerMove> pacer_;
 
   std::mutex cursorPointerMutex_;
   std::map<int64_t, std::pair<int32_t, int32_t>> cursorPointerAbs_;
+  // pointer type and request count per cursor image digest (under mutex_)
+  static constexpr size_t kMaxPointerTypeImages = 4096;
+  std::map<uint32_t, int32_t> pointerTypeByImage_;
+  std::map<uint32_t, int> pointerTypeAsks_;
   std::atomic<int64_t> nextDropSeq_{0};
   std::atomic<int64_t> nextClipSeq_{0};
   std::mutex keymapMutex_;

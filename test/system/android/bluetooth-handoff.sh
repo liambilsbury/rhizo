@@ -90,8 +90,7 @@ INIT=$(guest_init_pid 10)
 controller=$(ssh_vm -t 10 "ls /sys/class/bluetooth 2>/dev/null | grep -c '^hci'" 2>&1)
 controller=${controller//[^0-9]/}
 [[ -n "$controller" ]] || { fail "0. could not read /sys/class/bluetooth on the guest"; test_record_verdict FAILED; exit 1; }
-if (( controller > 0 )); then HAS_CONTROLLER=yes; else HAS_CONTROLLER=no; fi
-log "    host controllers: $controller (Android declares Bluetooth: $HAS_CONTROLLER)"
+log "    host controllers: $controller"
 echo "$controller" > "$EV/host-controllers.txt"
 
 step "1. devices.bluetooth on: rhizo-btd runs and its socket reaches Android"
@@ -101,10 +100,10 @@ if [[ "$btd" == active ]]; then
 else
   fail "1. rhizo-btd.service is '$btd'"
 fi
-assert_android_side 1 yes "$HAS_CONTROLLER"
+assert_android_side 1 yes yes
 assert_no_stack_abort 1 "$(ssh_vm -t 10 'date -d "-$(cut -d. -f1 /proc/uptime) sec" +"%m-%d %H:%M:%S.000"' 2>/dev/null)"
 
-step "2. devices.bluetooth off: no rhizo-btd, no socket, no adapter"
+step "2. devices.bluetooth off: no rhizo-btd, no socket, the adapter still declared"
 ssh_vm -t 20 "printf '[devices]\nbluetooth = no\n' > $POLICY_CONF && systemctl stop rhizo-btd.service"
 restart_android restart-off.log || fail "2. restarting Android failed, see restart-off.log"
 INIT=$(guest_init_pid 10)
@@ -115,7 +114,8 @@ if [[ "$btd" != active ]]; then
 else
   fail "2. rhizo-btd.service is active under devices.bluetooth = no"
 fi
-assert_android_side 2 no no
+assert_android_side 2 no yes
+assert_no_stack_abort 2 "$(ssh_vm -t 10 'date -d "-$(cut -d. -f1 /proc/uptime) sec" +"%m-%d %H:%M:%S.000"' 2>/dev/null)"
 
 if (( FAILED )); then
   test_record_verdict FAILED

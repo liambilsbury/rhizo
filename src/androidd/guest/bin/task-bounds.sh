@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# apply the composer's window sizes to each display's freeform task
+# apply the composer's window sizes to each display's freeform task and minimize all of the windows on HOME
 D=/data/rhizo_control
 M=/data/local/tmp/rhizo-tasks
 mkdir -p "$M"
@@ -10,7 +10,10 @@ display_task() {
     /^Display #/ { on = 0 }
     on && match($0, /Task\{[0-9a-f]+ #[0-9]+/) { s = substr($0, RSTART, RLENGTH); sub(/.*#/, "", s); print s; exit }'
 }
-logcat -b events -T 1 -s wm_task_removed:I 2>/dev/null | while read -r line; do
+logcat -b main,events -T 1 -s wm_task_removed:I RhizoHome:I 2>/dev/null | while read -r line; do
+  case "$line" in
+    *" RhizoHome: "*) echo display minimize-all > "$D/control"; continue ;;
+  esac
   task=$(echo "$line" | sed -n 's/.*wm_task_removed: \[\([0-9]*\),.*/\1/p')
   [ -n "$task" ] || continue
   for f in "$M"/task-*; do
@@ -27,7 +30,21 @@ logcat -b events -T 1 -s wm_task_removed:I 2>/dev/null | while read -r line; do
   done
 done &
 inotifyd - "$D:w" | while read -r _ _ file; do
-  case "$file" in task-bounds-*) ;; *) continue ;; esac
+  case "$file" in
+    task-close-*)
+      cid=${file#task-close-}
+      task=""
+      read -r task < "$M/task-$cid" 2>/dev/null
+      if [ -n "$task" ] && dumpsys activity activities | grep -qE "Task\{[0-9a-f]+ #$task[^0-9]" \
+          && am stack remove "$task" >/dev/null 2>&1; then
+        continue
+      fi
+      rm -f "$M/task-$cid" "$M/display-$cid" "$M/last-$cid"
+      echo display remove "$cid" > "$D/control"
+      continue ;;
+    task-bounds-*) ;;
+    *) continue ;;
+  esac
   cid=${file#task-bounds-}
   read -r w h < "$D/$file" || continue
   task=""; last=""

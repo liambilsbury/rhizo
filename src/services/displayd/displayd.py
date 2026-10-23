@@ -20,6 +20,7 @@ CONTROL_IN = "/data/rhizo_control/control"
 SCALED_RE = re.compile(r"^display scaled id=(\d+) port=(\d+) scale=(\d+(?:\.\d+)?) dpi=(\d+)")
 BORN_RE = re.compile(r"^display (?:pooled|powered|added) id=(\d+) port=(\d+)")
 GONE_RE = re.compile(r"^display (?:remove id=(\d+) ok|spare-released id=(\d+))")
+CURSOR_UNKNOWN_RE = re.compile(r"^display cursor-unknown id=(\d+) port=(-?\d+) digest=(\d+)")
 BASE_SCALE = 1
 
 
@@ -125,7 +126,33 @@ def reset_density_override(port):
         android("wm density reset -d %s" % logical)
         log("display %s (port %d) was born under a density override -- cleared: %s"
             % (logical, port, " ".join(out.split())))
+    remember_base(port, logical)
     return True
+
+
+_base = {}
+
+
+def remember_base(port, logical, said_dpi=None):
+    """record a port's density and DPI at its scale if the framework holds that DPI"""
+    physical = physical_density(logical)
+    held = device_dpi(port)
+    if not (physical and held):
+        return False
+    if said_dpi is not None and abs(held - said_dpi) >= 1:
+        log("display %s (port %d): framework holds %gdpi, not %ddpi; base kept at %r"
+            % (logical, port, held, said_dpi, _base.get(port)))
+        return False
+    _base[port] = (physical, held)
+    return True
+
+
+def wanted_density(port, physical, said_dpi, held_dpi):
+    """return the density for a scale"""
+    base = _base.get(port)
+    if base and (base[0] != physical or base[1] != held_dpi):
+        return scaled_density(base[0], said_dpi, base[1])
+    return scaled_density(physical, said_dpi, held_dpi)
 
 
 def logical_id_for_port(port):
@@ -176,11 +203,20 @@ def flat_pointer_gain(speed):
     return 1.0 + (speed + 7) * (3.5 - 1.0) / 14.0
 
 
+SENSITIVITY_FACTORS = (1, 2, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20)
+
+
+def curve_base_gain(speed):
+    """return the gain of the acceleration curve's slowest segment for a pointer speed setting"""
+    return 0.64 * SENSITIVITY_FACTORS[speed + 7] / 10.0 * 3.19
+
+
 UNSCALED_RE = re.compile(r"^\s*Display with Mouse Scaling Disabled:\s*\{([^}]*)\}", re.M)
 UNACCELERATED_RE = re.compile(r"^\s*Display with Mouse Pointer Acceleration Disabled:\s*\{([^}]*)\}", re.M)
 
 UNBOUND = "unbound"
 NO_CONSTANT_GAIN = "no-constant-gain"
+ACCELERATED = "accelerated"
 
 
 def cursor_gain(dump, port, acceleration_off):
@@ -209,7 +245,10 @@ def cursor_gain(dump, port, acceleration_off):
             gain = flat_pointer_gain(int(speed.group(1)))
         else:
             if display.group(1) not in set(re.findall(r"-?\d+", unaccelerated.group(1))):
-                return None, NO_CONSTANT_GAIN
+                if xs.group(1) != ys.group(1) or not -7 <= int(speed.group(1)) <= 7:
+                    return None, NO_CONSTANT_GAIN
+                gain = curve_base_gain(int(speed.group(1)))
+                return int(round(float(xs.group(1)) * gain * 1000.0)), ACCELERATED
             gain = 1.0
         if xs.group(1) != ys.group(1):
             return None, NO_CONSTANT_GAIN
@@ -253,12 +292,14 @@ def tell_composer_cursor_scale(composer_id, port):
             log("composer display %s (port %d): mouse acceleration cannot be turned off -- "
                 "no cursor scale sent" % (composer_id, port))
         return why
-    out = android("echo display cursor-scale %s %d > %s" % (composer_id, milli, CONTROL_IN))
+    accel = " 1" if why == ACCELERATED else ""
+    out = android("echo display cursor-scale %s %d%s > %s" % (composer_id, milli, accel, CONTROL_IN))
     if out is None:
         log("could not tell the composer display %s's cursor scale" % composer_id)
         return UNBOUND
-    log("composer display %s (port %d): mouse deltas scale by %d/1000"
-        % (composer_id, port, milli))
+    log("composer display %s (port %d): mouse deltas scale by %d/1000%s"
+        % (composer_id, port, milli,
+           " below Android's first acceleration threshold" if accel else ""))
     return "told"
 
 
@@ -279,6 +320,7 @@ def apply(composer_id, port, scale, dpi):
                 % (logical, port, " ".join((got or "no answer").split())))
         else:
             log("display %s (port %d) back to its own density" % (logical, port))
+            remember_base(port, logical, dpi)
         if tell_composer_cursor_scale(composer_id, port) == UNBOUND:
             log("display %s (port %d): no mouse bound to it to read a cursor scale from" % (logical, port))
         return True
@@ -287,7 +329,7 @@ def apply(composer_id, port, scale, dpi):
         log("display %s (port %d): the framework's DPI for it was not read; not scaling its density"
             % (logical, port))
         return False
-    want = scaled_density(physical, dpi, held)
+    want = wanted_density(port, physical, dpi, held)
     android("wm density %d -d %s" % (want, logical))
     got = android("wm density -d %s" % logical) or ""
     moved = PHYSICAL_DENSITY_RE.search(got)
@@ -302,6 +344,53 @@ def apply(composer_id, port, scale, dpi):
         % (logical, port, want, physical, held, scale, dpi))
     if tell_composer_cursor_scale(composer_id, port) == UNBOUND:
         log("display %s (port %d): no mouse bound to it to read a cursor scale from" % (logical, port))
+    return True
+
+
+MOUSE_CONTROLLERS_RE = re.compile(r"^\s*MousePointerControllers:\s*$", re.M)
+OTHER_CONTROLLERS_RE = re.compile(r"^\s*(?:TouchPointerControllers|StylusPointerControllers|"
+                                  r"DrawingTabletControllers):\s*$", re.M)
+CONTROLLER_RE = re.compile(r"^\s*(-?\d+)\s*:\s*PointerController:", re.M)
+RESOLVED_TYPE_RE = re.compile(r"resolvedPointerType:\s*(-?\d+)")
+POINTER_GREP = ("dumpsys input | grep -E "
+                "'PointerControllers:|DrawingTabletControllers:|PointerController:|resolvedPointerType:'")
+# Android draws a new type's image a frame or two late; the composer drops a reply older than the image
+POINTER_TYPE_SETTLE_S = 0.15
+
+
+def resolved_pointer_type(dump, logical):
+    """return the resolvedPointerType of a display's mouse pointer in dumpsys input"""
+    m = MOUSE_CONTROLLERS_RE.search(dump)
+    if not m:
+        return None
+    body = dump[m.end():]
+    other = OTHER_CONTROLLERS_RE.search(body)
+    if other:
+        body = body[:other.start()]
+    starts = list(CONTROLLER_RE.finditer(body))
+    for i, c in enumerate(starts):
+        if c.group(1) != str(logical):
+            continue
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(body)
+        t = RESOLVED_TYPE_RE.search(body, c.end(), end)
+        return int(t.group(1)) if t else None
+    return None
+
+
+def tell_composer_pointer_type(composer_id, port, digest, sleep=time.sleep):
+    """send the composer the pointer type its display's cursor image draws"""
+    logical = logical_id_for_port(port)
+    if logical is None:
+        return False
+    pointer_type = resolved_pointer_type(android(POINTER_GREP) or "", logical)
+    if pointer_type is None:
+        log("display %s (port %d): no resolvedPointerType in dumpsys input for cursor image %d"
+            % (logical, port, digest))
+        return False
+    sleep(POINTER_TYPE_SETTLE_S)
+    if android("echo display cursor-type %s %d %d > %s" % (composer_id, digest, pointer_type, CONTROL_IN)) is None:
+        log("could not tell the composer display %s its pointer type" % composer_id)
+        return False
     return True
 
 
@@ -367,8 +456,19 @@ def plan(lines):
         if m:
             gone_after[int(m.group(1) or m.group(2))] = i
     out = []
+    last_cursor = {}
+    for i, line in enumerate(lines):
+        m = CURSOR_UNKNOWN_RE.match(line.strip())
+        if m:
+            last_cursor[int(m.group(1))] = i
     for i, line in enumerate(lines):
         text = line.strip()
+        m = CURSOR_UNKNOWN_RE.match(text)
+        if m:
+            cid = int(m.group(1))
+            if last_cursor[cid] == i and gone_after.get(cid, -1) < i:
+                out.append(("cursor", (cid, int(m.group(2)), int(m.group(3)))))
+            continue
         m = SCALED_RE.match(text)
         if m:
             cid, port, scale, dpi = m.groups()
@@ -459,7 +559,9 @@ def main():
                     for entry in list(pending.values()) + list(scales.values()):
                         entry[1], entry[2] = _now(), False
                 for kind, args in plan(lines):
-                    if kind == "scaled":
+                    if kind == "cursor":
+                        tell_composer_pointer_type(*args)
+                    elif kind == "scaled":
                         scales.pop(args[0], None)
                         if not apply(*args):
                             scales[args[0]] = [args, _now(), False]

@@ -1,6 +1,6 @@
 on early-init
 # @RHIZO_SUBST init_loglevel_line
-    setprop sys.use_memfd true
+# @RHIZO_SUBST use_memfd_line
 # @RHIZO_SUBST hwui_hint_manager_line
 # @RHIZO_SUBST sf_adpf_hint_line
     setprop sys.init.perf_lsm_hooks 1

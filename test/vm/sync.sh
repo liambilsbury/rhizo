@@ -91,6 +91,11 @@ sync_one ./src/install/bootstrap/rundir-root.py var/share/install/bootstrap/rund
 sync_one ./debian/profile.d/console-vt.sh var/share/rhizo-console-vt.sh
 sync_one src/services/units/session/user-prep@.service var/share/rhizo-user-prep@.service
 sync_one src/services/units/session/session-vt@.service var/share/rhizo-session-vt@.service
+sync_one debian/dropins/private-users-off.conf var/share/host-mode/usr/lib/systemd/system/service.d/50-rhizo-private-users.conf
+sync_one debian/dropins/avahi-daemon-policy.conf var/share/host-mode/usr/lib/systemd/system/avahi-daemon.service.d/50-rhizo-policy.conf
+sync_one debian/dropins/accounts-daemon-skel.conf var/share/host-mode/usr/lib/systemd/system/accounts-daemon.service.d/rhizo-skel.conf
+sync_one debian/dropins/user-at-prep.conf var/share/host-mode/usr/lib/systemd/system/user@.service.d/rhizo-user-prep.conf
+sync_one debian/dropins/session-scope-vt.conf var/share/host-mode/usr/lib/systemd/system/session-.scope.d/rhizo-session-vt.conf
 sync_one ./src/install/teardown/teardown-lib.sh var/share/install/teardown/teardown-lib.sh
 sync_one ./src/install/lib/host-flavor.sh var/share/install/lib/host-flavor.sh
 sync_one ./src/install/bootstrap/bootloader.sh var/share/install/bootstrap/bootloader.sh

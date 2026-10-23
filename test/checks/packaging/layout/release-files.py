@@ -68,13 +68,13 @@ def check(redeploy_text, release_map_text, installed, launcher_text, hals_text,
     for name in sorted(set(a16_only) - shipped_skip):
         bad.append("core.A16_ONLY_PAYLOAD names %s, which is not a RELEASE_SKIP file the .deb "
                    "ships -- an unused row" % name)
+    if bash_array(redeploy_text, "AUDIO_SET_RELEASES") != list(core.AUDIO_SET_RELEASES):
+        bad.append("redeploy.sh's AUDIO_SET_RELEASES is not core.AUDIO_SET_RELEASES %r"
+                   % (core.AUDIO_SET_RELEASES,))
     for name in sorted(a16_only):
-        if skips(name, "a16"):
-            bad.append("release_skips(%r, 'a16') leaves it out of the release it was proven on" % name)
-        for rel in ("a15", "a17"):
-            if not skips(name, rel):
-                bad.append("release_skips(%r, %r) stages it, which no %s boot on the rig ever did"
-                           % (name, rel, rel))
+        for rel in core.AUDIO_SET_RELEASES:
+            if skips(name, rel):
+                bad.append("release_skips(%r, %r) skips an audio-set release" % (name, rel))
 
     builds = rig_release_hal_builds(release_map_text, hal_bins)
     if not builds:
@@ -84,7 +84,7 @@ def check(redeploy_text, release_map_text, installed, launcher_text, hals_text,
     for rel, name in sorted(builds.items()):
         own = beside("rel", rel, name)
         if not is_shipped("%s/rel/%s/%s" % (PACKAGE_LIB, rel, name), installed):
-            bad.append("the rig stages %s's own %s from share/rel/%s/, and the .deb ships no "
+            bad.append("the rig stages %s's %s from share/rel/%s/, and the .deb ships no "
                        "%s/rel/%s/%s" % (rel, name, rel, PACKAGE_LIB, rel, name))
         got = hal_bin(gfx, name, rel, exists=lambda p: True)
         if got != own:
@@ -139,7 +139,7 @@ def selftest():
                  a16_only=("audio_policy_configuration.xml",)), "ships RhizoAudioRouter.apk")
     expect("a release_skips that ignores the release",
            check(redeploy, release_map, installed, launcher, hals,
-                 skips=lambda name, release=None: False), "which no a15 boot on the rig ever did")
+                 skips=lambda name, release=None: True), "skips an audio-set release")
 
     unshipped = {p for p in installed if "/rel/" not in p}
     expect("a package that does not ship a15's power HAL",

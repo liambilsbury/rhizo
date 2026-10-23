@@ -113,18 +113,25 @@ desk_user_pull() {
 
 # print the desktop session mode
 desk_session_mode() {
-  local want="${RHIZO_DESK_SESSION:-auto}" out
+  local want="${RHIZO_DESK_SESSION:-auto}" out rc
   case "$want" in
     login|rig) printf '%s\n' "$want"; return 0 ;;
     auto) ;;
     *) echo "desk_session_mode: RHIZO_DESK_SESSION='$want', want login, rig or auto" >&2; return 2 ;;
   esac
-  out=$(ssh_vm -t 10 'cat /sys/fs/selinux/enforce 2>/dev/null; echo; echo RHIZO_ENFORCE_READ' 2>/dev/null)
-  if [[ "$out" != *RHIZO_ENFORCE_READ* ]]; then
-    echo "desk_session_mode: could not read /sys/fs/selinux/enforce on the guest" >&2
+  out=$(guest_android_enforce); rc=$?
+  if (( rc == 2 )); then
+    out=$(ssh_vm -t 10 'cat /sys/fs/selinux/enforce 2>/dev/null; echo; echo RHIZO_ENFORCE_READ' 2>/dev/null)
+    if [[ "$out" != *RHIZO_ENFORCE_READ* ]]; then
+      echo "desk_session_mode: could not read /sys/fs/selinux/enforce on the guest" >&2
+      return 1
+    fi
+    out=$(head -1 <<<"$out" | tr -d '[:space:]')
+  elif (( rc != 0 )); then
+    echo "desk_session_mode: could not read Android's enforce state on the guest: $out" >&2
     return 1
   fi
-  if [[ "$(head -1 <<<"$out" | tr -d '[:space:]')" == 1 ]]; then printf 'login\n'; else printf 'rig\n'; fi
+  if [[ "$out" == 1 ]]; then printf 'login\n'; else printf 'rig\n'; fi
 }
 
 # print the security context of a compositor
@@ -152,7 +159,7 @@ desk_compositor_context() {
 # print the compositor context mode
 desk_login_context_mode() {
   local out
-  out=$(ssh_vm -t 10 'if [ -e /sys/fs/selinux/enforce ]; then echo login; else echo stock; fi; echo DONE' 2>/dev/null)
+  out=$(ssh_vm -t 10 'if [ -e /sys/fs/selinux/enforce ] && [ "$(tr -d "\000" < /proc/1/attr/current 2>/dev/null)" != kernel ]; then echo login; else echo stock; fi; echo DONE' 2>/dev/null)
   case "$out" in
     $'login\nDONE'|$'stock\nDONE') printf '%s\n' "${out%%$'\n'*}" ;;
     *) echo "desk_login_context_mode: could not read /sys/fs/selinux on the guest: ${out:-<nothing>}" >&2; return 1 ;;

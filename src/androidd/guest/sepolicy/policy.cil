@@ -184,6 +184,7 @@
 (allow rhizo_audio_core rhizo_audio_core_tmpfs (file (read write getattr map ioctl relabelfrom)))
 (allowx rhizo_audio_core rhizo_audio_core_tmpfs (ioctl file ((range 0x7701 0x770b))))
 (allow rhizo_audio_core audioserver (fifo_file (write)))
+; @RHIZO_SUBST vendor_ashmem_open
 (type rhizo_audio_effect)
 (roletype object_r rhizo_audio_effect)
 (type rhizo_audio_effect_exec)
@@ -211,7 +212,7 @@
 (allow rhizo_composer rhizo_wayland_socket (dir (search open read getattr)))
 (allow rhizo_composer rhizo_wayland_socket (sock_file (write open getattr read)))
 (allow rhizo_composer kernel (unix_stream_socket (connectto)))
-(allow rhizo_host rhizo_wayland_socket (sock_file (write open getattr read)))
+(allow rhizo_host rhizo_wayland_socket (sock_file (write open getattr read setattr unlink)))
 (allow rhizo_host rhizo_wayland_socket (dir (open read)))
 (type rhizo_audio_socket)
 (roletype object_r rhizo_audio_socket)
@@ -261,6 +262,8 @@
 (allow shell rhizo_rt_socket (sock_file (write open getattr read)))
 (allow rhizo_power rhizo_rt_socket (dir (search open read getattr)))
 (allow rhizo_power rhizo_rt_socket (sock_file (write open getattr read)))
+; namespace mode: rhizo-rtd's socket is labelled kernel in Android's policy
+(allow rhizo_power kernel (unix_stream_socket (connectto)))
 (allow rhizo_host rhizo_rt_socket (dir (search open read getattr setattr write add_name remove_name rmdir)))
 (allow rhizo_host rhizo_rt_socket (sock_file (create write open getattr read setattr unlink)))
 (type rhizo_delay_socket)
@@ -805,6 +808,7 @@
 (allow rhizo_host self (vsock_socket (create bind connect read write getattr setattr getopt setopt shutdown)))
 (allow rhizo_host self (netlink_kobject_uevent_socket (create bind read write getattr setattr getopt setopt)))
 (allow rhizo_host self (netlink_audit_socket (create bind read write getattr setattr getopt setopt nlmsg_read nlmsg_write nlmsg_relay)))
+; @RHIZO_SUBST host_netlink_nlmsg
 (allow rhizo_host self (netlink_generic_socket (create bind connect read write getattr setattr getopt setopt)))
 (allow rhizo_host self (netlink_selinux_socket (create bind read write getattr setattr getopt setopt)))
 (allow rhizo_host self (packet_socket (create bind read write getattr setattr getopt setopt)))
@@ -977,6 +981,9 @@
 (allow rhizo_host kernel (lnk_file (getattr read)))
 (allow rhizo_host kernel (sock_file (getattr open read write)))
 (allow rhizo_host kernel (fifo_file (getattr open read write lock append)))
+; python's startup isatty probe on pipes from a launcher in kernel: TCGETS, TCGETS2 (glibc 2.42+)
+(allow rhizo_host kernel (fifo_file (ioctl)))
+(allowx rhizo_host kernel (ioctl fifo_file (0x5401 0x542a)))
 (allow rhizo_host kernel (chr_file (getattr open read write ioctl lock append)))
 
 (allow kernel rhizo_host (fifo_file (read write getattr ioctl)))
@@ -989,6 +996,8 @@
 (allow rhizo_composer rhizo_host (fd (use)))
 (allow rhizo_composer rhizo_host (fifo_file (read write getattr ioctl)))
 (allowx rhizo_composer rhizo_host (ioctl fifo_file ((range 0x1 0xffff))))
+; namespace mode: a host client's wl_data_source.send pipe for a drag out is labelled kernel
+(allow rhizo_composer kernel (fifo_file (write)))
 
 (allow rhizo_host rhizo_control_file (dir (search read open getattr watch write add_name remove_name)))
 (allow rhizo_host rhizo_control_file (file (read open getattr watch create write unlink setattr)))
@@ -1244,6 +1253,7 @@
 (allow shell rhizo_audiomap_file (file (create open read write getattr setattr unlink append rename)))
 (allow priv_app rhizo_audiomap_file (dir (search read write open add_name remove_name getattr watch)))
 (allow priv_app rhizo_audiomap_file (file (create open read write getattr setattr unlink append rename)))
+; @RHIZO_SUBST priv_app_36_grants
 (allowx adbd devpts (ioctl chr_file (0x5430 0x5431)))
 (allow init devpts (chr_file (ioctl)))
 (allowx init devpts (ioctl chr_file (0x5430 0x5431)))

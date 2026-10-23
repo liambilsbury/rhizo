@@ -142,6 +142,7 @@ kwin rig socket	host-global	test/vm/start/start-plasma.sh:systemd-run --socket=$
 kwin rig input device unit	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$INJECT_UNIT
 plasma notification watcher unit	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$WATCH_UNIT
 plasma launcher unit	host-global	test/system/lib/plasma-lib.sh:systemd-run --unit=rhizo-launcher-$nonce
+plasma virtual output unit	host-global	test/system/lib/plasma-lib.sh:systemd-run --unit=$PLASMA_VOUT_UNIT-$n
 
 host primer environment	host-global	src/androidd/boot.py:systemd-run --unit=rhizo-host-primer environment
 pool proof offline environment	host-global	tools/fetch/pools/arch/arch-pool.sh:systemd-run --unit=rhizo-offline environment
@@ -211,6 +212,7 @@ kwin rig environment	host-global	test/vm/start/start-plasma.sh:systemd-run --uni
 kwin rig input device environment	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$INJECT_UNIT environment
 plasma notification watcher environment	host-global	test/vm/start/start-plasma.sh:systemd-run --unit=$WATCH_UNIT environment
 plasma launcher environment	host-global	test/system/lib/plasma-lib.sh:systemd-run --unit=rhizo-launcher-$nonce environment
+plasma virtual output environment	host-global	test/system/lib/plasma-lib.sh:systemd-run --unit=$PLASMA_VOUT_UNIT-$n environment
 rig pipewire unit	host-global	test/vm/start/start-audio.sh:systemd-run --unit=$RIG_PW
 rig pipewire environment	host-global	test/vm/start/start-audio.sh:systemd-run --unit=$RIG_PW environment
 rig wireplumber unit	host-global	test/vm/start/start-audio.sh:systemd-run --unit=$RIG_WP

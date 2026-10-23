@@ -85,11 +85,19 @@ _desk_gnome_inject_pointer() {
   local verb="$1"; shift
   case "$verb" in
     abs) _gnome_harness "pointer abs $1 $2" ;;
-    btn) _gnome_harness "pointer btn $1 $2" ;;
+    btn)
+      _gnome_pointer_up || return 1
+      _gnome_pointer "btn $1 $2" "^button $1 $2\$" ;;
     axis)
       case "$1" in
         h|v) _gnome_harness "pointer axis $1 $2" ;;
         *) echo "_desk_gnome_inject_pointer axis: want h or v, got '$1'" >&2; return 2 ;;
+      esac
+      ;;
+    axis_discrete)
+      case "$1" in
+        h|v) _gnome_harness "pointer axis-discrete $1 $2" ;;
+        *) echo "_desk_gnome_inject_pointer axis_discrete: want h or v, got '$1'" >&2; return 2 ;;
       esac
       ;;
     *) echo "_desk_gnome_inject_pointer: unknown verb '$verb'" >&2; return 2 ;;
@@ -97,7 +105,10 @@ _desk_gnome_inject_pointer() {
 }
 
 # inject a single key event
-_desk_gnome_inject_key() { _gnome_harness "key single $1 $2"; }
+_desk_gnome_inject_key() {
+  _gnome_pointer_up || return 1
+  _gnome_pointer "key $1 $2" "^key $1 $2\$"
+}
 
 # list the toplevel windows
 _desk_gnome_windows() { _gnome_harness "windows" "${1:-20}"; }
@@ -119,8 +130,8 @@ _desk_gnome_window_op() {
 _desk_gnome_outputs() {
   local verb="$1"; shift
   case "$verb" in
-    add) _gnome_harness "outputs add $1" ;;
-    remove) _gnome_harness "outputs remove $1" ;;
+    add) _gnome_harness "outputs add $1" 60 ;;
+    remove) _gnome_harness "outputs remove $1" 30 ;;
     scale) _gnome_harness "outputs scale $1 $2" ;;
     list) _gnome_harness "outputs list" ;;
     *) echo "_desk_gnome_outputs: unknown verb '$verb'" >&2; return 2 ;;

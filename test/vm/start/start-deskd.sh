@@ -22,6 +22,14 @@ done
 
 wait_for_ssh 20 || { log "FAIL: VM not reachable"; exit 1; }
 
+INSTALLED=0
+if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+  INSTALLED=1
+  [[ "$PORT" == 47100 ]] || { log "FAIL: --port $PORT under RHIZO_TEST_INSTALLED=1 -- the installed $UNIT listens on 47100 only"; exit 1; }
+  log "RHIZO_TEST_INSTALLED=1: restarting the installed $UNIT as packaged, staging nothing from this tree"
+fi
+
+if (( ! INSTALLED )); then
 guest_mount_share || exit 1
 
 if ! ssh_vm -t 10 "command -v xdg-open >/dev/null && command -v xdg-mime >/dev/null && command -v update-desktop-database >/dev/null"; then
@@ -42,6 +50,7 @@ ssh_vm -t 10 "install -m 0755 /root/share/rhizo-wlbridge /usr/lib/rhizo/deskbrid
 
 ssh_vm -t 10 "install -D -m 0644 /root/share/rhizo-desktop-session.path /usr/lib/systemd/user/rhizo-desktop-session.path && install -m 0644 /root/share/rhizo-desktop-session.service /usr/lib/systemd/user/rhizo-desktop-session.service && install -m 0644 /root/share/rhizo-desk-notify.path /usr/lib/systemd/user/rhizo-desk-notify.path && install -m 0644 /root/share/rhizo-desk-notify.service /usr/lib/systemd/user/rhizo-desk-notify.service && install -D -m 0644 /root/share/rhizo-desktop-session.tmpfiles /usr/lib/tmpfiles.d/rhizo-desktop-session.conf && systemd-tmpfiles --create rhizo-desktop-session.conf && install -m 0644 /root/share/rhizo-deskd.service /etc/systemd/system/$UNIT && install -m 0644 /root/share/rhizo-desk-token.service /etc/systemd/system/rhizo-desk-token.service" \
   || { log "FAIL: could not install the rhizo-desktop-session user units and tmpfiles entry, $UNIT or rhizo-desk-token.service -- run test/vm/sync.sh first"; exit 1; }
+fi
 
 log "Starting the desktop session, then $UNIT on port $PORT..."
 # print why deskd cannot reach its session bus
@@ -120,6 +129,26 @@ done
 grep -q 'listening on 192.168.100.1:$PORT' $LOG && echo DESKD_LISTENING
 grep -q 'wayland bridge ready' $LOG && echo DESKD_WL_READY
 [ \"\$(systemctl is-active $UNIT)\" = active ] && echo DESKD_ACTIVE"
+if (( INSTALLED )); then
+  start_cmd="set -u
+test -s /run/rhizo-desktop/session.env || { echo DESKD_NO_SESSION_ENV; exit 1; }
+systemctl stop $UNIT 2>/dev/null
+systemctl reset-failed $UNIT rhizo-desk-token.service 2>/dev/null || true
+: > $LOG
+date -u '+TRUNCATED_AT %s %Y-%m-%dT%H:%M:%SZ'
+systemctl restart $UNIT
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'listening on 192.168.100.1:$PORT' $LOG && break
+  sleep 1
+done
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  grep -q 'wayland bridge ready' $LOG && break
+  sleep 1
+done
+grep -q 'listening on 192.168.100.1:$PORT' $LOG && echo DESKD_LISTENING
+grep -q 'wayland bridge ready' $LOG && echo DESKD_WL_READY
+[ \"\$(systemctl is-active $UNIT)\" = active ] && echo DESKD_ACTIVE"
+fi
 out=$(ssh_vm -t 55 "$start_cmd" 2>&1); echo "$out"
 if grep -q DESKD_NO_SESSION_ENV <<<"$out"; then
   log "FAIL: rhizo-desktop-session.service never wrote /run/rhizo-desktop/session.env"

@@ -90,8 +90,8 @@ CLIP_FIFO=/tmp/rhizo-clip.fifo
 BRIDGE_PKG=com.rhizo.desktop
 APP_PKG=com.rhizo.deskapp
 APP_ACT=com.rhizo.deskapp.MainActivity
-SECOND_PKG=com.android.deskclock
-SECOND_ACT=com.android.deskclock.DeskClock
+SECOND_PKG=com.android.messaging
+SECOND_ACT=com.android.messaging.ui.conversationlist.ConversationListActivity
 
 for f in "$VAR_DIR/share/rhizo-wlbridge" "$REPO/src/services/deskbridge/deskd.py" \
          "$VAR_DIR/share/RhizoDesktop.apk" "$VAR_DIR/share/rhizo-deskapp.apk"; do
@@ -117,8 +117,8 @@ INIT=$(guest_init_pid 10)
 [[ -n "$INIT" ]] || { fail "no init second_stage"; exit 1; }
 boot_completed=$(getprop_live "$INIT" sys.boot_completed) || boot_completed="<unreadable rc=$?>"
 [[ "$boot_completed" == "1" ]] || fail "sys.boot_completed='$boot_completed' at system test start"
-enforce=$(ssh_vm -t 10 'cat /sys/fs/selinux/enforce' | tr -d '\r')
-[[ "$enforce" == "1" ]] || fail "SELinux is not enforcing (enforce=$enforce)"
+enforce=$(guest_android_enforce)
+[[ "$enforce" == "1" ]] || fail "Android's SELinux is not enforcing (enforce=$enforce)"
 android_sh "$INIT" "logcat -c" >/dev/null 2>&1
 
 step "1. the host half of the bridge is up"
@@ -178,7 +178,7 @@ for round in $(seq 1 "$ROUNDS"); do
   want_b64=$(printf '%s' "$want" | base64 -w0)
   want_sha=$(printf '%s' "$want" | sha256sum | cut -d' ' -f1)
   set_since=$(logcat_since_marker "$INIT")
-  clipcmd "set text/plain $want_b64"
+  desk_clipboard set text/plain "$want_b64"
   if ! clip_wait_applied "$set_since" "RHIZO_DESK_CLIP_APPLIED mime=text/[^ ]* sha256=$want_sha"; then
     fail "round $round: the android app never applied the host's clip (no RHIZO_DESK_CLIP_APPLIED with its sha256 in 60s)"
     break
@@ -208,7 +208,7 @@ for round in $(seq 1 "$ROUNDS"); do
   wrote_since=$(logcat_since_marker "$INIT")
   android_sh "$INIT" "am start -n $APP_PKG/$APP_ACT --es cmd clip_write --es mime text/plain --es b64 $want_b64" >/dev/null 2>&1
   app_wait_token "RHIZO_CLIP_WROTE" 30 "$wrote_since" >/dev/null || { fail "round $round: the app never wrote the clip"; break; }
-  got_b64=$(clip_wait_data "text/plain" 45 "$clip_since")
+  got_b64=$(desk_clipboard get "text/plain" 45 "$clip_since")
   if [[ -z "$got_b64" ]]; then
     fail "round $round: the host selection never carried the app's clip"
     gcmd_user "cat /tmp/rhizo-clip.out" | tail -5 | sed 's/^/    | /'
@@ -223,7 +223,16 @@ NOTIF_FIFO=/tmp/rhizo-notify.fifo
 NOTIF_REC=/tmp/rhizo-notif.jsonl
 
 step "6. an Android notification reaches the desktop with its own bytes and icon"
-notify_sink_start || exit 1
+NOTIF_VIA_WATCHER=0
+if [[ "$RHIZO_DESKTOP_PROFILE" == plasma && "$(_plasma_mode 2>/dev/null)" == login ]]; then
+  NOTIF_VIA_WATCHER=1
+  NOTIF_REC=$PLASMA_NOTIFY_REC
+  gcmd_user "systemctl --user is-active -q $PLASMA_WATCH_UNIT" 10 \
+    || { fail "the notification watcher $PLASMA_WATCH_UNIT is not running"; exit 1; }
+  log "    plasmashell owns org.freedesktop.Notifications: reading the watcher record $NOTIF_REC"
+else
+  notify_sink_start || exit 1
+fi
 python3 - "$WORKDIR/icon.png" <<'ICONPY'
 import struct, sys, zlib
 w = h = 16
@@ -289,7 +298,11 @@ else
 
   step "7. activating the desktop notification brings the Android app forward"
   activated_since=$(logcat_since_marker "$INIT")
-  gcmd_user "echo 'invoke $nid default' > $NOTIF_FIFO" 10
+  if (( NOTIF_VIA_WATCHER )); then
+    act_out=$(desk_notifications activate "$nid" default 2>&1) || log "    the server's activation of $nid reported: ${act_out:-nothing}"
+  else
+    gcmd_user "echo 'invoke $nid default' > $NOTIF_FIFO" 10
+  fi
   app_wait_token "RHIZO_NOTIF_ACTIVATED" 45 "$activated_since" >/dev/null \
     || fail "activating the notification never reached the app's own contentIntent"
   [[ -n "$cdisp" ]] && assert_window_painted deskapp-activated "$(st_disp "$cdisp")"
@@ -343,7 +356,7 @@ step "10. clipboard image, host -> Android, read by the app as its own uid"
 make_png "$WORKDIR/host-clip.png" 40 90 200
 host_png_b64=$(base64 -w0 < "$WORKDIR/host-clip.png")
 set_since=$(logcat_since_marker "$INIT")
-clipcmd "set image/png $host_png_b64"
+desk_clipboard set image/png "$host_png_b64"
 got="" read_rc=3
 if clip_wait_applied "$set_since" "RHIZO_DESK_CLIP_APPLIED mime=image/png"; then
   got=$(clip_read "RHIZO_CLIP_READ mime=image/png b64=[A-Za-z0-9+/=]*" 60 "$EV/focus-at-clip-read-10.txt")
@@ -375,7 +388,7 @@ clip_since=$(clip_mark) || fail "the system test's clipboard client's output cou
 img_wrote_since=$(logcat_since_marker "$INIT")
 android_sh "$INIT" "am start -n $APP_PKG/$APP_ACT --es cmd clip_write --es mime image/png --es b64 $android_png_b64" >/dev/null 2>&1
 app_wait_token "RHIZO_CLIP_WROTE" 30 "$img_wrote_since" >/dev/null || fail "the app never wrote its image clip"
-got_b64=$(clip_wait_data "image/png" 60 "${clip_since:-0}")
+got_b64=$(desk_clipboard get "image/png" 60 "${clip_since:-0}")
 if [[ -z "$got_b64" ]]; then
   fail "the host selection never carried the app's image"
 else
@@ -472,7 +485,11 @@ case "$avc_rc" in
   2) fail "the AVC capture read was cut off (no end marker)" ;;
   3) fail "the AVC capture holds no enforcement flip record" ;;
   4) fail "the AVC capture holds nothing after the enforcement flip" ;;
+  5) fail "the AVC capture could not tell which SELinux mode the guest runs: $(head -1 "$EV/avc-run.log")" ;;
 esac
+if (( avc_rc == 0 )) && guest_namespace_mode; then
+  log "the host loads no SELinux policy, so no host-domain denial can occur; the kernel log scan still runs"
+fi
 if (( avc_rc == 0 )); then
   total=$(grep -c -a 'avc: *denied' "$EV/avc-run.log")
   enforced=$(grep -a 'avc: *denied' "$EV/avc-run.log" | grep 'permissive=0' \

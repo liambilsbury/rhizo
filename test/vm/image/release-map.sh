@@ -22,7 +22,7 @@ declare -A GSI_DESC=(
 
 declare -A GSI_KERNEL=(
   [a16]=""
-  [a17]="rhizo"
+  [a17]=""
   [a15]=""
 )
 
@@ -90,9 +90,7 @@ declare -A RELEASE_BUILD_CMD=(
 # return whether a release needs a build artifact
 release_build_needed() { [[ -n "${RELEASE_BUILD_ARTIFACT[$1]:-}" ]]; }
 
-declare -A RELEASE_RETIRED=(
-  [a17]="a17 needs the 6.12.99-rhizo kernel, which is retired"
-)
+declare -A RELEASE_RETIRED=()
 
 # print why a release cannot boot on this rig
 release_retired() { [[ -n "${RELEASE_RETIRED[$1]:-}" ]] && echo "${RELEASE_RETIRED[$1]}"; }

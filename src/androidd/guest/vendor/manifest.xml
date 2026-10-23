@@ -64,6 +64,11 @@
         <version>3</version>
         <fqname>IThermal/default</fqname>
     </hal>
+    <hal format="aidl">
+        <name>android.hardware.bluetooth</name>
+        <version>1</version>
+        <fqname>IBluetoothHci/default</fqname>
+    </hal>
     <hal format="native">
         <name>mapper</name>
         <version>5.0</version>

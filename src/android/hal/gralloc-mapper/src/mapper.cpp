@@ -109,8 +109,10 @@ void LogTransferFailure(ImportedBuffer& ib, const char* what) {
                       ib.decoded.width, ib.decoded.height);
 }
 
-std::mutex g_mutex;
-std::unordered_map<buffer_handle_t, ImportedBuffer> g_imported;
+// never destroyed: a binder thread can still free a buffer while exit() runs static destructors
+std::mutex& g_mutex = *new std::mutex;
+std::unordered_map<buffer_handle_t, ImportedBuffer>& g_imported =
+    *new std::unordered_map<buffer_handle_t, ImportedBuffer>;
 
 // byte layout of a plane
 struct PlaneInfo {

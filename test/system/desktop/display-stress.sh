@@ -167,6 +167,7 @@ log "    dma-buf baseline: ${DMABUF_BASE_OBJS} objects, ${DMABUF_BASE_KB}kB"
 
 step "1. stress loop: $ITERATIONS iterations of add -> map -> kill -> gone"
 CLEAN=0
+OWN_CONTENT=0
 RESTART_SEEN=0
 REPEAT_SEEN=0
 LAST_FAIL_REASON=""
@@ -188,11 +189,11 @@ last_added_line() {
 # print the display list reply
 query_display_list() { rhizo_ctl_display_list "$INIT"; }
 
-# check committedState ON for a display port
+# check committedState ON for a display port (a16: address {port=N}, a17: address StablePhysical{id=I, port=N})
 committed_on() {
   local dd
   dd=$(android_sh "$INIT" "dumpsys display" 2>/dev/null)
-  awk -v want="address \\{port=$1[,}]" '$0 ~ want {found=1}
+  awk -v want="address (StablePhysical[{]id=[0-9]+, |[{])port=$1[,}]" '$0 ~ want {found=1}
        found && /committedState/ {print; exit}' <<<"$dd" \
     | grep -q "committedState ON"
 }
@@ -202,6 +203,15 @@ display_present() {
   local dd
   dd=$(android_sh "$INIT" "dumpsys display" 2>/dev/null)
   grep -q "^  Display Id=$1\$" <<<"$dd"
+}
+
+CONTENT_ACT=com.android.settings/.homepage.SettingsHomepageActivity
+# check a port's display device reports FLAG_OWN_CONTENT_ONLY
+owns_content() {
+  local dd
+  dd=$(android_sh "$INIT" "dumpsys display" 2>/dev/null)
+  awk -v want="address (StablePhysical[{]id=[0-9]+, |[{])port=$1[,}]" '/DisplayDeviceInfo[{]/ && $0 ~ want {print; exit}' <<<"$dd" \
+    | grep -q "FLAG_OWN_CONTENT_ONLY"
 }
 
 for ((iter = 1; iter <= ITERATIONS; iter++)); do
@@ -264,6 +274,16 @@ for ((iter = 1; iter <= ITERATIONS; iter++)); do
     fi
   fi
 
+  if (( iter_ok )) && owns_content "$new_port"; then
+    OWN_CONTENT=$((OWN_CONTENT + 1))
+    am_out=$(android_sh "$INIT" "am start --display $log_id -n $CONTENT_ACT")
+    if [[ "$am_out" != *"Starting: Intent"* || "$am_out" == *"Error"* ]]; then
+      iter_ok=0; reason="display $new_id (logical $log_id) owns its content and am start of $CONTENT_ACT on it failed: ${am_out//$'\n'/ }"
+    elif ! _desktop_window_for_display "$new_id" 15 >/dev/null; then
+      iter_ok=0; reason="display $new_id (logical $log_id) owns its content and its window never mapped with $CONTENT_ACT on it"
+    fi
+  fi
+
   if (( iter_ok )); then
     gone=0
     kill_sent=0
@@ -282,7 +302,7 @@ for ((iter = 1; iter <= ITERATIONS; iter++)); do
       iter_ok=0; reason="display $new_id (logical $log_id) still present in dumpsys display after swaymsg kill (kill_sent=$kill_sent)"
     fi
   elif [[ -n "$new_id" ]]; then
-    gcmd_user "swaymsg '$(display_selector "$new_id") kill' >/dev/null" 10 >/dev/null 2>&1
+    desktop_close_display_window "$new_id"
     if [[ -n "$log_id" ]]; then
       cleanup_deadline=$(( $(date +%s) + 15 ))
       while (( $(date +%s) < cleanup_deadline )); do
@@ -404,8 +424,14 @@ if [[ -n "${DMABUF_END:-}" ]]; then
 fi
 
 idle_released=0
-DISPLAY_POOL_IDLE_S=$(grep -ao 'RHIZO_MARKER display_pool_idle_s=[0-9]*' "$VAR_DIR/vm-boot${SUFFIX}.log" | tail -1 | cut -d= -f2)
-[[ "$DISPLAY_POOL_IDLE_S" =~ ^[0-9]+$ ]] || fail "the composer logged no 'RHIZO_MARKER display_pool_idle_s=' line on this boot's console ($VAR_DIR/vm-boot${SUFFIX}.log)"
+if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+  idle_src="the installed guest's dmesg"
+  DISPLAY_POOL_IDLE_S=$(_ssh_vm_out 30 "dmesg" | grep -ao 'RHIZO_MARKER display_pool_idle_s=[0-9]*' | tail -1 | cut -d= -f2)
+else
+  idle_src="$VAR_DIR/vm-boot${SUFFIX}.log"
+  DISPLAY_POOL_IDLE_S=$(grep -ao 'RHIZO_MARKER display_pool_idle_s=[0-9]*' "$idle_src" | tail -1 | cut -d= -f2)
+fi
+[[ "$DISPLAY_POOL_IDLE_S" =~ ^[0-9]+$ ]] || fail "the composer logged no 'RHIZO_MARKER display_pool_idle_s=' line on this boot's console ($idle_src)"
 if [[ "$DISPLAY_POOL_IDLE_S" =~ ^[0-9]+$ ]] && (( DISPLAY_POOL_IDLE_S > 0 )); then
   step "4. idle release/re-arm leg ($IDLE_CYCLES cycles, composer display_pool_idle_s=$DISPLAY_POOL_IDLE_S)"
   IDLE_MARGIN=20
@@ -496,7 +522,7 @@ cp "$SUMMARY" "$EV/summary-$(date +%s).tsv" 2>/dev/null || true
 dmabuf_delta="dmabuf_delta=+${obj_growth:-0}objs/+${kb_growth:-0}kB"
 
 verdict_params="iterations=$ITERATIONS idle_cycles=$IDLE_CYCLES"
-verdict_info="$dmabuf_delta logcat_lines_scanned=$scanned extra_displays=$extra_count ss_pid_start=$SS_PID_START ss_pid_end=$SS_PID_END idle_release_cycles=$idle_released/$IDLE_CYCLES"
+verdict_info="$dmabuf_delta own_content_iterations=$OWN_CONTENT logcat_lines_scanned=$scanned extra_displays=$extra_count ss_pid_start=$SS_PID_START ss_pid_end=$SS_PID_END idle_release_cycles=$idle_released/$IDLE_CYCLES"
 (( REPEAT_SEEN )) && verdict_info="$verdict_info stopped_early=repeat reason=\"$LAST_FAIL_REASON\" repeats=$REPEAT_COUNT at_iter=$iter"
 if (( FAILED )); then log "DISPLAY STRESS SYSTEM TEST FAILED ($CLEAN/$ITERATIONS clean)"; test_record_verdict FAILED "$verdict_params" "$verdict_info"; exit 1; fi
 rig_result_keep "$EV/summary.tsv"

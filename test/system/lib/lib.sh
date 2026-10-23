@@ -149,6 +149,10 @@ test_boot() {
     TEST_BOOTED=1
     return 0
   fi
+  if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+    fail "test_boot: RHIZO_TEST_INSTALLED=1 needs RHIZO_SKIP_BOOT=1; a rig boot replaces the installed deploy"
+    return 1
+  fi
   local boot_id_before=""
   boot_id_before=$(ssh_vm -t 8 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '[:space:]')
   kill_vm
@@ -349,6 +353,12 @@ test_ensure_sway() { test_ensure_desktop "$@"; }
 # start the audio host side on a chained boot that lacks it
 test_ensure_audio() {
   local audio_log="$1"
+  if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+    log "  audio: restarting the installed audio host side and adding null-sink taps"
+    "$_LIB_DIR/../../vm/start/start-audio.sh" >"$audio_log" 2>&1 \
+      || { fail "the installed audio host side did not restart (see $audio_log)"; return 1; }
+    return 0
+  fi
   if ssh_vm -t 10 'test -S /run/rhizo-audio/audiod && pgrep -x rhizo-audiod >/dev/null' >/dev/null 2>&1; then
     log "  audio: the host side is already up on the chained boot"
     return 0

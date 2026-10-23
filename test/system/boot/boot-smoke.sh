@@ -32,7 +32,66 @@ case "$VARIANT" in
 esac
 [[ -n "$GSI_TREE" ]] && export RHIZO_GSI="$GSI_TREE"
 
-test_init boot-smoke --teardown
+INSTALLED=0
+[[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]] && INSTALLED=1
+if (( INSTALLED )); then
+  test_init boot-smoke
+else
+  test_init boot-smoke --teardown
+fi
+
+# cold-boot the installed guest
+installed_cold_boot() {
+  local before after t0 start bc ss last_ss_pid="" ss_restarts=0 elapsed enforce_now enforce_start
+  before=$(ssh_vm -t 10 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '[:space:]')
+  [[ -n "$before" ]] || { log "FAIL: the installed guest did not answer before its reboot"; return 1; }
+  log "rebooting the installed guest (boot_id $before)"
+  ssh_vm -t 20 'sync; systemctl reboot' >/dev/null 2>&1
+  timeout 8 ssh -o "ControlPath=$SSH_CONTROL_SOCK" -O exit "$SSH_TARGET" >/dev/null 2>&1
+  t0=$(date +%s)
+  while :; do
+    sleep 3
+    after=$(ssh_vm -t 8 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$after" && "$after" != "$before" ]] && break
+    (( $(date +%s) - t0 < 300 )) || { log "FAIL: no new boot answered ssh within 300s"; return 1; }
+  done
+  log "boot_id $before -> $after after $(( $(date +%s) - t0 ))s"
+  INIT_PID=$(wait_for_init 240) || { log "FAIL: init never started"; return 1; }
+  log "init second_stage pid=$INIT_PID"
+  log "Polling sys.boot_completed for up to ${BOOT_WAIT}s..."
+  start=$(date +%s)
+  while true; do
+    bc=$(getprop_vm "$INIT_PID" sys.boot_completed)
+    ss=$(system_server_pid "$INIT_PID")
+    if [[ -n "$ss" && -n "$last_ss_pid" && "$ss" != "$last_ss_pid" ]]; then
+      if host_pid_alive "$last_ss_pid"; then
+        log "  two system_server pids seen ($last_ss_pid still alive, now saw $ss) -- not a restart"
+      else
+        ss_restarts=$((ss_restarts+1))
+      fi
+    fi
+    [[ -n "$ss" ]] && last_ss_pid="$ss"
+    elapsed=$(( $(date +%s) - start ))
+    log "t=${elapsed}s boot_completed='${bc}' system_server_pid=${ss:-<none>} restarts_seen=$ss_restarts"
+    if [[ "$bc" == "1" ]]; then
+      if [[ "${RHIZO_PERMISSIVE:-}" != "1" ]]; then
+        enforce_start=$(date +%s)
+        while (( $(date +%s) - enforce_start < 150 )); do
+          enforce_now=$(guest_android_enforce)
+          [[ "$enforce_now" == "1" ]] && break
+          sleep 2
+        done
+        [[ "$enforce_now" == "1" ]] \
+          || { log "FAIL: sys.boot_completed=1 but Android's enforce state is still '${enforce_now:-<unreadable>}'"; return 1; }
+        log "enforce=1 confirmed ($(( $(date +%s) - enforce_start ))s after boot_completed)"
+      fi
+      log "SUCCESS: sys.boot_completed=1 (init_pid=$INIT_PID, ${ss_restarts} system_server restart(s) observed so far)"
+      return 0
+    fi
+    (( elapsed > BOOT_WAIT )) && { log "FAIL: boot_completed not set within ${BOOT_WAIT}s"; return 1; }
+    sleep 8
+  done
+}
 
 mapfile -t VENDOR_SVC < <(grep -oE 'service vendor\.rhizo-[a-zA-Z0-9_-]+' "$REPO/src/androidd/boot.py" | awk '{print $2}' | sort -u)
 if [[ ${#VENDOR_SVC[@]} -eq 0 ]]; then
@@ -45,8 +104,13 @@ CHECK_SVC=(keystore2 "${VENDOR_SVC[@]}")
 REDEPLOY_LOG="$EV/redeploy.log"
 : > "$REDEPLOY_LOG"
 if [[ "${RHIZO_GUEST_OS:-ubuntu}" == cachyos ]]; then RHIZO_KERNEL=""; else RHIZO_KERNEL="${RHIZO_KERNEL:-}"; fi
+if (( INSTALLED )); then
+  step "1. cold boot of the installed guest (boot wait ${BOOT_WAIT}s)"
+  installed_cold_boot > "$REDEPLOY_LOG" 2>&1 &
+else
 step "1. cold boot: RHIZO_KERNEL=$RHIZO_KERNEL ../../vm/redeploy.sh --boot-wait $BOOT_WAIT"
 RHIZO_KERNEL="$RHIZO_KERNEL" ../../vm/redeploy.sh --boot-wait "$BOOT_WAIT" > "$REDEPLOY_LOG" 2>&1 &
+fi
 REDEPLOY_PID=$!
 
 LIVENESS_LOG="$EV/liveness-poll.log"
@@ -125,14 +189,19 @@ fi
 step "2b. SELinux posture (M9: enforcing by default)"
 EXPECT_ENFORCE=1
 [[ "${RHIZO_PERMISSIVE:-}" == "1" ]] && EXPECT_ENFORCE=0
-enforce_now=$(ssh_vm -t 15 'cat /sys/fs/selinux/enforce 2>/dev/null' 2>/dev/null | tr -d '[:space:]')
+enforce_now=$(guest_android_enforce)
 if [[ "$enforce_now" == "$EXPECT_ENFORCE" ]]; then
-  pass "/sys/fs/selinux/enforce=$enforce_now (expected $EXPECT_ENFORCE for this posture)"
+  pass "Android's enforce state=$enforce_now (expected $EXPECT_ENFORCE for this posture)"
 else
-  fail "/sys/fs/selinux/enforce='$enforce_now', expected '$EXPECT_ENFORCE'"
+  fail "Android's enforce state='$enforce_now', expected '$EXPECT_ENFORCE'"
 fi
 LIVE_POLICY="$EV/live-sepolicy.bin"
-if ssh_vm -t 30 'cat /sys/fs/selinux/policy' > "$LIVE_POLICY" 2>/dev/null && [[ -s "$LIVE_POLICY" ]]; then
+POLICY_NODE=/sys/fs/selinux/policy
+if guest_namespace_mode; then
+  POLICY_NODE="/proc/${INIT_PID:-<no init>}/root/sys/fs/selinux/policy"
+  log "    namespace mode: live policy from Android's selinuxfs, $POLICY_NODE"
+fi
+if ssh_vm -t 30 "cat $POLICY_NODE" > "$LIVE_POLICY" 2>/dev/null && [[ -s "$LIVE_POLICY" ]]; then
   perm_out=$("$REPO/test/checks/lib/policy-lab.sh" permissive "$LIVE_POLICY" --expect "$EXPECT_PERMISSIVE" 2>&1)
   perm_rc=$?
   echo "$perm_out" > "$EV/live-permissive-types.txt"
@@ -142,7 +211,7 @@ if ssh_vm -t 30 'cat /sys/fs/selinux/policy' > "$LIVE_POLICY" 2>/dev/null && [[ 
     fail "live policy permissive set is not '${EXPECT_PERMISSIVE:-<none>}' -- see $EV/live-permissive-types.txt"
   fi
 else
-  fail "could not pull /sys/fs/selinux/policy off the VM"
+  fail "could not pull $POLICY_NODE off the VM"
 fi
 
 step "3. system_server restarts"
@@ -170,15 +239,15 @@ step "4b. launcher speaks post-flip (kmsg channel self-test)"
 hb_deadline=$((SECONDS + 15))
 while :; do
   dm4b=$(ssh_vm -t 10 'dmesg 2>/dev/null')
-  grep -q "L3: init(pid1) alive" <<<"$dm4b" && break
+  grep -qE "L3: (init\(pid1\)|the namespace holder) alive" <<<"$dm4b" && break
   (( SECONDS < hb_deadline )) || break
   sleep 1
 done
 [[ -n "$dm4b" ]] && printf '%s\n' "$dm4b" > "$DMESG_TAIL"
-if grep -q "L3: init(pid1) alive" <<<"$dm4b"; then
+if grep -qE "L3: (init\(pid1\)|the namespace holder) alive" <<<"$dm4b"; then
   pass "post-flip heartbeat observed in host dmesg"
 else
-  fail "no 'L3: init(pid1) alive' heartbeat observed in dmesg after boot_completed (see $DMESG_TAIL)"
+  fail "no 'L3: init(pid1) alive' or 'L3: the namespace holder alive' line in dmesg after boot_completed (see $DMESG_TAIL)"
 fi
 
 step "4c. overlayfs mounter-cred bug (item 5): zero dev=overlay, zero enforced kernel-domain denials on system_ext/product/system"

@@ -153,14 +153,17 @@ field() { sed -n "s/.*[[:space:]]$2=\([^[:space:]]*\).*/\1/p" <<<"$1" | tr -d '\
 # poll the app's reports for key=expected
 wait_app_field() {
   local token="$1" n="$2" key="$3" want="$4" deadline=$(( $(date +%s) + $5 ))
-  local logs hit got last=""
+  local logs hit got last="" num='^-?[0-9]+(\.[0-9]+)?$'
   while (( $(date +%s) < deadline )); do
     logs=$(android_sh "$INIT" "logcat -d -b all -s RhizoWinApp:I" 2>/dev/null)
     while read -r hit; do
       [[ -n "$hit" ]] || continue
       last="$hit"
       got=$(field "$hit" "$key")
-      [[ "$got" == "$want" ]] && { printf '%s' "$hit"; return 0; }
+      if [[ "$got" == "$want" ]] || { [[ "$got" =~ $num && "$want" =~ $num ]] \
+           && awk -v a="$got" -v b="$want" 'BEGIN{exit !(a + 0 == b + 0)}'; }; then
+        printf '%s' "$hit"; return 0
+      fi
     done < <(grep -a -o "$token nonce=$n.*" <<<"$logs")
     sleep 1
   done
@@ -214,6 +217,35 @@ wait_win_size() {
   return 1
 }
 
+# print the first task's bounds on an Android display as WxH
+task_size() {
+  android_sh "$INIT" "dumpsys activity activities" | awk -v want="Display #$1 " '
+    /^Display #/ { on = index($0, want) == 1; next }
+    on && /^    mBounds=Rect\(/ { s = $0; sub(/.*Rect\(/, "", s); sub(/\).*/, "", s); split(s, p, /[ ,-]+/)
+                                  print (p[3] - p[1]) "x" (p[4] - p[2]); exit }'
+}
+
+# poll an Android display's task until its bounds are WxH
+wait_task_size() {
+  local deadline=$(( $(date +%s) + $3 )) got=""
+  while (( $(date +%s) < deadline )); do
+    got=$(task_size "$1")
+    [[ "$got" == "$2" ]] && break
+    sleep 1
+  done
+  printf '%s' "${got:-none}"
+  [[ "$got" == "$2" ]]
+}
+
+# print the height of Android's freeform caption in pixels at a composer display's scale
+caption_px() {
+  local s
+  rhizo_ctl "$INIT" display toplevel "$1" >/dev/null 2>&1
+  s=$(rhizo_ctl_out "$INIT" | grep "^display toplevel id=$1 " | tail -1 | grep -o ' scale=[0-9.]*' | cut -d= -f2)
+  [[ -n "$s" ]] || return 1
+  awk -v s="$s" 'BEGIN { s120 = int(s * 120 + 0.5); print int((42 * s120 + 60) / 120) }'
+}
+
 
 
 if (( SKIP_BOOT == 0 )); then
@@ -251,16 +283,30 @@ else
   if [[ "$PROFILE" == sway ]]; then
     inject_attach || { fail "no injector with live devices is running"; exit 1; }
   fi
+  if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+    desk_keyboard_layout "$HOST_LAYOUT" >"$EV/sway.log" 2>&1 \
+      || { fail "the installed guest's session did not take the $HOST_LAYOUT layout (see $EV/sway.log)"; exit 1; }
+    ../../vm/start/start-unit.sh keymapd >"$EV/keymapd.log" 2>&1 \
+      || { fail "the installed keyboard-layout resolver did not restart (see $EV/keymapd.log)"; exit 1; }
+    ../../vm/start/start-unit.sh displayd >"$EV/displayd.log" 2>&1 \
+      || { fail "the installed per-display density daemon did not restart (see $EV/displayd.log)"; exit 1; }
+    ../inject/disable-pointer-accel.sh >"$EV/input-tuning.log" 2>&1 \
+      || { fail "could not turn off Android's pointer acceleration (see $EV/input-tuning.log)"; exit 1; }
+  fi
 fi
 
 desk_windows >/dev/null 2>&1 \
   || { fail "the compositor is not answering after the boot -- see $EV/sway.log and /tmp/sway.log in the guest"; exit 1; }
+if [[ "$PROFILE" == gnome ]] || [[ "$PROFILE" == plasma && "$(_plasma_mode 2>/dev/null)" == login ]]; then
+  OUT1=$(desk_outputs list | python3 -c "import json,sys; o=json.load(sys.stdin); print(o[0]['name'] if o else '')")
+  [[ -n "$OUT1" ]] || { fail "the compositor reports no output"; exit 1; }
+fi
 
 INIT=$(guest_init_pid 10)
 [[ -n "$INIT" ]] || { fail "no init second_stage"; exit 1; }
-enforce=$(ssh_vm -t 10 'cat /sys/fs/selinux/enforce' | tr -d '\r')
+enforce=$(guest_android_enforce)
 [[ "$enforce" == "1" ]] \
-  || { fail "SELinux is not enforcing (enforce=$enforce)"; exit 1; }
+  || { fail "Android's SELinux is not enforcing (enforce=$enforce)"; exit 1; }
 boot_completed=$(getprop_live "$INIT" sys.boot_completed) || boot_completed="<unreadable rc=$?>"
 [[ "$boot_completed" == "1" ]] || fail "sys.boot_completed='$boot_completed' at system test start"
 SS_PID_START=$(system_server_pid "$INIT")
@@ -470,7 +516,9 @@ if [[ -z "$tinfo" ]]; then
   fail "$APP_PKG never reported its display size"
   cause_a_evidence step3b-no-win-info full
 else
-  TW=$(field "$tinfo" realw); TH=$(field "$tinfo" realh)
+  tsize=$(task_size "$(field "$tinfo" display)")
+  [[ "$tsize" =~ ^[0-9]+x[0-9]+$ ]] || fail "could not read $APP_PKG's freeform task bounds (got '${tsize:-none}')"
+  TW=${tsize%x*}; TH=${tsize#*x}
   TX=$(( ${TW:-0} / 2 )); TY=$(( ${TH:-0} / 2 ))
   before_inject=$(rhizo_ctl_out "$INIT" | grep -c 'inject-failed')
   rhizo_ctl "$INIT" inject touch down "$(st_disp "$D1")" "$TX" "$TY" >/dev/null 2>&1
@@ -527,16 +575,19 @@ gw=$(st_num "$gw")
   || fail "fullscreen: the compositor reports the window ${gw}x${gh}, the output is ${OUT_W}x${OUT_H}"
 fsmode=$(win_field "$D1" fullscreen_mode)
 [[ "$fsmode" == "1" ]] || fail "fullscreen: the compositor reports fullscreen_mode=$fsmode, not 1"
-info=$(wait_app_field RHIZO_WIN_INFO "$fs_nonce" realw "$OUT_W" 45) \
-  || fail "fullscreen: the app's own display never became ${OUT_W} wide (its last report: ${info:-none})"
+info=$(wait_app_field RHIZO_WIN_INFO "$fs_nonce" w "$OUT_W" 45) \
+  || fail "fullscreen: the app's content view never became ${OUT_W} wide (its last report: ${info:-none})"
 if [[ -n "$info" ]]; then
-  arw=$(st_num "$(field "$info" realw)"); arh=$(field "$info" realh)
-  aw=$(field "$info" w); ah=$(field "$info" h)
-  log "    app reports its display ${arw}x${arh} and its own content view ${aw}x${ah}; compositor reports ${gw}x${gh}"
-  [[ "$arw" == "$OUT_W" && "$arh" == "$OUT_H" ]] \
-    || fail "fullscreen: the app reports its display ${arw}x${arh}, the output is ${OUT_W}x${OUT_H}"
-  (( aw > BASE_W )) \
-    || fail "fullscreen: the app's own content view is still ${aw} wide"
+  arw=$(field "$info" realw); arh=$(field "$info" realh)
+  aw=$(st_num "$(field "$info" w)"); ah=$(field "$info" h)
+  fcap=$(caption_px "$D1") || fail "fullscreen: the composer did not report display $D1's scale"
+  want_task="${OUT_W}x$(( OUT_H + ${fcap:-0} ))"
+  ftask=$(wait_task_size "$(field "$info" display)" "$want_task" 20)
+  log "    app reports its display ${arw}x${arh}, its content view ${aw}x${ah} and its task ${ftask}; compositor reports ${gw}x${gh}"
+  [[ "$(st "$ftask")" == "$want_task" ]] \
+    || fail "fullscreen: the app's freeform task is ${ftask}, the output plus Android's caption is ${want_task}"
+  [[ "$aw" == "$OUT_W" ]] \
+    || fail "fullscreen: the app's content view is ${aw} wide, the output is ${OUT_W}"
 fi
 desk_shot /tmp/wg4.png >/dev/null && pull /tmp/wg4.png "$EV/4-fullscreen.png"
 st_png "$EV/4-fullscreen.png"
@@ -562,17 +613,22 @@ step "5. maximize and restore, driven from the host"
 max_nonce=$(nonce)
 app_cmd "$APP_PKG" "$APP_ACT" "$max_nonce" "--es cmd set_color --es rgb A02020"
 DECO_H=$(python3 -c "import json,sys; print(json.load(sys.stdin).get('decoration_h', 0))" <<<"$(win_json "$D1")" 2>/dev/null)
-MAX_H=$(( OUT_H - ${DECO_H:-0} ))
+MAX_W=$OUT_W; MAX_H=$(( OUT_H - ${DECO_H:-0} ))
+read -r WORK_W WORK_H <<<"$(_desktop_window_for_display "$D1" 0 | python3 -c "
+import json,sys
+a=json.load(sys.stdin).get('work_area') or {}
+print(a.get('w', ''), a.get('h', ''))")"
+[[ -n "$WORK_W" && -n "$WORK_H" ]] && { MAX_W=$WORK_W; MAX_H=$WORK_H; }
 [[ -n "$d1_id" ]] && desk_window_op "$d1_id" maximize
-read -r mw mh <<<"$(wait_win_size "$D1" "$OUT_W" "$MAX_H" 40)"
+read -r mw mh <<<"$(wait_win_size "$D1" "$MAX_W" "$MAX_H" 40)"
 mw=$(st_num "$mw")
-[[ "$mw" == "$OUT_W" && "$mh" == "$MAX_H" ]] \
-  || fail "maximize: the compositor reports the window ${mw}x${mh}, the output is ${OUT_W}x${OUT_H} less a ${DECO_H:-0}px titlebar"
-minfo=$(wait_app_field RHIZO_WIN_INFO "$max_nonce" realw "$OUT_W" 45) \
-  || fail "maximize: the app's own display never became ${OUT_W} wide (its last report: ${minfo:-none})"
+[[ "$mw" == "$MAX_W" && "$mh" == "$MAX_H" ]] \
+  || fail "maximize: the compositor reports the window ${mw}x${mh}, want ${MAX_W}x${MAX_H} (the output is ${OUT_W}x${OUT_H}, a ${DECO_H:-0}px titlebar, work area ${WORK_W:-none}x${WORK_H:-none})"
+minfo=$(wait_app_field RHIZO_WIN_INFO "$max_nonce" w "$MAX_W" 45) \
+  || fail "maximize: the app's content view never became ${MAX_W} wide (its last report: ${minfo:-none})"
 if [[ -n "$minfo" ]]; then
-  maw=$(st_num "$(field "$minfo" realw)")
-  [[ "$maw" == "$OUT_W" ]] || fail "maximize: the app reports its display ${maw} wide, the output is $OUT_W"
+  maw=$(st_num "$(field "$minfo" w)")
+  [[ "$maw" == "$MAX_W" ]] || fail "maximize: the app reports its content view ${maw} wide, the window is $MAX_W"
 fi
 rest_nonce=$(nonce)
 app_cmd "$APP_PKG" "$APP_ACT" "$rest_nonce" "--es cmd set_color --es rgb 2060A0"
@@ -584,16 +640,18 @@ read -r umw umh <<<"$(wait_win_size "$D1" "$BASE_W" "$BASE_H" 40)"
 umw=$(st_num "$umw")
 [[ "$umw" == "$BASE_W" && "$umh" == "$BASE_H" ]] \
   || fail "restore from maximized: the window came back ${umw}x${umh}, not ${BASE_W}x${BASE_H}"
-rinfo=$(wait_app_field RHIZO_WIN_INFO "$rest_nonce" realw "$BASE_W" 45) \
-  || fail "restore from maximized: the app's own display never came back to ${BASE_W} wide (its last report: ${rinfo:-none})"
+rinfo=$(wait_app_field RHIZO_WIN_INFO "$rest_nonce" w "$BASE_W" 45) \
+  || fail "restore from maximized: the app's content view never came back to ${BASE_W} wide (its last report: ${rinfo:-none})"
 pass "maximize and restore both reached the app"
 
 
 step "6. a second output: the window keeps painting there and a click lands where the app expects"
 new_out=$(desk_outputs add "$SECOND_MODE")
 [[ -n "$new_out" ]] || fail "the compositor never produced a second output"
-[[ -z "$new_out" || "$new_out" == "$OUT2" ]] \
-  || log "    new output is $new_out, expected $OUT2 -- continuing with the real name"
+if [[ -n "$new_out" && "$new_out" != "$OUT2" ]]; then
+  log "    new output is $new_out, expected $OUT2 -- continuing with the real name"
+  OUT2=$new_out
+fi
 d1_id=$(display_window_id "$D1")
 [[ -n "$d1_id" ]] && desk_window_op "$d1_id" to_monitor "$OUT2"
 for _i in $(seq 1 20); do
@@ -603,13 +661,25 @@ done
 o2shot=/tmp/wg6.png
 desk_shot "$o2shot" "" "$OUT2" >/dev/null && pull "$o2shot" "$EV/6-second-output.png"
 st_png "$EV/6-second-output.png"
-nb2=$(python3 ../tools/pngstat.py "$EV/6-second-output.png" | grep '^nonblack_pct=' | cut -d= -f2)
-awk -v v="${nb2:-0}" 'BEGIN{exit !(v>20)}' \
-  || fail "the window paints nothing on $OUT2 (${nb2}% non-black over the whole output)"
 j6=$(win_json "$D1")
 read -r wx wy ww wh <<<"$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d['x'],d['y'],d['w'],d['h'])" <<<"$j6")"
+read -r o2x o2y <<<"$(desk_outputs list | python3 -c "
+import json,sys
+o=[x for x in json.load(sys.stdin) if x.get('name') == sys.argv[1]]
+print(o[0]['rect']['x'], o[0]['rect']['y']) if o else print('')" "$OUT2" 2>/dev/null)"
+[[ -n "$o2x" && -n "$o2y" ]] || fail "the compositor reports no rect for $OUT2"
+reg6="$(( ${wx:-0} - ${o2x:-0} )),$(( ${wy:-0} - ${o2y:-0} )),${ww:-0},${wh:-0}"
+st6=$(python3 ../tools/pngstat.py "$EV/6-second-output.png" --region "$reg6")
+nb2=$(grep '^nonblack_pct=' <<<"$st6" | cut -d= -f2)
+dis2=$(grep '^distinct=' <<<"$st6" | cut -d= -f2)
+log "    window on $OUT2 at output-local $reg6: ${nb2:-?}% non-black, ${dis2:-?} colors"
+awk -v v="${nb2:-0}" 'BEGIN{exit !(v>50)}' \
+  || fail "the window paints nothing on $OUT2 (${nb2:-?}% non-black inside its ${ww:-?}x${wh:-?} rect)"
+[[ "${dis2:-0}" -gt 20 ]] \
+  || fail "the window on $OUT2 is a flat fill (${dis2:-?} colors inside its rect)"
 TX=$(( wx + ww / 3 )); TY=$(( wy + wh / 3 ))
-EXP_X=$(( ww / 3 )); EXP_Y=$(( wh / 3 ))
+ccap=$(caption_px "$D1") || fail "the composer did not report display $D1's scale"
+EXP_X=$(( ww / 3 )); EXP_Y=$(( wh / 3 + ${ccap:-0} ))
 click_nonce=$(nonce)
 app_ping "$APP_PKG" "$click_nonce"
 app_token RHIZO_ALIVE "$click_nonce" 30 >/dev/null || fail "the app stopped answering before the click leg"
@@ -650,16 +720,21 @@ log "    composer's own view before the scale change: ${ctop:-no answer}"
 
 base_nonce=$(nonce)
 app_cmd "$APP_PKG" "$APP_ACT" "$base_nonce" "--es cmd win_info"
-binfo=$(wait_app_field RHIZO_WIN_INFO "$base_nonce" realw "$SCALED_W" 45) \
+binfo=$(wait_app_field RHIZO_WIN_INFO "$base_nonce" w "$SCALED_W" 45) \
   || fail "scale: the app never reported the ${SCALED_W}px window it has before the scale change (last: ${binfo:-none})"
 dens_out=$(android_sh "$INIT" "wm density -d $(field "$binfo" display)" 2>/dev/null)
 grep -q "Override density" <<<"$dens_out" \
   && fail "a density override is set on this display ($dens_out)"
-BASE_PX=$(field "$binfo" realw)
+BASE_PX=$(field "$binfo" w)
+BASE_REALW=$(st_num "$(field "$binfo" realw)")
 BASE_DENSITY=$(field "$binfo" density)
 BASE_DP=$(awk -v p="${BASE_PX:-0}" -v d="${BASE_DENSITY:-0}" 'BEGIN{ if (d>0) printf "%.1f", p/d; else print 0 }')
 log "    before the scale change the app reports ${BASE_PX}px at density ${BASE_DENSITY} (${BASE_DP}dp wide)"
 
+# the app reports its new size before Android's resize transition finishes cropping its window
+read -r s7w s7h <<<"$(wait_win_size "$D1" "$SCALED_W" "$SCALED_H" 40)"
+[[ "$(st_num "$s7w")" == "$SCALED_W" && "$s7h" == "$SCALED_H" ]] \
+  || fail "scale: the window never settled at the ${SCALED_W}x${SCALED_H} it was resized to (it reads ${s7w}x${s7h})"
 W0=$(python3 -c "import json,sys; print(json.load(sys.stdin)['w'])" <<<"$(win_json "$D1")" 2>/dev/null)
 desk_outputs scale "$OUT2" 2
 
@@ -674,17 +749,23 @@ log "    composer's own view of the window: ${ctop:-no answer}"
 [[ -n "$comp_scaled" ]] \
   || fail "the composer never saw $OUT2's scale change (${ctop:-no answer})"
 
+# Android may apply the scale before the nonce reaches the app: query again until a report has the doubled density
 scale_nonce=$(nonce)
-app_cmd "$APP_PKG" "$APP_ACT" "$scale_nonce" "--es cmd set_color --es rgb 3050C0"
-sinfo=$(wait_app_field RHIZO_WIN_INFO "$scale_nonce" density \
-        "$(awk -v d="${BASE_DENSITY:-0}" 'BEGIN{printf "%g", d*2}')" 60)
+WANT_SDENSITY=$(awk -v d="${BASE_DENSITY:-0}" 'BEGIN{printf "%g", d*2}')
+sinfo=""
+sdeadline=$(( SECONDS + 60 ))
+while (( SECONDS < sdeadline )); do
+  app_cmd "$APP_PKG" "$APP_ACT" "$scale_nonce" "--es cmd win_info"
+  scale_hit=$(wait_app_field RHIZO_WIN_INFO "$scale_nonce" density "$WANT_SDENSITY" 3) && { sinfo=$scale_hit; break; }
+  [[ -n "$scale_hit" ]] && sinfo=$scale_hit
+done
 if [[ -z "$sinfo" ]]; then
   fail "scale: the app never reported a window after the scale change"
 else
-  sw=$(st_num "$(field "$sinfo" realw)"); sh=$(field "$sinfo" realh)
+  sw=$(st_num "$(field "$sinfo" w)"); sh=$(field "$sinfo" h)
   sdensity=$(st_zero "$(field "$sinfo" density)")
   sdp=$(awk -v p="${sw:-0}" -v d="${sdensity:-0}" 'BEGIN{ if (d>0) printf "%.1f", p/d; else print 0 }')
-  log "    app reports its display ${sw}x${sh} at density ${sdensity} (${sdp}dp wide) on a scale-2 output"
+  log "    app reports its content view ${sw}x${sh} at density ${sdensity} (${sdp}dp wide) on a scale-2 output"
   W1=$(python3 -c "import json,sys; print(json.load(sys.stdin)['w'])" <<<"$(win_json "$D1")" 2>/dev/null)
   WIN_RATIO=$(awk -v a="${W1:-0}" -v b="${W0:-0}" 'BEGIN{ if (b>0) printf "%.3f", a/b; else print 0 }')
   WANT_PX=$(awk -v p="${BASE_PX:-0}" -v r="$WIN_RATIO" 'BEGIN{ printf "%d", p * r * 2 + 0.5 }')
@@ -692,7 +773,7 @@ else
   awk -v r="$WIN_RATIO" 'BEGIN{ exit !(r > 0.45 && r < 0.55 || r > 0.95 && r < 1.05) }' \
     || fail "scale: the window went from ${W0} to ${W1} logical px wide, want half or the same"
   awk -v a="${sw:-0}" -v b="$WANT_PX" 'BEGIN{ exit !(b > 0 && a >= b - 2 && a <= b + 2) }' \
-    || fail "scale: the app's display is ${sw}px wide where a ${W1}-px window at scale 2 is ${WANT_PX}px (it was ${BASE_PX}px)"
+    || fail "scale: the app's content view is ${sw}px wide where a ${W1}-px window at scale 2 is ${WANT_PX}px (it was ${BASE_PX}px)"
   awk -v a="${sdensity:-0}" -v b="${BASE_DENSITY:-0}" \
     'BEGIN{ exit !(b > 0 && a > b * 1.8 && a < b * 2.2) }' \
     || fail "scale: the app reports density ${sdensity} on a scale-2 output against ${BASE_DENSITY} before it"
@@ -701,7 +782,10 @@ else
     || fail "scale: the app lays out ${sdp}dp wide where it laid out ${BASE_DP}dp (window ratio ${WIN_RATIO})"
 fi
 
-draw=$(app_token RHIZO_DRAW "$scale_nonce" 45)
+# the checkerboard rect is reported on a color change: take one drawn after the density doubled
+draw_nonce=$(nonce)
+app_cmd "$APP_PKG" "$APP_ACT" "$draw_nonce" "--es cmd set_color --es rgb 40A060"
+draw=$(app_token RHIZO_DRAW "$draw_nonce" 45)
 desk_shot /tmp/wg7.png "" "$OUT2" >/dev/null && pull /tmp/wg7.png "$EV/7-scale.png"
 st_png "$EV/7-scale.png"
 if [[ -n "$draw" ]]; then
@@ -709,7 +793,9 @@ if [[ -n "$draw" ]]; then
   crw=$(field "$draw" rectW); crh=$(field "$draw" rectH)
   js=$(win_json "$D1")
   read -r sx sy <<<"$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d['x'],d['y'])" <<<"$js")"
-  PX=$(( (sx - O2X) * 2 + crx )); PY=$(( (sy - O2Y) * 2 + cry ))
+  # app window coordinates include the freeform caption
+  cap7=$(caption_px "$D1") || fail "scale: the composer did not report display $D1's scale"
+  PX=$(( (sx - O2X) * 2 + crx )); PY=$(( (sy - O2Y) * 2 + cry - ${cap7:-0} ))
   if [[ -n "$crw" && -n "$crh" ]]; then
     python3 ../tools/mkpattern.py --checker "$crw" "$crh" "$WORKDIR/ref.png" \
       || fail "could not generate the reference checkerboard"
@@ -764,6 +850,7 @@ if [[ "$PROFILE" == plasma || "$PROFILE" == sway ]]; then
     [[ "$ctop" == *" scale=$fs "* ]] \
       || fail "fractional $fs: the composer's window never took the scale (${ctop:-no answer})"
     WANT_FDENSITY=$(awk -v d="${BASE_DENSITY:-0}" -v f="$fs" 'BEGIN{ printf "%.4f", d * f }')
+    WANT_FDISPW=$(awk -v p="${BASE_REALW:-0}" -v f="$fs" 'BEGIN{ printf "%d", p * f + 0.5 }')
     fsinfo="" fw="" fd="" WF="" WANT_FPX=0
     fdeadline=$(( SECONDS + 60 ))
     while (( SECONDS < fdeadline )); do
@@ -774,15 +861,18 @@ if [[ "$PROFILE" == plasma || "$PROFILE" == sway ]]; then
       sleep 2
       fsinfo=$(android_sh "$INIT" "logcat -d -b all -s RhizoWinApp:I" 2>/dev/null \
                | grep -a -o "RHIZO_WIN_INFO nonce=$fs_nonce.*" | tail -1)
-      fw=$(st_num "$(field "$fsinfo" realw)"); fd=$(st_zero "$(field "$fsinfo" density)")
-      awk -v a="${fw:-0}" -v b="$WANT_FPX" -v c="${fd:-0}" -v e="$WANT_FDENSITY" \
-        'BEGIN{ exit !(a >= b - 2 && a <= b + 2 && c > e * 0.98 && c < e * 1.02) }' && break
+      fw=$(st_num "$(field "$fsinfo" w)"); fd=$(st_zero "$(field "$fsinfo" density)")
+      frw=$(st_num "$(field "$fsinfo" realw)")
+      awk -v a="${fw:-0}" -v b="$WANT_FPX" -v c="${fd:-0}" -v e="$WANT_FDENSITY" -v r="${frw:-0}" -v q="$WANT_FDISPW" \
+        'BEGIN{ exit !(a >= b - 2 && a <= b + 2 && c > e * 0.98 && c < e * 1.02 && r >= q - 2 && r <= q + 2) }' && break
     done
-    log "    at $fs the window is ${WF:-?} logical px wide (${WF0:-?} at 1); the app reports ${fw:-?}px at density ${fd:-?} (want ${WANT_FPX}px at ${WANT_FDENSITY})"
+    log "    at $fs the window is ${WF:-?} logical px wide (${WF0:-?} at 1); the app's window is ${fw:-?}px at density ${fd:-?} on a ${frw:-?}px display (want ${WANT_FPX}px at ${WANT_FDENSITY} on ${WANT_FDISPW}px)"
     awk -v a="${WF:-0}" -v b="${WF0:-0}" 'BEGIN{ exit !(b > 0 && a >= b - 2 && a <= b + 2) }' \
       || fail "fractional $fs: the window is ${WF:-?} logical px wide, ${WF0:-?} at scale 1"
     awk -v a="${fw:-0}" -v b="$WANT_FPX" 'BEGIN{ exit !(b > 0 && a >= b - 2 && a <= b + 2) }' \
-      || fail "fractional $fs: the app's display is ${fw:-?}px wide where a ${WF:-?}-px window at $fs is ${WANT_FPX}px"
+      || fail "fractional $fs: the app's window is ${fw:-?}px wide where a ${WF:-?}-px window at $fs is ${WANT_FPX}px"
+    awk -v a="${frw:-0}" -v b="$WANT_FDISPW" 'BEGIN{ exit !(b > 0 && a >= b - 2 && a <= b + 2) }' \
+      || fail "fractional $fs: the app's display is ${frw:-?}px wide where the work area at $fs is ${WANT_FDISPW}px (${BASE_REALW:-?}px at 1)"
     awk -v c="${fd:-0}" -v e="$WANT_FDENSITY" 'BEGIN{ exit !(e > 0 && c > e * 0.98 && c < e * 1.02) }' \
       || fail "fractional $fs: the app's density is ${fd:-?}, not ${WANT_FDENSITY} (${BASE_DENSITY} at scale 1, times $fs)"
     desk_outputs scale "$OUT2" 1
@@ -906,6 +996,8 @@ before=$(android_sh "$INIT" "logcat -d -b all -s RhizoWinApp:I" 2>/dev/null | gr
 desk_inject_pointer axis h -30 || fail "the injector refused a horizontal scroll"
 if [[ "$PROFILE" == plasma ]]; then
   desk_inject_pointer axis v 15 || fail "the injector refused a vertical scroll"
+elif [[ "$PROFILE" == gnome ]]; then
+  desk_inject_pointer axis_discrete v 1 || fail "the injector refused a discrete wheel step"
 else
   inject_axis_discrete v 1 || fail "the injector refused a discrete wheel step"
 fi
@@ -958,6 +1050,8 @@ cursor_pixels() {
 park_and_shoot "$AWAYX" "$AWAYY" "$EV/11-away.png" \
   || fail "could not capture the window with the pointer parked away from the region under test"
 
+# android.view.PointerIcon type ids
+declare -A POINTER_TYPE_ID=([TEXT]=1008 [CROSSHAIR]=1007)
 declare -A CURSOR_DIGEST=() CURSOR_SEEN=() CURSOR_UPLOADS=() CURSOR_OFFERED=() CURSOR_SKIP=() CURSOR_LAYER=() CURSOR_LAYERCMDS=() CURSOR_BUFCMDS=() CURSOR_NAMED=() CURSOR_IDCHG=() CURSOR_PRESENTS=()
 for shape in TEXT CROSSHAIR; do
   ic_nonce=$(nonce)
@@ -969,13 +1063,31 @@ for shape in TEXT CROSSHAIR; do
     || fail "the app asked for a $shape pointer and its own view reports '$applied'"
 
   desk_inject_pointer abs "$AWAYX" "$AWAYY" || fail "could not move the pointer off the region under test"
-  sleep 1
-  park_and_shoot "$PTX" "$PTY" "$EV/11-$shape.png" \
-    || { fail "could not capture the pointer for $shape"; continue; }
-
-  resolved=$(wait_app_field RHIZO_ICON_RESOLVE "$ic_nonce" name "$shape" 20)
+  park_nonce=$(nonce)
+  app_ping "$APP_PKG" "$park_nonce"
+  app_token RHIZO_ALIVE "$park_nonce" 30 >/dev/null \
+    || fail "$APP_PKG never acknowledged the $shape park's nonce"
+  desk_inject_pointer abs "$PTX" "$PTY" || { fail "could not park the pointer for $shape"; continue; }
+  entered=$(wait_app_field RHIZO_POINTER "$park_nonce" actionName ACTION_HOVER_ENTER 20)
+  [[ -n "$entered" ]] \
+    || fail "the pointer parked at $PTX,$PTY never entered $APP_PKG's view for $shape (last: $(app_token RHIZO_POINTER "$park_nonce" 1))"
+  resolved=$(wait_app_field RHIZO_ICON_RESOLVE "$park_nonce" name "$shape" 20)
   [[ -n "$resolved" ]] \
-    || fail "the framework never asked $APP_PKG for a pointer icon after it set a $shape one (last: $(app_token RHIZO_ICON_RESOLVE "$ic_nonce" 1))"
+    || fail "no pointer icon request to $APP_PKG at the parked point after the $shape icon (last: $(app_token RHIZO_ICON_RESOLVE "$park_nonce" 1))"
+  # wait for the composer's pointer_type: it sets the shape only after displayd replies
+  want_type=${POINTER_TYPE_ID[$shape]}
+  ptype=""
+  ptype_deadline=$(( SECONDS + 10 ))
+  while (( SECONDS < ptype_deadline )); do
+    rhizo_ctl "$INIT" display cursor "$D1" >/dev/null 2>&1
+    ptype=$(rhizo_ctl_out "$INIT" | grep "^display cursor id=$D1 " | tail -1 \
+            | sed -n 's/.* pointer_type=\([^ ]*\).*/\1/p')
+    [[ "$ptype" == "$want_type" ]] && break
+    sleep 0.5
+  done
+  log "    $shape: composer's pointer_type=${ptype:-<none>} (want $want_type) before the capture"
+  { desk_shot /tmp/wgc.png "" "$OUT1" >/dev/null && pull /tmp/wgc.png "$EV/11-$shape.png"; } \
+    || { fail "could not capture the pointer for $shape"; continue; }
 
   rhizo_ctl "$INIT" display cursor "$D1" >/dev/null 2>&1
   cline=$(rhizo_ctl_out "$INIT" | grep "^display cursor id=$D1 " | tail -1)
@@ -1072,8 +1184,12 @@ live_nonce=$(nonce)
 app_ping "$APP_PKG" "$live_nonce"
 app_token RHIZO_ALIVE "$live_nonce" 30 >/dev/null \
   || fail "closing $APP2_PKG's window also stopped $APP_PKG"
-_desktop_window_for_display "$D2" 0 --any-size >/dev/null 2>&1 \
-  && fail "$APP2_PKG's toplevel is still in the compositor's tree after being closed"
+gone_deadline=$(( SECONDS + 10 )) gone=0
+while (( SECONDS < gone_deadline )); do
+  _desktop_window_for_display "$D2" 0 --any-size >/dev/null 2>&1 || { gone=1; break; }
+  sleep 0.5
+done
+(( gone )) || fail "$APP2_PKG's toplevel is still in the compositor's tree 10s after being closed"
 win_json "$D1" >/dev/null \
   || fail "closing one window unmapped the other app's toplevel too"
 assert_window_painted winapp-after-close "$(st_disp "$D1")"
@@ -1103,6 +1219,9 @@ fi
 pass "no restart, no fatal exception"
 
 [[ "$PROFILE" == sway ]] && inject_stop >/dev/null 2>&1
+if [[ "$PROFILE" == plasma && "$OUT2" == Virtual-rhizo-* ]]; then
+  desk_outputs remove "$OUT2" >/dev/null 2>&1 || log "    could not remove the virtual output $OUT2"
+fi
 
 if (( SELFTEST )); then
   failed_steps=$(cut -f2 "$EV/failures.log" 2>/dev/null | sed 's/^step=//' | sort -u)

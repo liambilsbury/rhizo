@@ -200,9 +200,10 @@ def hidraw_add(hid, name, minor, action="add"):
 class Dev:
     """fake /dev for fence tests"""
 
-    def __init__(self, label=None, fail=(), relabel_fail=False, dirs=None):
+    def __init__(self, label=None, fail=(), relabel_fail=False, dirs=None, race=None):
         """set up the fake /dev state"""
         self.nodes, self.label, self.fail = {}, label, set(fail)
+        self.race = dict(race or {})
         self.relabel_fail, self.calls = relabel_fail, []
         self.dirs = dirs or {}
         self.mask = 0o022
@@ -224,6 +225,8 @@ class Dev:
         """create a fixture node, failing for paths set to fail"""
         if p in self.fail:
             raise PermissionError(13, "Permission denied", p)
+        if p in self.race:
+            self.nodes[p] = self.race.pop(p)
         if p in self.nodes:
             raise FileExistsError(17, "File exists", p)
         dmode, dgid = self.dirs.get(os.path.dirname(p), (0o755, 0))
@@ -393,6 +396,22 @@ def check_fence(rm):
     dev, _, _ = feed(rm, [("reg", "add", VIRTUAL + "/input9"), evdev_add(VIRTUAL + "/input90", "event3", 67)])
     if "/dev/input/event3" in dev.nodes:
         bad.append("fence: input90's node was published")
+    bad += check_mknod_race(rm)
+    return bad
+
+
+def check_mknod_race(rm):
+    """check a node ueventd makes between the fence's lstat and mknod"""
+    bad = []
+    reg = [evdev_add(VIRTUAL + "/input10", "event4", 68), ("reg", "add", VIRTUAL + "/input10")]
+    for what, dt in (("the same device", os.makedev(13, 68)), ("another device", os.makedev(13, 99))):
+        planted = {"mode": stat.S_IFCHR | 0o600, "dev": dt, "uid": 0, "gid": 0, "label": "u:object_r:input_device:s0"}
+        dev, log, fence = feed(rm, reg, Dev(race={"/dev/input/event4": planted}))
+        why = node_is(dev, "/dev/input/event4", 68, 0o660, 0, 1004)
+        if why or "/dev/input/event4" not in fence.published \
+                or not any("input_fence=published node=/dev/input/event4" in m for m in log):
+            bad.append("fence: a node ueventd made for %s between lstat and mknod was not published as the "
+                       "registered device (%s): %s" % (what, why or "not published", log))
     return bad
 
 
@@ -955,8 +974,8 @@ FENCE_MUTATIONS = (
     ("hidraw-no-relabel", '"hidraw": (AID_SYSTEM, AID_SYSTEM, HIDRAW_NODE_LABEL, True)}',
      '"hidraw": (AID_SYSTEM, AID_SYSTEM, HIDRAW_NODE_LABEL, False)}',
      "/dev/hidraw1 (Android's own uhid device's hidraw) is labeled u:object_r:device:s0"),
-    ("chown-before-relabel", "            ops.mknod(path, stat.S_IFCHR | INPUT_NODE_MODE, dev)\n",
-     "            ops.mknod(path, stat.S_IFCHR | INPUT_NODE_MODE, dev)\n            ops.chown(path, uid, gid)\n",
+    ("chown-before-relabel", "        _make_input_node(path, dev, st, ops)\n",
+     "        _make_input_node(path, dev, st, ops)\n        ops.chown(path, uid, gid)\n",
      "/dev/hidraw1 was chown before any relabel"),
     ("relabel-leaves-node", "        try:\n            ops.unlink(path)\n            gone = \"\"\n",
      "        try:\n            gone = \"\"\n", "a refused hidraw relabel left /dev/hidraw1 behind"),
@@ -986,6 +1005,10 @@ FENCE_MUTATIONS = (
     ("any-sender", "        if not (isinstance(addr, tuple) and addr and addr[0] == 0):",
      "        if False:", "event7, forged by a userspace sender"),
     ("label-unread", "    if got != label:\n", "    if False:\n", "labeled tmpfs drew no input_fence=failed"),
+    ("mknod-race-fails", "        except FileExistsError:\n            if retry:\n                raise\n",
+     "        except FileExistsError:\n            raise\n", "made for the same device between lstat and mknod"),
+    ("mknod-race-adopts-any", "        if st is not None and stat.S_ISCHR(st.st_mode) and st.st_rdev == dev:\n            return\n",
+     "        if st is not None:\n            return\n", "made for another device between lstat and mknod"),
 )
 
 

@@ -1,5 +1,6 @@
 #include "wayland_backend.h"
 #include "rhizo/memfd_buffer.h"
+#include "../input/pointer_icon.h"
 #include "selection_read.h"
 #include "shm_present.h"
 
@@ -42,6 +43,29 @@
 #include "xdg-activation-v1-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
+
+static_assert(rhizo::kShapeDefault == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT &&
+                  rhizo::kShapeContextMenu == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CONTEXT_MENU &&
+                  rhizo::kShapeHelp == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_HELP &&
+                  rhizo::kShapePointer == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER &&
+                  rhizo::kShapeWait == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_WAIT &&
+                  rhizo::kShapeCell == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CELL &&
+                  rhizo::kShapeCrosshair == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CROSSHAIR &&
+                  rhizo::kShapeText == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT &&
+                  rhizo::kShapeVerticalText == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_VERTICAL_TEXT &&
+                  rhizo::kShapeAlias == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALIAS &&
+                  rhizo::kShapeCopy == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COPY &&
+                  rhizo::kShapeNotAllowed == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NOT_ALLOWED &&
+                  rhizo::kShapeGrab == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB &&
+                  rhizo::kShapeGrabbing == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING &&
+                  rhizo::kShapeEwResize == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE &&
+                  rhizo::kShapeNsResize == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE &&
+                  rhizo::kShapeNeswResize == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NESW_RESIZE &&
+                  rhizo::kShapeNwseResize == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NWSE_RESIZE &&
+                  rhizo::kShapeAllScroll == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL &&
+                  rhizo::kShapeZoomIn == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_IN &&
+                  rhizo::kShapeZoomOut == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_OUT,
+              "pointer_icon.h's shapes are wp_cursor_shape_device_v1's");
 
 namespace rhizo {
 namespace {
@@ -245,6 +269,7 @@ struct DisplayState {
     int32_t height = 0;
     int32_t hotspotX = 0;
     int32_t hotspotY = 0;
+    int32_t pointerType = rhizo::kPointerTypeArrow;
   } cursor;
 
   zxdg_toplevel_decoration_v1* decoration = nullptr;
@@ -929,7 +954,19 @@ constexpr wl_buffer_listener kCursorBufferListener{.release = OnCursorBufferRele
 
 // attach the cursor image to the pointer
 void ApplyCursorNowLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
-  if (impl->cursorShapeManager) return;
+  // the host cursor theme draws all of the system pointers; only a custom icon uses Android's image
+  if (impl->cursorShapeManager) {
+    const uint32_t shape = rhizo::CursorShapeForPointerType(ds->cursor.pointerType);
+    if (shape != rhizo::kShapeUseImage) {
+      if (!impl->pointer) return;
+      if (!impl->cursorShapeDevice) {
+        impl->cursorShapeDevice = wp_cursor_shape_manager_v1_get_pointer(impl->cursorShapeManager, impl->pointer);
+      }
+      wp_cursor_shape_device_v1_set_shape(impl->cursorShapeDevice, impl->lastPointerEnterSerial, shape);
+      wl_display_flush(impl->display);
+      return;
+    }
+  }
   if (!impl->pointer || !impl->shm || !ds->cursor.valid) return;
   const auto& c = ds->cursor;
   if (!impl->cursorSurface) impl->cursorSurface = wl_compositor_create_surface(impl->compositor);
@@ -1278,11 +1315,16 @@ void OnPointerEnter(void* data, wl_pointer*, uint32_t serial, wl_surface* surfac
   impl->QueueInput(impl->pointerFocus, WaylandInputEvent::Kind::PointerEnter, impl->pointerX,
                    impl->pointerY, 0, 0, 0);
   if (impl->cursorShapeManager && impl->pointer) {
-    if (!impl->cursorShapeDevice) {
-      impl->cursorShapeDevice = wp_cursor_shape_manager_v1_get_pointer(impl->cursorShapeManager, impl->pointer);
+    DisplayState* ds = impl->pointerFocus >= 0 ? impl->Find(impl->pointerFocus) : nullptr;
+    const uint32_t shape =
+        ds ? rhizo::CursorShapeForPointerType(ds->cursor.pointerType) : rhizo::kShapeDefault;
+    if (shape != rhizo::kShapeUseImage) {
+      if (!impl->cursorShapeDevice) {
+        impl->cursorShapeDevice = wp_cursor_shape_manager_v1_get_pointer(impl->cursorShapeManager, impl->pointer);
+      }
+      wp_cursor_shape_device_v1_set_shape(impl->cursorShapeDevice, serial, shape);
+      return;
     }
-    wp_cursor_shape_device_v1_set_shape(impl->cursorShapeDevice, serial, WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT);
-    return;
   }
   if (impl->pointerFocus >= 0) impl->cursorApplyPending.insert(impl->pointerFocus);
 }
@@ -2946,6 +2988,17 @@ bool WaylandBackend::ActivateDisplay(int64_t displayId, const std::string& token
   return true;
 }
 
+// minimize the display's window if it is mapped
+bool WaylandBackend::MinimizeDisplay(int64_t displayId) {
+  Impl* impl = impl_.get();
+  std::lock_guard<std::mutex> lg(impl->mutex_);
+  DisplayState* ds = impl->Find(displayId);
+  if (!ds || !ds->xdgToplevel || !ds->bufferCommitted) return false;
+  xdg_toplevel_set_minimized(ds->xdgToplevel);
+  wl_display_flush(impl->display);
+  return true;
+}
+
 // enable or disable vsync events
 void WaylandBackend::SetVsyncEnabled(bool enabled) {
   Impl* impl = impl_.get();
@@ -2991,6 +3044,28 @@ bool WaylandBackend::SetCursorSurface(int64_t displayId, const uint8_t* pixelsAr
            pixelsArgb8888 + static_cast<size_t>(row) * strideBytes, rowBytes);
   }
   c.valid = true;
+  if (impl->pointerFocus == displayId) {
+    impl->cursorApplyPending.insert(displayId);
+    if (impl->wakeFd >= 0) {
+      uint64_t one = 1;
+      if (write(impl->wakeFd, &one, sizeof one) < 0 && errno != EAGAIN) {
+        klogf("WaylandBackend: eventfd write FAILED errno=%d", errno);
+      }
+    }
+  }
+  return true;
+}
+
+// store Android's pointer type for the display and show its host cursor shape
+bool WaylandBackend::SetCursorType(int64_t displayId, int32_t pointerType) {
+  Impl* impl = impl_.get();
+  std::lock_guard<std::mutex> lg(impl->mutex_);
+  DisplayState* ds = impl->Find(displayId);
+  if (!ds) return false;
+  if (ds->cursor.pointerType == pointerType) return true;
+  klogf("WaylandBackend: display %lld pointer type %d -> %d (shape %u)", static_cast<long long>(displayId),
+        ds->cursor.pointerType, pointerType, rhizo::CursorShapeForPointerType(pointerType));
+  ds->cursor.pointerType = pointerType;
   if (impl->pointerFocus == displayId) {
     impl->cursorApplyPending.insert(displayId);
     if (impl->wakeFd >= 0) {

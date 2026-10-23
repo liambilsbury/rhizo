@@ -96,6 +96,15 @@ def main():
             log("NB_PORTAL_SEED ip=%s", cfg.portal)
         except OSError as e:
             log("NB_PORTAL_SEED_FAILED ip=%s error=%s", cfg.portal, e)
+    else:
+        # systemd can keep the RuntimeDirectory across a restart
+        try:
+            os.unlink(os.path.join(cfg.state_dir, "portal"))
+            log("NB_PORTAL_CLEARED reason=not-seeded")
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log("NB_PORTAL_CLEAR_FAILED error=%s", e)
 
     wanted = [s.strip() for s in cfg.services.split(",") if s.strip()]
     services = []

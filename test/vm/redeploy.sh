@@ -5,6 +5,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")" || exit
 source ./common.sh
 source ./guest-os/guest-os-lib.sh
 source ./image/release-map.sh
+refuse_installed_guest redeploy.sh || exit 2
 
 # print boot log findings and run explain-boot.sh
 explain_dead_boot() {
@@ -136,6 +137,8 @@ STAGE_FILES=(
 RELEASE_RC=(init.zygote64.rc init.zygote64_32.rc netd.rc surfaceflinger.rc vold.rc init.vndk-nodef.rc product-build.prop)
 RELEASE_SKIP=(com.android.tethering.apex audioserver.rc
               audio_policy_configuration.xml mediametrics.rc RhizoAudioRouter.apk)
+AUDIO_SET_RELEASES=(a16 a17 a15)
+AUDIO_SET_RC=(audioserver.rc mediametrics.rc)
 # return whether the first argument equals one of the others
 in_list() { local n="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$n" ]] && return 0; done; return 1; }
 OPTIONAL_STAGE_FILES=(com.android.tethering.apex)
@@ -196,6 +199,24 @@ if [[ "$SKIP_KILL" == 0 ]]; then
   fi
 else
   wait_for_ssh 20 || { log "FAIL: --skip-kill but no VM is reachable"; exit 1; }
+  pre_stage=$(ssh_vm -t 10 'systemctl is-active androidd.service' 2>/dev/null | tr -d '[:space:]')
+  if [[ "$pre_stage" == active || "$pre_stage" == activating ]]; then
+    log "androidd.service is $pre_stage from the previous deploy, stopping it"
+    if ! stop_err=$(ssh_vm -t 120 'systemctl stop androidd.service' 2>&1); then
+      log "  systemctl stop failed ($(tr '\n' ' ' <<<"$stop_err" | cut -c1-200)), polling the unit's state"
+      stop_state=""
+      for _ in $(seq 1 60); do
+        stop_state=$(ssh_vm -t 10 'systemctl is-active androidd.service' 2>/dev/null | tr -d '[:space:]')
+        [[ "$stop_state" == inactive || "$stop_state" == failed ]] && break
+        [[ "$stop_state" == active || "$stop_state" == activating ]] \
+          && ssh_vm -t 10 'systemctl stop --no-block androidd.service' >/dev/null 2>&1
+        sleep 2
+      done
+      [[ "$stop_state" == inactive || "$stop_state" == failed ]] \
+        || { log "FAIL: could not stop androidd.service (still '${stop_state:-<no answer>}')"; exit 1; }
+      log "  androidd.service is $stop_state"
+    fi
+  fi
 fi
 guest_os=$(guest_os_id)
 rc=$?
@@ -266,7 +287,9 @@ stage_cmd+=$'\n''STAGE_DIRS="'"$STAGE_DIR_NAMES"'"
 if command -v rsync >/dev/null 2>&1; then
   for d in $STAGE_DIRS; do
     mkdir -p "/root/$d"
-    rsync -a --delete --exclude __pycache__ "/root/share/$d/" "/root/$d/"
+    # root-owned: under host policy rhizo_host has no dac_override for the uid of the 9p share
+    chown -R root:root "/root/$d"
+    rsync -a --no-owner --no-group --delete --exclude __pycache__ "/root/share/$d/" "/root/$d/"
   done
 else
   for d in $STAGE_DIRS; do
@@ -302,11 +325,11 @@ for f in "${STAGE_FILES[@]}"; do
   fi
   src="/root/share/$f"
   if [[ -n "$RELEASE" && "$RELEASE" != a16 ]]; then
-    if in_list "$f" "${RELEASE_SKIP[@]}"; then
+    if in_list "$f" "${RELEASE_SKIP[@]}" && ! { in_list "$RELEASE" "${AUDIO_SET_RELEASES[@]}" && ! in_list "$f" "${OPTIONAL_STAGE_FILES[@]}"; }; then
       release_files_cmd+=$'\n'"rm -f /root/$f"
       continue
     fi
-    if in_list "$f" "${RELEASE_RC[@]}"; then
+    if in_list "$f" "${RELEASE_RC[@]}" || in_list "$f" "${AUDIO_SET_RC[@]}"; then
       src="/root/share/rel/$RELEASE/$f"
       if [[ ! -f "$SHARE_DIR/rel/$RELEASE/$f" ]]; then
         log "FAIL: $SHARE_DIR/rel/$RELEASE/$f is missing -- RHIZO_VM=$RHIZO_VM test/vm/redeploy.sh --no-launch, then RHIZO_VM=$RHIZO_VM test/vm/image/stage-gsi-trees.sh --derive-rel $RELEASE"
@@ -367,6 +390,10 @@ for _group in bootstrap prepare update teardown lib cli; do
 done
 rm -f /usr/lib/rhizo/install/cli/rhizo.sh
 install -D -m 0644 /root/share/rhizo-console-vt.sh /etc/profile.d/rhizo-console-vt.sh
+for _f in service.d/50-rhizo-private-users.conf avahi-daemon.service.d/50-rhizo-policy.conf \
+          accounts-daemon.service.d/rhizo-skel.conf user@.service.d/rhizo-user-prep.conf session-.scope.d/rhizo-session-vt.conf; do
+  install -D -m 0644 "/root/share/host-mode/usr/lib/systemd/system/$_f" "/usr/lib/systemd/system/$_f"
+done
 install -d -m 0755 /usr/lib/rhizo/broker
 install -m 0755 /root/share/brokerd.py /root/share/broker-client.py /usr/lib/rhizo/broker/
 install -d -m 0755 /usr/lib/rhizo/server-idle
@@ -401,6 +428,8 @@ case "$RHIZO_GUEST_OS" in
     usermod -aG rhizo deskuser
     mkdir -p /etc/systemd/system/rhizo-app-events.service.d
     printf "[Service]\nUser=deskuser\nGroup=deskuser\n" > /etc/systemd/system/rhizo-app-events.service.d/10-desktop-user.conf
+    mkdir -p /etc/systemd/system/rhizo-audiod.service.d
+    printf "[Service]\nUser=deskuser\nGroup=rhizo\n" > /etc/systemd/system/rhizo-audiod.service.d/10-desktop-user.conf
     ;;
   *)
 id -u ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash ubuntu
@@ -840,6 +869,8 @@ _androidd_env_cmd() {
   for kv in $LAUNCH_ENV; do
     cmd+=$'\n'"echo '$kv' >> /root/androidd.env"
   done
+  cmd+=$'\n'"echo 'RHIZO_RESIDENT_G=1' >> /root/androidd.env"
+  cmd+=$'\n'"echo 'RHIZO_RESIDENT_DISPATCH=1' >> /root/androidd.env"
   printf '%s' "$cmd"
 }
 
@@ -881,8 +912,6 @@ fi
 log "Launching boot.py selinux_setup..."
 if [[ "${RHIZO_USE_UNIT:-0}" == "1" ]]; then
   env_cmd=$(_androidd_env_cmd)
-  env_cmd+=$'\n'"echo 'RHIZO_RESIDENT_G=1' >> /root/androidd.env"
-  env_cmd+=$'\n'"echo 'RHIZO_RESIDENT_DISPATCH=1' >> /root/androidd.env"
   log "Launching via androidd.service (RHIZO_USE_UNIT=1)..."
   ssh_vm -t "$((BOOT_WAIT + 60))" "$env_cmd
 : > /root/boot.log
@@ -905,6 +934,10 @@ systemctl start androidd.service" || log "systemctl start reported failure"
   fi
   log "confirmed via direct poll: sys.boot_completed=1 (init_pid=$_init)"
   ssh_vm -t 15 "systemctl reset-failed rhizo-display-pool.service rhizo-display-pool.path rhizo-resync.path 2>/dev/null; systemctl restart rhizo-display-pool.path rhizo-resync.path; systemctl restart rhizo-app-events.service; systemctl start --no-block rhizo-display-pool.service rhizo-hostfs.service" >/dev/null 2>&1
+elif [[ "$desk_session" == RHIZO_DESKTOP_SESSION=/* ]]; then
+  log "starting androidd.service for the desktop session, not a second launcher"
+  ssh_vm -t 20 'systemctl start --no-block androidd.service' \
+    || { log "FAIL: systemctl start --no-block androidd.service failed"; exit 1; }
 else
   ssh_vm -t 10 "cd /root && systemd-run --scope --collect --unit=rhizo-launcher-\$\$ --quiet --expand-environment=no -- \
     sh -c 'chrt --other --pid 0 \$\$ > /root/boot.log 2>&1 && renice -n 0 -p \$\$ > /dev/null 2>> /root/boot.log && ionice -c 0 -p \$\$ >> /root/boot.log 2>&1 && ${LAUNCH_ENV}setsid python3 /root/launcher3.py selinux_setup >> /root/boot.log 2>&1 < /dev/null' & disown; sleep 1; echo launched" >/dev/null 2>&1 || true

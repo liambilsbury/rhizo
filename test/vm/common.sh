@@ -277,8 +277,16 @@ ssh_port_holders() {
   return 0
 }
 
+# refuse a rig boot or kill while RHIZO_TEST_INSTALLED=1 names a guest running the installed product
+refuse_installed_guest() {
+  [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]] || return 0
+  log "REFUSED: $1 under RHIZO_TEST_INSTALLED=1: vm $RHIZO_VM runs the installed package"
+  return 1
+}
+
 # kill this instance's qemu and remove its sockets
 kill_vm() {
+  refuse_installed_guest kill_vm || return 2
   if (( RHIZO_VM_NAMED == 0 )); then
     rig_kill_guard || return 2
   fi
@@ -347,6 +355,7 @@ kill_vm() {
 
 # start run-vm.sh detached for this instance
 boot_vm() {
+  refuse_installed_guest boot_vm || return 2
   local boot_log="$VAR_DIR/vm-boot${SUFFIX}.log"
   if [[ -z "${RHIZO_KERNEL:-}" && "${RHIZO_BOOT:-direct}" == direct && -x "$_VM_COMMON_DIR/image/install-kernel.sh" ]]; then
     RHIZO_VM="$RHIZO_VM" RHIZO_GUEST_OS="${RHIZO_GUEST_OS:-ubuntu}" "$_VM_COMMON_DIR/image/install-kernel.sh" \
@@ -556,11 +565,77 @@ surfaceflinger_pid() {
   printf '%s' "$out" | awk '$2 ~ /surfaceflinger$/{print $1}'
 }
 
+GUEST_MODE_READ='if [ -e /run/rhizo-selinux-mode ]; then m=$(cat /run/rhizo-selinux-mode 2>/dev/null) || m="<unreadable>"; [ -n "$m" ] || m="<empty>"; else m="<absent>"; fi'
+
+# print the guest's recorded SELinux mode, host or namespace; anything else returns 1
+guest_selinux_mode() {
+  local out
+  out=$(ssh_vm -t 10 "$GUEST_MODE_READ"'; echo "RHIZO_MODE=$m"' 2>/dev/null | tr -d '\r')
+  out=$(sed -n 's/^RHIZO_MODE=//p' <<<"$out")
+  case "$out" in
+    host|namespace) printf '%s\n' "$out" ;;
+    *) printf '<mode record /run/rhizo-selinux-mode reads %s>\n' "${out:-nothing: ssh did not answer}"; return 1 ;;
+  esac
+}
+
+# print Android's enforce state from the record the guest's SELinux mode names
+guest_android_enforce() {
+  local out mode
+  out=$(ssh_vm -t 10 "$GUEST_MODE_READ"'
+case "$m" in
+  namespace) f=/run/rhizo-selinuxns/android-enforce ;;
+  host) f=/sys/fs/selinux/enforce ;;
+  *) echo "RHIZO_MODE=$m"; exit 3 ;;
+esac
+echo "RHIZO_MODE=$m"; echo "RHIZO_ENFORCE=$(cat "$f" 2>&1)"' 2>/dev/null | tr -d '\r')
+  mode=$(sed -n 's/^RHIZO_MODE=//p' <<<"$out")
+  case "$mode" in
+    host|namespace) printf '%s\n' "$(sed -n 's/^RHIZO_ENFORCE=//p' <<<"$out")" ;;
+    "<absent>") printf '<no mode record /run/rhizo-selinux-mode: Android has not started this boot>\n'; return 2 ;;
+    *) printf '<mode record /run/rhizo-selinux-mode reads %s>\n' "${mode:-nothing: ssh did not answer}"; return 1 ;;
+  esac
+}
+
+# reboot the installed guest and wait for sys.boot_completed
+installed_reboot() {
+  local deadline_s="${1:-600}" before after t0 init="" bc=""
+  before=$(ssh_vm -t 10 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '[:space:]')
+  [[ -n "$before" ]] || { log "installed_reboot: the guest did not answer before the reboot"; return 1; }
+  ssh_vm -t 20 'sync; systemctl reboot' >/dev/null 2>&1
+  timeout 8 ssh -o "ControlPath=$SSH_CONTROL_SOCK" -O exit "$SSH_TARGET" >/dev/null 2>&1
+  t0=$(date +%s)
+  while :; do
+    sleep 5
+    after=$(ssh_vm -t 8 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$after" && "$after" != "$before" ]] && break
+    (( $(date +%s) - t0 < deadline_s )) || { log "installed_reboot: no new boot answered ssh within ${deadline_s}s"; return 1; }
+  done
+  log "installed_reboot: boot_id $before -> $after after $(( $(date +%s) - t0 ))s"
+  while :; do
+    init=$(guest_init_pid 8)
+    if [[ -n "$init" ]]; then
+      bc=$(getprop_live "$init" sys.boot_completed 2>/dev/null)
+      [[ "$bc" == 1 ]] && break
+    fi
+    (( $(date +%s) - t0 < deadline_s )) \
+      || { log "installed_reboot: no sys.boot_completed=1 within ${deadline_s}s of the reboot (init=${init:-none})"; return 1; }
+    sleep 3
+  done
+  log "installed_reboot: Android (init $init) booted $(( $(date +%s) - t0 ))s after the reboot"
+}
+
+# succeed when the guest runs Android in namespace SELinux mode
+guest_namespace_mode() { [[ "$(guest_selinux_mode 2>/dev/null)" == namespace ]]; }
+
 # print the sandbox's logcat
 logcat_vm() {
   local init_pid="$1"; shift
   local out rc args
   args=$(printf ' %q' "$@")
+  if guest_namespace_mode; then
+    probe_cmd "${LOGCAT_VM_TIMEOUT:-45}" "/system/bin/logcat$args"
+    return
+  fi
   out=$(_ssh_vm_out "${LOGCAT_VM_TIMEOUT:-45}" \
     "nsenter -a -t $init_pid -- /system/bin/toybox runcon u:r:shell:s0 /system/bin/logcat$args"); rc=$?
   if [[ -z "$out" ]] || (( rc == 124 )); then
@@ -578,6 +653,10 @@ logcat_since_marker() {
 runcon_shell() {
   local init_pid="$1"; shift
   local out rc
+  if guest_namespace_mode; then
+    probe_cmd 30 "$*"
+    return
+  fi
   out=$(_ssh_vm_out 30 "nsenter -a -t $init_pid -- /system/bin/toybox runcon u:r:shell:s0 $*"); rc=$?
   { [[ -z "$out" ]] || (( rc == 124 )); } && out=$(probe_cmd 30 "$*")
   printf '%s' "$out"
@@ -601,13 +680,14 @@ android_sh() {
   local body="export PATH=/system/bin:/system/xbin:/vendor/bin; $*"
   local out
   local dead_marker="${TMPDIR:-/tmp}/rhizo-nsenter-dead.${RHIZO_VM:-0}.${init_pid}"
-  local boot_id="" marked=""
-  if [[ -e "$dead_marker" ]]; then
+  local boot_id="" marked="" ns=0
+  guest_namespace_mode && ns=1
+  if (( ! ns )) && [[ -e "$dead_marker" ]]; then
     boot_id=$(ssh_vm -t 8 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '[:space:]')
     read -r marked < "$dead_marker"
     [[ -n "$boot_id" && "$marked" == "$boot_id" ]] || rm -f "$dead_marker"
   fi
-  if [[ ! -e "$dead_marker" ]]; then
+  if (( ! ns )) && [[ ! -e "$dead_marker" ]]; then
     out=$(ssh_vm -t "${ANDROID_SH_TIMEOUT:-30}" \
       "nsenter -a -t $init_pid -- /system/bin/toybox runcon u:r:shell:s0 /system/bin/sh -c '$body; echo RHIZO_SH_DONE=\$?'" 2>&1)
     if [[ "$out" == *RHIZO_SH_DONE=* ]]; then
@@ -622,7 +702,11 @@ android_sh() {
   out=$(probe_cmd "${ANDROID_SH_TIMEOUT:-30}" "$body")
   local rc=$?
   if (( rc >= 95 && rc <= 98 )); then
-    log "android_sh: nsenter unreachable AND rhizo-probed did not run the body (rc=$rc) -- cannot observe: $*"
+    if (( ns )); then
+      log "android_sh: rhizo-probed did not run the body in namespace mode (rc=$rc) -- cannot observe: $*"
+    else
+      log "android_sh: nsenter unreachable AND rhizo-probed did not run the body (rc=$rc) -- cannot observe: $*"
+    fi
     printf '%s' "$out"
     return "$rc"
   fi

@@ -11,9 +11,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")" || exit
 source ../../vm/common.sh
 source ../lib/lib.sh
 [[ "${1:-}" == --print-contract ]] && { test_print_contract "${BASH_SOURCE[0]}"; exit $?; }
-[[ "${RHIZO_DESKTOP_PROFILE:-sway}" == sway ]] \
-  || { fail "this system test only runs under the sway desktop profile (got RHIZO_DESKTOP_PROFILE=$RHIZO_DESKTOP_PROFILE)"; exit 1; }
-source ../lib/sway-lib.sh
+source ../lib/desktop-lib.sh \
+  || { fail "desktop profile ${RHIZO_DESKTOP_PROFILE:-sway} unavailable"; exit 1; }
 
 ADB=~/Android/Sdk/platform-tools/adb
 
@@ -130,7 +129,7 @@ log "test app: $PKG/$ACT"
 if (( SKIP_BOOT == 0 )); then
   step "0. boot: VM, compositor, Android"
   test_boot --skip-graphics-preflight --release "${RHIZO_RELEASE:-}" || exit 1
-  ../../vm/start/start-sway.sh >$EV/network-sway.log 2>&1 || { fail "sway did not start (see $EV/network-sway.log)"; exit 1; }
+  desk_session_up >$EV/network-sway.log 2>&1 || { fail "the desktop session did not start (see $EV/network-sway.log)"; exit 1; }
   ../../vm/sync.sh >/dev/null || { fail "sync.sh failed"; exit 1; }
   ../../vm/redeploy.sh --skip-kill --boot-wait 180 >$EV/network-redeploy.log 2>&1 || { fail "redeploy.sh failed (see $EV/network-redeploy.log)"; exit 1; }
   tail -6 $EV/network-redeploy.log
@@ -166,6 +165,37 @@ else
   channel_dead "dumpsys power"
 fi
 pass "booted, awake, keyguard disabled"
+
+INSTALLED=0
+[[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]] && INSTALLED=1
+ENV_ORIG=""
+# restore the installed /etc/rhizo/androidd.env and verify it
+network_restore_installed() {
+  local out got
+  [[ -n "$ENV_ORIG" ]] || return 0
+  out=$(ssh_vm -t 20 "printf %s '$ENV_ORIG' | base64 -d > /etc/rhizo/androidd.env.rhizo-test && mv -f /etc/rhizo/androidd.env.rhizo-test /etc/rhizo/androidd.env && sync && echo WROTE" 2>&1)
+  got=$(ssh_vm -t 10 "base64 -w0 /etc/rhizo/androidd.env" 2>/dev/null | tr -d '\r\n')
+  if [[ "$out" != *WROTE* ]]; then
+    log "CLEANUP_UNVERIFIED: the installed /etc/rhizo/androidd.env write-back did not report (${out:-no answer})"
+  elif [[ "$got" == "$ENV_ORIG" ]]; then
+    log "CLEANUP_OK: the installed /etc/rhizo/androidd.env is restored"
+  else
+    log "CLEANUP_INCOMPLETE: the installed /etc/rhizo/androidd.env differs from the original"
+  fi
+}
+# reboot the installed guest with netbridged args and extra gate input ports
+installed_knob_reboot() {
+  local env_b64
+  env_b64=$( { base64 -d <<<"$ENV_ORIG"; printf '\nRHIZO_NETBRIDGED_ARGS=%s\nRHIZO_GATE_EXTRA_INPUT_PORTS=%s\n' "$1" "$2"; } | base64 -w0)
+  ssh_vm -t 20 "printf %s '$env_b64' | base64 -d > /etc/rhizo/androidd.env && sync" \
+    || { fail "could not add the launcher knobs to the installed /etc/rhizo/androidd.env"; return 1; }
+  installed_reboot 600
+}
+if (( INSTALLED )); then
+  ENV_ORIG=$(ssh_vm -t 10 "base64 -w0 /etc/rhizo/androidd.env" 2>/dev/null | tr -d '\r\n')
+  [[ -n "$ENV_ORIG" ]] || { fail "could not read the installed /etc/rhizo/androidd.env"; exit 1; }
+  TEST_EXTRA_CLEANUP=network_restore_installed
+fi
 
 step "1. VM-side DNS+HTTP+DHCP servers"
 ../../vm/start/start-netbridge.sh --local-a "$TEST_HOST=$VETH_HOST_IP" >> "$EV/netserv-start.log" 2>&1
@@ -310,17 +340,24 @@ write_portal_probe_url
 android_sh "$INIT" "sync" >/dev/null 2>&1
 ssh_vm -t 20 "sync" >/dev/null 2>&1
 log "    rebooting so a new NetworkMonitor reads $PORTAL_PROBE"
+portal_armed="$TEST_WORKDIR/portal-armed"
+if (( INSTALLED )); then
+  pre_boot_id=$(ssh_vm -t 8 "cat /proc/sys/kernel/random/boot_id" 2>/dev/null | tr -d '[:space:]')
+  VETH_NEW="[ \"\$(cat /proc/sys/kernel/random/boot_id)\" != '${pre_boot_id}' ]"
+else
 kill_vm
 boot_vm
 wait_for_boot_slot || fail "the portal-probe reboot never got a qemu slot"
 wait_for_ssh 300 || fail "the vm did not come back after the portal-probe reboot"
-../../vm/start/start-sway.sh >>"$EV/netfix-portal.log" 2>&1
+desk_session_up >>"$EV/netfix-portal.log" 2>&1
 ../../vm/sync.sh >/dev/null
-portal_armed="$TEST_WORKDIR/portal-armed"
+pre_veth_if=$(ssh_vm -t 8 "cat /sys/class/net/vethrhz0/ifindex 2>/dev/null" 2>/dev/null | tr -d '[:space:]')
+VETH_NEW="[ \"\$(cat /sys/class/net/vethrhz0/ifindex 2>/dev/null)\" != '${pre_veth_if}' ]"
+fi
 (
   deadline=$(( $(date +%s) + 300 ))
   while (( $(date +%s) < deadline )); do
-    if ssh_vm -t 8 "ip addr show vethrhz0 2>/dev/null | grep -q ' ${VETH_HOST_IP}/'" 2>/dev/null; then
+    if ssh_vm -t 8 "$VETH_NEW && ip addr show vethrhz0 2>/dev/null | grep -q ' ${VETH_HOST_IP}/'" 2>/dev/null; then
       ../../vm/start/start-netfix.sh portalserv up "$PORTAL_IP" >>"$EV/netfix-portal.log" 2>&1 \
         && echo armed > "$portal_armed"
       exit 0
@@ -329,10 +366,17 @@ portal_armed="$TEST_WORKDIR/portal-armed"
   done
 ) &
 portal_waiter=$!
+if (( INSTALLED )); then
+  installed_knob_reboot "--local-a,$TEST_HOST=$VETH_HOST_IP,--local-a,$PORTAL_PROBE=$VETH_HOST_IP,--portal,$PORTAL_IP" \
+    "tcp:80,tcp:8081,udp:5353" >>"$EV/netfix-portal.log" 2>&1 \
+    || fail "the installed guest did not come back with Android booted after the portal-probe reboot -- see $EV/netfix-portal.log"
+  desk_session_up >>"$EV/netfix-portal.log" 2>&1
+else
 RHIZO_GATE_EXTRA_INPUT_PORTS="tcp:80,tcp:8081,udp:5353" \
   RHIZO_NETBRIDGED_ARGS="--local-a,$TEST_HOST=$VETH_HOST_IP,--local-a,$PORTAL_PROBE=$VETH_HOST_IP,--portal,$PORTAL_IP" \
   ../../vm/redeploy.sh --skip-kill --boot-wait 200 >>"$EV/netfix-portal.log" 2>&1 \
   || fail "redeploy.sh failed during the portal-probe reboot -- see $EV/netfix-portal.log"
+fi
 wait "$portal_waiter" 2>/dev/null || true
 [[ -f "$portal_armed" ]] || fail "the portal HTTP endpoint never came up against vethrhz0 -- see $EV/netfix-portal.log"
 INIT=$(guest_init_pid 10)
@@ -366,15 +410,22 @@ if [[ "$FAILED" == "$STEP_MARK" ]]; then
   log "    rebooting with the portal gone, to validate a new network"
   android_sh "$INIT" "sync" >/dev/null 2>&1
   ssh_vm -t 20 "sync" >/dev/null 2>&1
+  if (( INSTALLED )); then
+    installed_knob_reboot "--local-a,$TEST_HOST=$VETH_HOST_IP,--local-a,$PORTAL_PROBE=$VETH_HOST_IP" \
+      "tcp:80,tcp:8081,udp:5353" >>"$EV/netfix-portal.log" 2>&1 \
+      || fail "the installed guest did not come back with Android booted after the portal-cleared reboot -- see $EV/netfix-portal.log"
+    desk_session_up >>"$EV/netfix-portal.log" 2>&1
+  else
   kill_vm
   boot_vm
   wait_for_boot_slot || fail "the portal-cleared reboot never got a qemu slot"
   wait_for_ssh 300 || fail "the vm did not come back after the portal-cleared reboot"
-  ../../vm/start/start-sway.sh >>"$EV/netfix-portal.log" 2>&1
+  desk_session_up >>"$EV/netfix-portal.log" 2>&1
   RHIZO_GATE_EXTRA_INPUT_PORTS="tcp:80,tcp:8081,udp:5353" \
     RHIZO_NETBRIDGED_ARGS="--local-a,$TEST_HOST=$VETH_HOST_IP,--local-a,$PORTAL_PROBE=$VETH_HOST_IP" \
     ../../vm/redeploy.sh --skip-kill --boot-wait 200 >>"$EV/netfix-portal.log" 2>&1 \
     || fail "redeploy.sh failed during the portal-cleared reboot -- see $EV/netfix-portal.log"
+  fi
   INIT=$(guest_init_pid 10)
   [[ -n "$INIT" ]] || fail "no init second_stage after the portal-cleared reboot"
   scope_nsenter_markers_to_boot
@@ -625,14 +676,17 @@ while (( $(date +%s) < deadline )); do
 done
 [[ "$token_seen" == 1 ]] || fail "logcat never showed RHIZO_NETTEST_APP_OK"
 
-read -r WX WY WW WH <<<"$(mapped_window_rect "$cdisp")"
+rect=$(desktop_mapped_window_rect "$cdisp") || rect=""
+read -r WX WY WW WH <<<"$rect"
 log "    window rect: ${WX:-?},${WY:-?} ${WW:-?}x${WH:-?}"
 if [[ -n "${WW:-}" ]]; then
   region="$WX,$WY,$WW,$WH"
   deadline=$(( $(date +%s) + 20 ))
   nb=0; dis=0
   while true; do
-    shot /tmp/rhizo-test-network-frame.png >/dev/null && pull /tmp/rhizo-test-network-frame.png "$EV/frame.png"
+    # a compositor may move the window after mapping it
+    rect=$(desktop_mapped_window_rect "$cdisp" 5) && read -r WX WY WW WH <<<"$rect" && region="$WX,$WY,$WW,$WH"
+    desk_shot /tmp/rhizo-test-network-frame.png >/dev/null && pull /tmp/rhizo-test-network-frame.png "$EV/frame.png"
     nb=$(python3 ../tools/pngstat.py "$EV/frame.png" --region "$region" | grep '^nonblack_pct=' | cut -d= -f2)
     dis=$(python3 ../tools/pngstat.py "$EV/frame.png" --region "$region" | grep '^distinct=' | cut -d= -f2)
     awk -v v="${nb:-0}" 'BEGIN{exit !(v>50)}' && [[ "${dis:-0}" -gt 20 ]] && break

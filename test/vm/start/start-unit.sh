@@ -29,13 +29,17 @@ if [[ "$NEEDS" != - ]]; then
     || { log "FAIL: $NEEDS not loadable in the guest"; exit 1; }
 fi
 
-timeout 20 scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "../../../src/services/$NAME/rhizo-$NAME.py" "$SSH_TARGET:/root/" \
-  || { log "FAIL: could not copy rhizo-$NAME.py into the guest"; exit 1; }
-ssh_vm -t 10 "install -d -m 0755 /usr/lib/rhizo/$NAME && install -m 0755 /root/rhizo-$NAME.py /usr/lib/rhizo/$NAME/rhizo-$NAME.py" \
-  || { log "FAIL: could not stage rhizo-$NAME at its packaged path"; exit 1; }
+if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+  log "RHIZO_TEST_INSTALLED=1: restarting the installed $UNIT as packaged, staging nothing from this tree"
+else
+  timeout 20 scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "../../../src/services/$NAME/$NAME.py" "$SSH_TARGET:/root/" \
+    || { log "FAIL: could not copy $NAME.py into the guest"; exit 1; }
+  ssh_vm -t 10 "install -d -m 0755 /usr/lib/rhizo/$NAME && install -m 0755 /root/$NAME.py /usr/lib/rhizo/$NAME/$NAME.py" \
+    || { log "FAIL: could not stage rhizo-$NAME at its packaged path"; exit 1; }
 
-ssh_vm -t 10 "install -m 0644 /root/share/$UNIT /etc/systemd/system/$UNIT" \
-  || { log "FAIL: could not install $UNIT -- run test/vm/sync.sh first"; exit 1; }
+  ssh_vm -t 10 "install -m 0644 /root/share/$UNIT /etc/systemd/system/$UNIT" \
+    || { log "FAIL: could not install $UNIT -- run test/vm/sync.sh first"; exit 1; }
+fi
 
 log "Starting $UNIT..."
 start_cmd="mkdir -p /var/log/rhizo

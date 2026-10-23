@@ -17,6 +17,7 @@ import Clutter from 'gi://Clutter';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as Keyboard from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 
 // org.rhizo.Harness interface
 const IFACE_XML = `
@@ -109,20 +110,27 @@ export default class RhizoHarnessExtension extends Extension {
     return String(index);
   }
 
-  _monitorIndexForConnector(connector) {
+  _monitorIndexForConnector(connector, at) {
     try {
       const manager = global.backend.get_monitor_manager();
-      if (manager && typeof manager.get_monitors === 'function') {
-        const monitors = manager.get_monitors();
-        for (let i = 0; i < monitors.length; i++) {
-          if (typeof monitors[i].get_connector === 'function' && monitors[i].get_connector() === connector)
-            return i;
-        }
+      if (manager && typeof manager.get_monitor_for_connector === 'function') {
+        const i = manager.get_monitor_for_connector(connector);
+        if (i >= 0)
+          return i;
       }
     } catch (e) {
     }
+    if (at) {
+      for (let i = 0; i < global.display.get_n_monitors(); i++) {
+        const g = global.display.get_monitor_geometry(i);
+        if (g.x === at.x && g.y === at.y)
+          return i;
+      }
+    }
     const n = Number(connector);
-    return Number.isInteger(n) ? n : -1;
+    if (Number.isInteger(n) && n >= 0 && n < global.display.get_n_monitors())
+      return n;
+    throw new Error(`no monitor for connector ${connector}`);
   }
 
   // ---- windows -------------------------------------------------------
@@ -134,6 +142,7 @@ export default class RhizoHarnessExtension extends Extension {
       if (win.is_override_redirect())
         continue;
       const rect = win.get_frame_rect();
+      const work = win.get_work_area_current_monitor();
       out.push({
         id: win.get_id(),
         app_id: win.get_wm_class() || '',
@@ -143,6 +152,8 @@ export default class RhizoHarnessExtension extends Extension {
         maximized: win.get_maximized() === Meta.MaximizeFlags.BOTH,
         focused: win.has_focus(),
         monitor: this._connectorForMonitorIndex(win.get_monitor()),
+        monitor_rect: (g => ({x: g.x, y: g.y, w: g.width, h: g.height}))(global.display.get_monitor_geometry(win.get_monitor())),
+        work_area: {x: work.x, y: work.y, w: work.width, h: work.height},
       });
     }
     return JSON.stringify(out);
@@ -192,7 +203,7 @@ export default class RhizoHarnessExtension extends Extension {
         break;
       }
       case 'to_monitor':
-        win.move_to_monitor(this._monitorIndexForConnector(args.monitor));
+        win.move_to_monitor(this._monitorIndexForConnector(args.monitor, args.at));
         break;
       case 'activate':
         Main.activateWindow(win, now);
@@ -212,12 +223,19 @@ export default class RhizoHarnessExtension extends Extension {
 
   GetSeatDevices() {
     const seat = Clutter.get_default_backend().get_default_seat();
-    const out = seat.list_devices().map(d => ({
-      name: d.get_device_name(),
-      device_type: d.get_device_type(),
-      vendor_id: d.get_vendor_id ? d.get_vendor_id() : '',
-      product_id: d.get_product_id ? d.get_product_id() : '',
-    }));
+    const source = Keyboard.getInputSourceManager().currentSource;
+    const layout = source ? `${source.displayName} (${source.id})` : '';
+    const out = seat.list_devices().map(d => {
+      const keyboard = d.get_device_type() === Clutter.InputDeviceType.KEYBOARD_DEVICE;
+      return {
+        name: d.get_device_name(),
+        device_type: d.get_device_type(),
+        vendor_id: d.get_vendor_id ? d.get_vendor_id() : '',
+        product_id: d.get_product_id ? d.get_product_id() : '',
+        type: keyboard ? 'keyboard' : '',
+        xkb_active_layout_name: keyboard ? layout : '',
+      };
+    });
     return JSON.stringify(out);
   }
 

@@ -152,7 +152,7 @@ dms_layerstack_of() {
   '
 }
 
-APP1="com.android.contacts/.activities.PeopleActivity"
+APP1="com.android.messaging/.ui.conversationlist.ConversationListActivity"
 APP2="com.android.settings/.Settings"
 
 if (( SKIP_BOOT == 0 )); then
@@ -224,7 +224,7 @@ else
 fi
 
 step "1. baseline single window"
-android_sh "$INIT" "pm grant com.android.contacts android.permission.POST_NOTIFICATIONS" >/dev/null
+android_sh "$INIT" "pm grant com.android.messaging android.permission.POST_NOTIFICATIONS" >/dev/null
 launched=$(launch_on_display "$APP1" "app A" H-appA) || fail "app A's window never mapped"
 read -r D1 L1 <<<"$launched"
 log "    app A: composer display $D1, logical display $L1"
@@ -332,25 +332,42 @@ forced_size_displays() {
   '
 }
 
+# print a display's first task as "mode taskWxH configWxH"
+task_bounds_on() {
+  android_sh "$1" "dumpsys activity activities" | awk -v want="Display #$2 " '
+    function wh(s,   p) { sub(/.*Rect\(/, "", s); sub(/\).*/, "", s); split(s, p, /[ ,-]+/); return (p[3] - p[1]) "x" (p[4] - p[2]) }
+    /^Display #/ { inseg = index($0, want) == 1; next }
+    inseg && !task && /^  \* Task\{/ { task = 1; mode = ($0 ~ / mode=freeform /) ? "freeform" : "not-freeform"; next }
+    inseg && task && tb == "" && /^    mBounds=Rect\(/ { tb = wh($0) }
+    inseg && task && cb == "" && /CurrentConfiguration=/ && match($0, /winConfig=\{ mBounds=Rect\([^)]*\)/) { cb = wh(substr($0, RSTART, RLENGTH)) }
+    END { print (mode == "" ? "none" : mode), (tb == "" ? "none" : tb), (cb == "" ? "none" : cb) }'
+}
+
 step "4. resize"
 sz_before=$(android_sh "$INIT" "dumpsys window displays" | grep -A1 "mDisplayId=$L2" | grep -m1 -o "init=[0-9]*x[0-9]*")
+rhizo_ctl "$INIT" display toplevel "$D2" >/dev/null 2>&1
+scale=$(rhizo_ctl_out "$INIT" | grep "^display toplevel id=$D2 " | tail -1 | grep -o ' scale=[0-9.]*' | cut -d= -f2)
+[[ -n "$scale" ]] || fail "the composer did not report display $D2's scale"
+read -r WANT_W WANT_H <<<"$(awk -v s="${scale:-1}" 'BEGIN { s120 = int(s * 120 + 0.5); printf "%d %d\n", int(640 * s + 0.5), int(480 * s + 0.5) + int((42 * s120 + 60) / 120) }')"
+WANT_TASK="freeform ${WANT_W}x${WANT_H} ${WANT_W}x${WANT_H}"
 d2_id=$(display_window_id "$D2")
 if [[ -n "$d2_id" ]]; then
   desk_window_op "$d2_id" unmaximize
   desk_window_op "$d2_id" resize 640 480
 fi
-sz_after="$sz_before"
+task_after=""
 resize_deadline=$(( $(date +%s) + 40 ))
 while (( $(date +%s) < resize_deadline )); do
-  sz_after=$(android_sh "$INIT" "dumpsys window displays" | grep -A1 "mDisplayId=$L2" | grep -m1 -o "init=[0-9]*x[0-9]*")
-  [[ "$sz_after" == "init=640x480" ]] && break
+  task_after=$(task_bounds_on "$INIT" "$L2")
+  [[ "$task_after" == "$WANT_TASK" ]] && break
   sleep 1
 done
-[[ "$sz_after" == "init=640x480" ]] || fail "display $D2 never relayouted to 640x480"
+[[ "$task_after" == "$WANT_TASK" ]] || fail "display $D2's task never relayouted to 640x480 (want '$WANT_TASK' at scale ${scale:-?}, got '${task_after:-none}')"
+sz_after=$(android_sh "$INIT" "dumpsys window displays" | grep -A1 "mDisplayId=$L2" | grep -m1 -o "init=[0-9]*x[0-9]*")
 wm_displays=$(android_sh "$INIT" "dumpsys window displays")
 forced=$(forced_size_displays <<<"$wm_displays"); forced_rc=$?
-log "    display $D2 base metrics: $sz_before -> $sz_after (displays at a forced size: [${forced//$'\n'/ }])"
-[[ "$sz_after" == "init=640x480" ]] || fail "display $D2 base metrics are $sz_after"
+log "    display $D2 task: ${task_after:-none} (want $WANT_TASK); display base metrics: $sz_before -> $sz_after (displays at a forced size: [${forced//$'\n'/ }])"
+[[ -n "$sz_before" && "$sz_after" == "$sz_before" ]] || fail "display $D2 base metrics moved from ${sz_before:-none} to ${sz_after:-none}"
 (( forced_rc == 0 )) || fail "could not read dumpsys window displays"
 [[ -z "$forced" ]] || fail "display(s) ${forced//$'\n'/ } are at a forced size (base= differs from init= in dumpsys window displays)"
 still=$(resumed_on "$INIT" "$L2")
@@ -359,9 +376,12 @@ log "    display $D2 still running: ${still:-nothing}"
 desk_shot /tmp/g4.png >/dev/null && pull /tmp/g4.png "$EV/test-4-resized.png"
 read -r R2X R2Y R2W R2H <<<"$(desktop_window_rect "$D2")"
 pct=$(python3 ../tools/pngstat.py "$EV/test-4-resized.png" --region "$R2X,$R2Y,$R2W,$R2H" | grep '^nonblack_pct=' | cut -d= -f2)
-log "    resized window rect ${R2X},${R2Y} ${R2W}x${R2H}, ${pct}% nonblack"
+dis=$(python3 ../tools/pngstat.py "$EV/test-4-resized.png" --region "$R2X,$R2Y,$R2W,$R2H" | grep '^distinct=' | cut -d= -f2)
+log "    resized window rect ${R2X},${R2Y} ${R2W}x${R2H}, ${pct}% nonblack, ${dis} distinct colors"
+[[ "${R2W:-}x${R2H:-}" == "640x480" ]] || fail "the resized window is ${R2W:-?}x${R2H:-?}, not 640x480"
 awk -v v="${pct:-0}" 'BEGIN{exit !(v>50)}' || fail "the resized window is not showing content"
-pass "compositor resize became a real per-display Configuration change"
+[[ "${dis:-0}" -gt 20 ]] || fail "the resized window looks like a flat fill, not app content"
+pass "compositor resize became a Configuration change of the app's freeform task"
 
 step "5. close"
 ids_before=$(display_ids); acts_before=$(activity_ids)

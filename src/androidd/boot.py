@@ -24,7 +24,7 @@ from sandbox.core import (AID_READPROC, CGROUP_INVOCATION_FILE, CGROUP_ROOT, CGR
     input_port_associations_xml, kmsg, libc, mount, own_domain, phase, route_stdio_through_pipe,
     unshare)
 from sandbox import core
-from sandbox.hals import gpu_mode_or_exit, stage_hals, stage_virtual_device, stage_desktop_bridge, stage_host_delay, stage_software_rro, vendor_manifest_xml
+from sandbox.hals import gpu_mode_or_exit, stage_hals, stage_virtual_device, stage_desktop_bridge, stage_host_delay, stage_software_rro, vendor_manifest_xml, bluetooth_armed
 from sandbox.rootfs import build_root_and_pivot, setup_net_core_sysctls, harden_proc_sys, cap_pid_namespace_pid_max
 from sandbox.rootfs import withheld_device_majors
 from sandbox.rootfs import coldboot_primer_spec, start_fence_or_kill, open_fence_registry, fence_wait_step
@@ -513,6 +513,18 @@ def after_flip_jobs():
                 log("device_name renamed from the GSI's default to ro.product.model")
         except Exception as e:
             log("device_name rename FAILED: %r" % e)
+    if _pw_seen and os.path.exists(_so_client) and "@RHIZO_BLUETOOTH_ARMED@" == "0":
+        # with no controller, bluetooth_on starts and aborts the stack at each boot
+        try:
+            _bt = subprocess.run(
+                ["/usr/bin/python3", _so_client, _so_sock, "30",
+                 "export PATH=/system/bin; [ \"$(settings get global bluetooth_on)\" = 0 ] "
+                 "|| { settings put global bluetooth_on 0 && echo turned-off; }"],
+                timeout=90, check=False, capture_output=True, text=True)
+            if "turned-off" in (_bt.stdout or ""):
+                log("bluetooth_on set to 0: devices.bluetooth off or no host controller")
+        except Exception as e:
+            log("bluetooth_on reset FAILED: %r" % e)
 
 
 if _AFTER_FLIP:
@@ -1322,6 +1334,7 @@ def write_primer_script(screen_off_ms=None):
                                .replace("@RHIZO_CACHE_DIR@", RHIZO_CACHE_DIR)
                                .replace("@RHIZO_SCREEN_OFF_MS@", screen_off_ms)
                                .replace("@RHIZO_FREEFORM@", "1" if desktop_profile() else "0")
+                               .replace("@RHIZO_BLUETOOTH_ARMED@", "1" if bluetooth_armed() else "0")
                                .replace("@RHIZO_COLDBOOT_RELABEL@",
                                         ",".join(f"{p}={lbl}" for p, lbl in coldboot_primer_spec()))
                                .replace("@RHIZO_PROBE_CLIENT@", beside("probe-client.py"))
@@ -3084,6 +3097,12 @@ def setup_veth_and_nat(netns_pid):
             spec = ["-i", HOST_IF, "-p", proto, "--dport", str(port), "-j", "ACCEPT"]
             add_once("iptables", None, "INPUT", *spec)
             add_once("ip6tables", None, "INPUT", *spec)
+
+        for _bin in ("iptables", "ip6tables"):
+            for _line in run(_bin, "-S", "INPUT", check=False).stdout.splitlines():
+                _rule = _line.split()
+                if _rule[:4] == ["-A", "INPUT", "-i", HOST_IF]:
+                    run(_bin, "-D", *_rule[1:], check=False)
 
         _est_spec = ["-i", HOST_IF, "-m", "state", "--state",
                      "ESTABLISHED,RELATED", "-j", "ACCEPT"]

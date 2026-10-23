@@ -6,7 +6,9 @@ import android.content.Context;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.util.Base64;
 import android.view.Display;
@@ -27,11 +29,16 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 // overlay pads for drag and drop
 final class DropCatcher {
     private static final int PAD_SIZE_PX = 16;
     private static final int CORNER_MARGIN_PX = 8;
+    private static final float INPUT_MIN_ALPHA = 0.01f;
+    private static final float INPUT_MIN_FRACTION = 0.5f;
+    private static final int INPUT_STABLE_MS = 1;
 
     private enum Mode { ARMED, WATCHING }
 
@@ -40,6 +47,9 @@ final class DropCatcher {
         final WindowManager wm;
         final View view;
         Mode mode;
+        boolean onInput;
+        boolean watchAsked;
+        Consumer<Boolean> inputListener;
 
         Pad(WindowManager wm, View view, Mode mode) {
             this.wm = wm;
@@ -103,6 +113,10 @@ final class DropCatcher {
                     existing = sPads.get(display);
                 }
                 if (existing != null && existing.view.isAttachedToWindow()) {
+                    if (!existing.onInput) {
+                        existing.watchAsked = true;
+                        return;
+                    }
                     announceReady(existing.view, Mode.WATCHING, display,
                             CORNER_MARGIN_PX + PAD_SIZE_PX / 2,
                             CORNER_MARGIN_PX + PAD_SIZE_PX / 2,
@@ -175,13 +189,74 @@ final class DropCatcher {
             return;
         }
 
+        final Pad entry = new Pad(wm, pad, mode);
         synchronized (sLock) {
-            sPads.put(displayId, new Pad(wm, pad, mode));
+            sPads.put(displayId, entry);
         }
 
-        final int centerX = CORNER_MARGIN_PX + PAD_SIZE_PX / 2;
-        final int centerY = CORNER_MARGIN_PX + PAD_SIZE_PX / 2;
         final Context appContext = context.getApplicationContext();
+        if (Build.VERSION.SDK_INT < 35) {
+            announceOnFirstDraw(entry, displayId, appContext);
+            return;
+        }
+        pad.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override
+            public void onViewAttachedToWindow(View v) {
+                v.removeOnAttachStateChangeListener(this);
+                announceOnInput(entry, displayId, appContext);
+            }
+
+            @Override
+            public void onViewDetachedFromWindow(View v) {}
+        });
+    }
+
+    // report the pad ready once its window takes input
+    private static void announceOnInput(final Pad entry, final int displayId, final Context appContext) {
+        Consumer<Boolean> listener = new Consumer<Boolean>() {
+            @Override
+            public void accept(Boolean presented) {
+                if (!presented || entry.onInput) {
+                    return;
+                }
+                stopInputWait(entry);
+                padOnInput(entry, displayId, appContext);
+            }
+        };
+        try {
+            Class<?> thresholdsClass = Class.forName("android.window.TrustedPresentationThresholds");
+            Object thresholds = thresholdsClass.getConstructor(float.class, float.class, int.class)
+                    .newInstance(INPUT_MIN_ALPHA, INPUT_MIN_FRACTION, INPUT_STABLE_MS);
+            WindowManager.class.getMethod("registerTrustedPresentationListener",
+                    IBinder.class, thresholdsClass, Executor.class, Consumer.class)
+                    .invoke(entry.wm, entry.view.getWindowToken(), thresholds,
+                            appContext.getMainExecutor(), listener);
+            entry.inputListener = listener;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            Logs.e("cannot watch the pad's input state on display " + displayId
+                    + "; using its first frame", e);
+            announceOnFirstDraw(entry, displayId, appContext);
+        }
+    }
+
+    // stop watching the pad window's input state
+    private static void stopInputWait(Pad entry) {
+        Consumer<Boolean> listener = entry.inputListener;
+        entry.inputListener = null;
+        if (listener == null) {
+            return;
+        }
+        try {
+            WindowManager.class.getMethod("unregisterTrustedPresentationListener", Consumer.class)
+                    .invoke(entry.wm, listener);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            Logs.e("cannot stop watching the pad window's input state", e);
+        }
+    }
+
+    // report the pad ready on its first frame
+    private static void announceOnFirstDraw(final Pad entry, final int displayId, final Context appContext) {
+        final View pad = entry.view;
         pad.getViewTreeObserver().addOnDrawListener(
                 new ViewTreeObserver.OnDrawListener() {
                     @Override
@@ -191,11 +266,26 @@ final class DropCatcher {
                             @Override
                             public void run() {
                                 pad.getViewTreeObserver().removeOnDrawListener(self);
-                                announceReady(pad, mode, displayId, centerX, centerY, appContext);
+                                padOnInput(entry, displayId, appContext);
                             }
                         });
                     }
                 });
+    }
+
+    // mark the pad ready and report it in its current mode
+    private static void padOnInput(Pad entry, int displayId, Context appContext) {
+        if (entry.onInput) {
+            return;
+        }
+        entry.onInput = true;
+        Logs.i("RHIZO_PAD_ON_INPUT display=" + displayId + " mode=" + entry.mode);
+        final int center = CORNER_MARGIN_PX + PAD_SIZE_PX / 2;
+        announceReady(entry.view, entry.mode, displayId, center, center, appContext);
+        if (entry.watchAsked && entry.mode != Mode.WATCHING) {
+            announceReady(entry.view, Mode.WATCHING, displayId, center, center, appContext);
+        }
+        entry.watchAsked = false;
     }
 
     // send the pad position to the host
@@ -398,6 +488,7 @@ final class DropCatcher {
         if (pad == null) {
             return;
         }
+        stopInputWait(pad);
         try {
             pad.wm.removeView(pad.view);
         } catch (IllegalArgumentException e) {

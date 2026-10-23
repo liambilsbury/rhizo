@@ -365,18 +365,21 @@ def staged_software_rro(apk):
 
 
 def props_rc():
-    """render the framework props rc into a fixture run root"""
+    """render the framework props rc into a fixture run root and GSI"""
     run = tempfile.mkdtemp(prefix="gpu-switch-launch-props-")
     os.makedirs(os.path.join(run, "system_ext_upper", "etc", "init"))
-    saved = hals.RUN_ROOT
-    hals.RUN_ROOT = run
+    gsi = os.path.join(run, "gsi")
+    os.makedirs(os.path.join(gsi, "etc", "selinux"))
+    open(os.path.join(gsi, "etc", "selinux", "plat_sepolicy.cil"), "w").close()
+    saved = hals.RUN_ROOT, hals.core.GSI
+    hals.RUN_ROOT, hals.core.GSI = run, gsi
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             hals._stage_framework_rc()
         with open(os.path.join(run, "system_ext_upper", "etc", "init", "rhizo-props.rc")) as f:
             return f.read()
     finally:
-        hals.RUN_ROOT = saved
+        hals.RUN_ROOT, hals.core.GSI = saved
         shutil.rmtree(run)
 
 

@@ -10,7 +10,7 @@ desktop.default_handler	off	src/services/appsync/appsync.py:host_defaults	selfte
 devices.tun	on	src/androidd/boot.py:install_device_cgroup_filter	test:device-filter.sh
 devices.dri	on	src/androidd/boot.py:install_device_cgroup_filter	test:software-render.sh
 devices.uinput	on	src/androidd/boot.py:install_device_cgroup_filter;src/androidd/sandbox/rootfs.py:open_label_service	test:device-filter.sh
-devices.bluetooth	on	src/androidd/sandbox/capability-allowed.sh:policy_or_deny;src/androidd/sandbox/rootfs.py:_bind_sockets_and_shadows;src/androidd/sandbox/hals.py:bluetooth_armed	test:bluetooth-handoff.sh
+devices.bluetooth	on	src/androidd/sandbox/capability-allowed.sh:policy_or_deny;src/androidd/sandbox/rootfs.py:_bind_sockets_and_shadows	test:bluetooth-handoff.sh
 audio.out	on	src/androidd/sandbox/capability-allowed.sh:policy_or_deny	run:audiod-policy.sh
 devices.virtual	off	src/androidd/sandbox/hals.py:stage_virtual_device	run:capability-wiring.py
 config=/etc/rhizo/adb_keys	off	src/androidd/sandbox/hals.py:_stage_adb	run:server-profile.py

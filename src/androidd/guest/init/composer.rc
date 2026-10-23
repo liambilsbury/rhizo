@@ -10,6 +10,7 @@ on post-fs-data
 
 service vendor.rhizo-composer /vendor/bin/hw/rhizo-composer
     class core
+    shutdown critical
     user system
     group system graphics uhid
     capabilities SYS_NICE

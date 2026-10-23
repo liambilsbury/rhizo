@@ -113,8 +113,9 @@ bus_thread_state() {
 }
 
 # print the desktop profile for a system test
-regress_profile() { [[ "$1" == network.sh ]] && echo sway || echo "${RHIZO_DESKTOP_PROFILE:-sway}"; }
+regress_profile() { echo "${RHIZO_DESKTOP_PROFILE:-sway}"; }
 REGRESS_LEFT_OTHER_PROFILE=0
+REGRESS_RAN_INSTALLED=0
 # run a system test not covered by an earlier PASS
 regress_one() {
   local g="$1" reused profile
@@ -124,6 +125,20 @@ regress_one() {
     printf 'reused: a full-run PASS recorded at %s on the tree this run started from, evidence %s\n' \
       "${reused%%$'\t'*}" "${reused#*$'\t'}" > "$EV/audio-regress-$g.log"
     pass "$g passed on this same tree (full-run PASS recorded at ${reused%%$'\t'*}, evidence ${reused#*$'\t'})"
+  elif [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+    log "    running $g after a reboot of the installed guest: $(tail -1 "$EV/audio-regress-$g.reuse")"
+    : >"$EV/audio-regress-$g.log"
+    if ! installed_reboot 600 >>"$EV/audio-regress-$g.log" 2>&1; then
+      fail "$g: the installed guest did not come back with Android booted (see $EV/audio-regress-$g.log)"
+    elif ! desk_session_up >>"$EV/audio-regress-$g.log" 2>&1; then
+      fail "$g: the desktop session did not attach after the reboot (see $EV/audio-regress-$g.log)"
+    elif RHIZO_DESKTOP_PROFILE="$profile" RHIZO_SKIP_BOOT=1 "$(system_test_file "$g")" >>"$EV/audio-regress-$g.log" 2>&1; then
+      pass "$g still passes"
+    else
+      fail "$g regressed (see $EV/audio-regress-$g.log)"
+      grep -E "FAIL" "$EV/audio-regress-$g.log" | head -5 >&2
+    fi
+    REGRESS_RAN_INSTALLED=1
   else
     log "    running $g (own boot): $(tail -1 "$EV/audio-regress-$g.reuse")"
     [[ "$profile" == "${RHIZO_DESKTOP_PROFILE:-sway}" ]] || REGRESS_LEFT_OTHER_PROFILE=1
@@ -157,6 +172,13 @@ if (( SKIP_BOOT == 0 )); then
   tail -4 $EV/audio-redeploy.log
   ../../vm/start/start-audio.sh >$EV/audio-host.log 2>&1 || { fail "audio host side did not start (see $EV/audio-host.log)"; exit 1; }
 else
+  if (( REGRESS_RAN_INSTALLED )); then
+    step "0. reboot the installed guest for this test's legs"
+    installed_reboot 600 >"$EV/audio-own-boot.log" 2>&1 \
+      || { fail "the installed guest did not come back with Android booted (see $EV/audio-own-boot.log)"; exit 1; }
+    desk_session_up >>"$EV/audio-own-boot.log" 2>&1 \
+      || { fail "the desktop session did not attach after the reboot (see $EV/audio-own-boot.log)"; exit 1; }
+  fi
   test_ensure_sway "$EV/chained-audio-sway.log" "$EV/chained-redeploy.log"
   test_ensure_audio "$EV/chained-audio-host.log" || exit 1
 fi
@@ -164,10 +186,47 @@ INIT=$(guest_init_pid 10)
 [[ -n "$INIT" ]] || { fail "no init second_stage"; exit 1; }
 log "init_pid=$INIT"
 
+INSTALLED=0
+[[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]] && INSTALLED=1
+POLICY_ORIG=""
+# restore the installed policy.conf, verify it and destroy the null-sink taps
+audio_restore_installed() {
+  local out want
+  [[ -n "$POLICY_ORIG" ]] || return 0
+  if [[ "$POLICY_ORIG" == ABSENT ]]; then
+    out=$(ssh_vm -t 20 "rm -f /etc/rhizo/policy.conf && sync && echo WROTE" 2>&1)
+    want=ABSENT
+  else
+    out=$(ssh_vm -t 20 "printf %s '$POLICY_ORIG' | base64 -d > /etc/rhizo/policy.conf.rhizo-test && mv -f /etc/rhizo/policy.conf.rhizo-test /etc/rhizo/policy.conf && sync && echo WROTE" 2>&1)
+    want=$POLICY_ORIG
+  fi
+  ssh_vm -t 30 "u=\$(tr -d '[:space:]' < /etc/rhizo/desktop-user); u=\${u:-ubuntu}
+ids=\$(runuser -u \"\$u\" -- env XDG_RUNTIME_DIR=/run/user/\$(id -u \"\$u\") pw-dump 2>/dev/null | python3 -c 'import json,sys
+for o in json.load(sys.stdin):
+    p=(o.get(\"info\") or {}).get(\"props\") or {}
+    if p.get(\"factory.name\")==\"support.null-audio-sink\" and str(p.get(\"node.name\",\"\")).startswith(\"rhizo_sink_\"): print(o[\"id\"])' 2>/dev/null)
+for id in \$ids; do runuser -u \"\$u\" -- env XDG_RUNTIME_DIR=/run/user/\$(id -u \"\$u\") pw-cli destroy \$id >/dev/null 2>&1; done" >/dev/null 2>&1
+  local got
+  got=$(ssh_vm -t 10 "if [ -e /etc/rhizo/policy.conf ]; then base64 -w0 /etc/rhizo/policy.conf; else echo ABSENT; fi" 2>/dev/null | tr -d '\r\n')
+  if [[ "$out" != *WROTE* ]]; then
+    log "CLEANUP_UNVERIFIED: the installed /etc/rhizo/policy.conf write-back did not report (${out:-no answer})"
+  elif [[ "$got" == "$want" ]]; then
+    log "CLEANUP_OK: the installed /etc/rhizo/policy.conf is restored"
+  else
+    log "CLEANUP_INCOMPLETE: the installed /etc/rhizo/policy.conf reads '$got', found as '$want'"
+  fi
+}
+if (( INSTALLED )); then
+  POLICY_ORIG=$(ssh_vm -t 10 "if [ -e /etc/rhizo/policy.conf ]; then base64 -w0 /etc/rhizo/policy.conf; else echo ABSENT; fi" 2>/dev/null | tr -d '\r\n')
+  [[ -n "$POLICY_ORIG" ]] || { fail "could not read the installed /etc/rhizo/policy.conf"; exit 1; }
+  TEST_EXTRA_CLEANUP=audio_restore_installed
+  log "    keeping the installed /etc/rhizo/policy.conf ($( [[ "$POLICY_ORIG" == ABSENT ]] && echo absent || base64 -d <<<"$POLICY_ORIG" | tr '\n' ' '))"
+else
 leftover=$(ssh_vm -t 10 "test -f /etc/rhizo/policy.conf && echo PRESENT || echo ABSENT" 2>/dev/null | tr -d '\r')
 if [[ "$leftover" == "PRESENT" ]]; then
   log "    clearing an old /etc/rhizo/policy.conf left on this vm's disk by an earlier run"
   ssh_vm -t 10 "rm -f /etc/rhizo/policy.conf" >/dev/null 2>&1
+fi
 fi
 
 boot_completed=$(getprop_live "$INIT" sys.boot_completed) || boot_completed="<unreadable rc=$?>"
@@ -451,9 +510,16 @@ pass "sys.boot_completed=1, system_server pid unchanged ($SS_PID_END)"
 step "9. capability: audio.out on gives a daemon and a socket, withheld gives neither"
 AUDIO_SOCK=/run/rhizo-audio/audiod
 
+if (( INSTALLED )); then
+  policy_audio=$(ssh_vm -t 10 "if grep -q '^\[audio\]' /etc/rhizo/policy.conf 2>/dev/null; then echo AUDIO_SECTION; else echo NO_AUDIO_SECTION; fi" 2>/dev/null | tr -d '\r')
+  [[ "$policy_audio" == NO_AUDIO_SECTION ]] \
+    || fail "the installed /etc/rhizo/policy.conf has an [audio] section, not the shipped default (read '$policy_audio')"
+  POLICY_WITHHELD=$( { [[ "$POLICY_ORIG" == ABSENT ]] || base64 -d <<<"$POLICY_ORIG"; printf '\n[audio]\nout = no\n'; } | base64 -w0)
+else
 policy_left=$(ssh_vm -t 10 "test -f /etc/rhizo/policy.conf && echo PRESENT || echo ABSENT" 2>/dev/null | tr -d '\r')
 [[ "$policy_left" == "ABSENT" ]] \
   || fail "a leftover /etc/rhizo/policy.conf on the guest means this leg is not proving the shipped default"
+fi
 daemon_on=$(ssh_vm -t 10 "pgrep -x rhizo-audiod >/dev/null && echo UP || echo DOWN" 2>/dev/null | tr -d '\r')
 sock_on=$(ssh_vm -t 10 "test -S $AUDIO_SOCK && echo UP || echo DOWN" 2>/dev/null | tr -d '\r')
 [[ "$daemon_on" == "UP" && "$sock_on" == "UP" ]] \
@@ -461,7 +527,20 @@ sock_on=$(ssh_vm -t 10 "test -S $AUDIO_SOCK && echo UP || echo DOWN" 2>/dev/null
 
 audio_withheld_policy="$TEST_WORKDIR/policy-audio-withheld.conf"
 printf '[audio]\nout = no\n' > "$audio_withheld_policy"
+if (( INSTALLED )); then
+  ssh_vm -t 20 "printf %s '$POLICY_WITHHELD' | base64 -d > /etc/rhizo/policy.conf" \
+    || fail "could not add the withheld [audio] section to the installed /etc/rhizo/policy.conf before the audio.out-withheld reboot"
+else
+ssh_vm -t 20 "printf '[audio]\nout = no\n' > /etc/rhizo/policy.conf" \
+  || fail "could not write the withheld policy onto the guest's /etc/rhizo/policy.conf before the audio.out-withheld reboot"
+fi
 ssh_vm -t 20 "sync" >/dev/null 2>&1
+if (( INSTALLED )); then
+  ssh_vm -t 30 "dmesg" > "$EV/console-steps-1-8.log" 2>&1 \
+    || echo "<none: dmesg failed before the step 9 reboot>" > "$EV/console-steps-1-8.log"
+  installed_reboot 600 >>"$EV/audio-capability.log" 2>&1 \
+    || fail "the installed guest did not come back with Android booted after the audio.out-withheld reboot (see $EV/audio-capability.log)"
+else
 console_1_8="$VAR_DIR/vm-boot${SUFFIX}.log"
 cp -p "$console_1_8" "$EV/console-steps-1-8.log" \
   || echo "<none: no readable $console_1_8 before the step 9 reboot>" > "$EV/console-steps-1-8.log"
@@ -472,6 +551,7 @@ wait_for_ssh 300 || fail "the vm did not come back after the audio.out-withheld 
 desk_session_up >>"$EV/audio-capability.log" 2>&1
 ../../vm/redeploy.sh --skip-kill --boot-wait 200 >>"$EV/audio-capability.log" 2>&1 \
   || fail "redeploy.sh failed during the audio.out-withheld reboot (see $EV/audio-capability.log)"
+fi
 INIT=$(guest_init_pid 10)
 [[ -n "$INIT" ]] || fail "no init second_stage after the audio.out-withheld reboot"
 android_stay_awake "$INIT" >/dev/null
@@ -481,16 +561,25 @@ sock_off=$(ssh_vm -t 10 "test -S $AUDIO_SOCK && echo UP || echo DOWN" 2>/dev/nul
 [[ "$daemon_off" == "DOWN" && "$sock_off" == "DOWN" ]] \
   || fail "audio.out withheld: daemon=$daemon_off socket=$sock_off, expected both DOWN"
 
+if (( INSTALLED )); then
+  ssh_vm -t 20 "printf %s '$POLICY_WITHHELD' | base64 -d > /etc/rhizo/policy.conf" \
+    || fail "could not add the withheld [audio] section to the installed /etc/rhizo/policy.conf"
+else
 ssh_vm -t 20 "printf '[audio]\nout = no\n' > /etc/rhizo/policy.conf" \
   || fail "could not write the withheld policy onto the guest's /etc/rhizo/policy.conf"
+fi
 ssh_vm -t 10 "systemctl start rhizo-audiod.service" >>"$EV/audio-capability.log" 2>&1
 cond_result=$(ssh_vm -t 10 "systemctl show -p ConditionResult --value rhizo-audiod.service" 2>/dev/null | tr -d '\r')
 active_cond=$(ssh_vm -t 10 "systemctl is-active rhizo-audiod.service" 2>/dev/null | tr -d '\r')
 sock_cond_off=$(ssh_vm -t 10 "test -S $AUDIO_SOCK && echo UP || echo DOWN" 2>/dev/null | tr -d '\r')
 [[ "$cond_result" == "no" && "$active_cond" != "active" && "$sock_cond_off" == "DOWN" ]] \
   || fail "audio.out withheld via the guest's own policy.conf: rhizo-audiod.service's own ExecCondition=capability-allowed.sh did not skip it (ConditionResult=$cond_result, is-active=$active_cond, socket=$sock_cond_off)"
+if (( INSTALLED )); then
+  audio_restore_installed
+else
 ssh_vm -t 20 "rm -f /etc/rhizo/policy.conf" \
   || fail "could not remove the withheld policy from the guest's /etc/rhizo/policy.conf"
+fi
 ssh_vm -t 10 "systemctl reset-failed rhizo-audiod.service 2>/dev/null; systemctl start rhizo-audiod.service" >>"$EV/audio-capability.log" 2>&1
 unit_active_on=$(ssh_vm -t 10 "systemctl is-active rhizo-audiod.service" 2>/dev/null | tr -d '\r')
 [[ "$unit_active_on" == "active" ]] \

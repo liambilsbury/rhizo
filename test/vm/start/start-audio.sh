@@ -53,7 +53,15 @@ PIPEWIRE_DEBS=/root/share/pipewire-debs
 PIPEWIRE_PKGS="pipewire pipewire-bin wireplumber libpipewire-0.3-modules"
 # print each pipewire package not configured
 unconfigured_pipewire() {
-  ssh_vm -t 20 "for p in $PIPEWIRE_PKGS; do
+  ssh_vm -t 20 ". /etc/os-release || exit 1
+  case \$ID in
+    cachyos|arch)
+      for p in pipewire wireplumber; do pacman -Q \$p >/dev/null 2>&1 || echo \$p; done
+      exit 0 ;;
+    ubuntu) ;;
+    *) echo \"no package query for os-release ID '\$ID'\" >&2; exit 1 ;;
+  esac
+  for p in $PIPEWIRE_PKGS; do
     st=\$(dpkg-query -W -f='\${db:Status-Abbrev}' \$p 2>/dev/null | tr -d ' ')
     [ \"\$st\" = ii ] || echo \$p
   done"
@@ -103,7 +111,13 @@ if (( INSTALL_ONLY )); then
   exit 0
 fi
 
+INSTALLED=0
+[[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]] && INSTALLED=1
 log "Ensuring the desktop session is resolved..."
+if (( INSTALLED )); then
+  log "RHIZO_TEST_INSTALLED=1: using the installed units and the session's PipeWire, staging nothing from this tree"
+  session_cmd="test -s /run/rhizo-desktop/session.env && echo SESSION_ENV_OK"
+else
 session_cmd="mkdir -p /var/log/rhizo
 groupadd -f rhizo
 chown root:rhizo /var/log/rhizo && chmod 0775 /var/log/rhizo
@@ -126,22 +140,25 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
 done
 test -s /run/rhizo-desktop/session.env && echo SESSION_ENV_OK"
+fi
 out=$(ssh_vm -t 20 "$session_cmd" 2>&1); echo "$out"
 if ! grep -q SESSION_ENV_OK <<<"$out"; then
   log "FAIL: the desktop user's rhizo-desktop-session.service never wrote /run/rhizo-desktop/session.env"
   exit 1
 fi
 
-ssh_vm -t 10 "install -d -m 0755 /usr/lib/rhizo/audiod && install -m 0755 /root/share/rhizo-audiod /usr/lib/rhizo/audiod/rhizo-audiod" \
-  || { log "FAIL: could not stage rhizo-audiod at its packaged path (build it with tools/build/services/audiod.sh)"; exit 1; }
-ssh_vm -t 10 "install -d -m 0755 /usr/lib/rhizo/tools && install -m 0755 /root/share/capability-allowed.sh /usr/lib/rhizo/tools/capability-allowed.sh && install -D -m 0644 /root/share/sandbox/capabilities.py /usr/lib/rhizo/sandbox/capabilities.py" \
-  || { log "FAIL: could not stage the audio.out capability gate"; exit 1; }
-ssh_vm -t 10 "install -m 0644 /root/share/rhizo-audiod.service /etc/systemd/system/$UNIT" \
-  || { log "FAIL: could not install $UNIT -- run test/vm/sync.sh first"; exit 1; }
+if (( ! INSTALLED )); then
+  ssh_vm -t 10 "install -d -m 0755 /usr/lib/rhizo/audiod && install -m 0755 /root/share/rhizo-audiod /usr/lib/rhizo/audiod/rhizo-audiod" \
+    || { log "FAIL: could not stage rhizo-audiod at its packaged path (build it with tools/build/services/audiod.sh)"; exit 1; }
+  ssh_vm -t 10 "install -d -m 0755 /usr/lib/rhizo/tools && install -m 0755 /root/share/capability-allowed.sh /usr/lib/rhizo/tools/capability-allowed.sh && install -D -m 0644 /root/share/sandbox/capabilities.py /usr/lib/rhizo/sandbox/capabilities.py" \
+    || { log "FAIL: could not stage the audio.out capability gate"; exit 1; }
+  ssh_vm -t 10 "install -m 0644 /root/share/rhizo-audiod.service /etc/systemd/system/$UNIT" \
+    || { log "FAIL: could not install $UNIT -- run test/vm/sync.sh first"; exit 1; }
+fi
 
 AUDIO_GRAPH_SH=$(cat <<'AUDIO_GRAPH_EOF'
 set -u
-U="$1"; BUSES="$2"
+U="$1"; BUSES="$2"; INSTALLED="${3:-0}"
 fail() { echo "AUDIO_GRAPH_FAIL $*"; exit 1; }
 if ! uid=$(id -u "$U") || ! gid=$(id -g "$U"); then fail "no account '$U'"; fi
 rd="/run/user/$uid"
@@ -167,7 +184,10 @@ mgr=$(systemctl show -p MainPID --value "user@$uid.service")
 mgr_domain=$(domain_of "$mgr")
 echo "AUDIO_GRAPH user@$uid.service pid=${mgr:-0} domain=${mgr_domain:-unreadable}"
 pw=""
-if [ "$mgr_domain" = u:r:kernel:s0 ]; then
+if [ "$INSTALLED" = 1 ]; then
+  echo "AUDIO_GRAPH installed guest: the session's PipeWire"
+  as_user systemctl --user start pipewire.socket pipewire.service wireplumber.service || fail "$U's pipewire and wireplumber did not start"
+elif [ "$mgr_domain" = u:r:kernel:s0 ]; then
   if systemctl is-active --quiet "$RIG_PW" && systemctl is-active --quiet "$RIG_WP"; then
     echo "AUDIO_GRAPH reusing $RIG_PW and $RIG_WP"
   else
@@ -259,7 +279,7 @@ AUDIO_GRAPH_EOF
 )
 
 log "Resolving $DESKTOP_USER's PipeWire and creating $BUSES null sinks (rhizo_sink_bus0..$((BUSES-1)), rhizo_sink_primary)..."
-graph_out=$(ssh_vm -t 120 "bash -c $(printf %q "$AUDIO_GRAPH_SH") audio-graph $DESKTOP_USER $BUSES" 2>&1)
+graph_out=$(ssh_vm -t 120 "bash -c $(printf %q "$AUDIO_GRAPH_SH") audio-graph $DESKTOP_USER $BUSES $INSTALLED" 2>&1)
 echo "$graph_out"
 if ! grep -q '^AUDIO_GRAPH_OK' <<<"$graph_out"; then
   log "FAIL: the audio graph is not ready -- see the AUDIO_GRAPH lines above"

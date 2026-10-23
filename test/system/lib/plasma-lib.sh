@@ -11,6 +11,8 @@ PLASMA_INJECT_FIFO="/tmp/rhizo-plasma-inject.fifo"
 PLASMA_INJECT_OUT="/tmp/rhizo-plasma-inject.out"
 PLASMA_WATCH_UNIT="rhizo-notify-watch"
 PLASMA_NOTIFY_REC="/tmp/rhizo-plasma-notif.jsonl"
+PLASMA_VOUT_UNIT="rhizo-virtual-output"
+PLASMA_VOUT_TOOL="/usr/local/bin/kde-virtual-output"
 
 PLASMA_PICK_SOCKET=$(cat <<'EOF'
 unset WAYLAND_DISPLAY
@@ -166,12 +168,51 @@ _desk_plasma_window_op() {
   _plasma_harness "window-op $id $op $extra"
 }
 
+# add a kwin virtual output of WxH to the seat login and print its name
+_plasma_virtual_output_add() {
+  local w="${1%x*}" h="${1#*x}" n out name end
+  [[ "$w" =~ ^[1-9][0-9]*$ && "$h" =~ ^[1-9][0-9]*$ ]] || { echo "_plasma_virtual_output_add: not WxH: '$1'" >&2; return 2; }
+  n=$(gcmd_plasma "i=2; while systemctl --user is-active -q $PLASMA_VOUT_UNIT-\$i; do i=\$((i + 1)); done; echo \$i" 10 | tr -d '[:space:]')
+  [[ "$n" =~ ^[0-9]+$ ]] || { echo "_plasma_virtual_output_add: the user manager named no free unit (got '$n')" >&2; return 1; }
+  name="Virtual-rhizo-$n"
+  out=$(gcmd_plasma "o=/tmp/$PLASMA_VOUT_UNIT-$n.out; rm -f \$o
+systemd-run --user --unit=$PLASMA_VOUT_UNIT-$n --collect -p StandardOutput=truncate:\$o -p StandardError=truncate:\$o \
+  -E WAYLAND_DISPLAY=\$WAYLAND_DISPLAY -- $PLASMA_VOUT_TOOL rhizo-$n $w $h >/dev/null 2>&1 || { echo 'systemd-run refused the unit'; exit 1; }
+end=\$((\$(date +%s) + 10))
+until grep -qx ok \$o 2>/dev/null; do
+  grep -q '^err ' \$o 2>/dev/null && { cat \$o; exit 1; }
+  [ \$(date +%s) -lt \$end ] || { echo \"no answer in 10s: \$(cat \$o 2>/dev/null)\"; exit 1; }
+  sleep 0.2
+done" 30) || { echo "_plasma_virtual_output_add: kde-virtual-output: $out" >&2; return 1; }
+  end=$(( $(date +%s) + 15 ))
+  until _plasma_harness "outputs list" 2>/dev/null | grep -q "\"name\": \"$name\""; do
+    (( $(date +%s) < end )) || { echo "_plasma_virtual_output_add: kwin listed no $name within 15s" >&2; return 1; }
+    sleep 0.5
+  done
+  out=$(_plasma_harness "outputs scale $name 1" 2>&1) \
+    || { echo "_plasma_virtual_output_add: $name did not take scale 1: $out" >&2; return 1; }
+  printf '%s\n' "$name"
+}
+
 # run an outputs command through plasma-harness.py
 _desk_plasma_outputs() {
   local verb="$1"; shift
   case "$verb" in
-    add) _plasma_harness "outputs add $1" ;;
-    remove) _plasma_harness "outputs remove $1" ;;
+    add)
+      local out
+      if [[ "$(_plasma_mode 2>/dev/null)" == login ]]; then
+        out=$(_plasma_harness "outputs add $1" 2>&1) && { printf '%s\n' "$out"; return 0; }
+        [[ "$out" == *"no disabled output has that mode"* ]] || { printf '%s\n' "$out" >&2; return 1; }
+        _plasma_virtual_output_add "$1"
+      else
+        _plasma_harness "outputs add $1"
+      fi ;;
+    remove)
+      if [[ "$1" == Virtual-rhizo-* ]]; then
+        gcmd_plasma "systemctl --user stop $PLASMA_VOUT_UNIT-${1#Virtual-rhizo-}" 20 || return 1
+      else
+        _plasma_harness "outputs remove $1"
+      fi ;;
     scale) _plasma_harness "outputs scale $1 $2" ;;
     list) _plasma_harness "outputs list" ;;
     *) echo "_desk_plasma_outputs: unknown verb '$verb'" >&2; return 2 ;;

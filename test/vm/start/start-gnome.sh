@@ -137,6 +137,11 @@ timeout 30 scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" ../../system/guest/gnome-harne
   "$SSH_TARGET:$HARNESS_DIR/" \
   || { log "FAIL: could not stage gnome-harness.py/gnome-launcher.py/dbus_min.py to $HARNESS_DIR"; exit 1; }
 ssh_vm -t 10 "chmod 644 $HARNESS_DIR/gnome-harness.py $HARNESS_DIR/gnome-launcher.py $HARNESS_DIR/dbus_min.py"
+# stop the virtual-monitor holders an earlier system test left running
+as_user 30 'pids=$(pgrep -f "gnome-harness[.]py virtual-monitor ")
+[ -z "$pids" ] || { kill $pids; for p in $pids; do timeout 10 tail --pid="$p" -f /dev/null; done; }
+! pgrep -f "gnome-harness[.]py virtual-monitor " >/dev/null' \
+  || { log "FAIL: an earlier virtual-monitor holder still runs after SIGTERM"; exit 1; }
 
 ../../../tools/build/test-tools/gen-gnome-harness-ext.sh || { log "FAIL: could not generate the rhizo-harness@rhizo extension"; exit 1; }
 EXT_SRC="$(cd "../../system/guest/gnome-harness-ext/rhizo-harness@rhizo" && pwd)"
@@ -157,19 +162,23 @@ fi
 
 GSETTINGS_XKB="[('xkb', '$XKB_LAYOUT')]"
 GSETTINGS_EXT="['rhizo-harness@rhizo']"
+# logical monitor layout: window sizes stay logical across a scale change
+GSETTINGS_MUTTER="['scale-monitor-framebuffer']"
 GSETTINGS_SET="gsettings set org.gnome.desktop.input-sources sources \"$GSETTINGS_XKB\"
 gsettings set org.gnome.shell enabled-extensions \"$GSETTINGS_EXT\"
 gsettings set org.gnome.shell disable-user-extensions false
 gsettings set org.gnome.desktop.session idle-delay 0
 gsettings set org.gnome.desktop.screensaver lock-enabled false
-gsettings set org.gnome.desktop.interface enable-animations false"
+gsettings set org.gnome.desktop.interface enable-animations false
+gsettings set org.gnome.mutter experimental-features \"$GSETTINGS_MUTTER\""
 GSETTINGS_GET='echo "SOURCES=$(gsettings get org.gnome.desktop.input-sources sources)"
 echo "EXT=$(gsettings get org.gnome.shell enabled-extensions)"
+echo "MUTTER=$(gsettings get org.gnome.mutter experimental-features)"
 echo RHIZO_GSETTINGS_OK'
 
 # compare the gsettings read-back with the values set
 gsettings_check() {
-  local out="$1" got_sources got_ext
+  local out="$1" got_sources got_ext got_mutter
   [[ "$out" == *RHIZO_GSETTINGS_OK* ]] \
     || { log "FAIL: the gsettings script did not complete: $(tr '\n' ' ' <<<"$out")"; return 1; }
   got_sources=$(sed -n 's/^SOURCES=//p' <<<"$out" | tr -d '\r')
@@ -178,7 +187,10 @@ gsettings_check() {
     || { log "FAIL: gsettings get org.gnome.desktop.input-sources sources returned '$got_sources', wanted '$GSETTINGS_XKB'"; return 1; }
   [[ "$got_ext" == "$GSETTINGS_EXT" ]] \
     || { log "FAIL: gsettings get org.gnome.shell enabled-extensions returned '$got_ext', wanted '$GSETTINGS_EXT'"; return 1; }
-  log "gsettings confirmed by read-back: input-sources=$got_sources enabled-extensions=$got_ext"
+  got_mutter=$(sed -n 's/^MUTTER=//p' <<<"$out" | tr -d '\r')
+  [[ "$got_mutter" == "$GSETTINGS_MUTTER" ]] \
+    || { log "FAIL: gsettings get org.gnome.mutter experimental-features returned '$got_mutter', wanted '$GSETTINGS_MUTTER'"; return 1; }
+  log "gsettings confirmed by read-back: input-sources=$got_sources enabled-extensions=$got_ext experimental-features=$got_mutter"
 }
 
 # ping the harness in gnome-shell
@@ -248,6 +260,39 @@ $GDM_TIMED_LOGIN" 2>&1)
   log "seat login staged: $DESKTOP_USER's gsettings and extension, gdm3 TimedLogin of $DESKTOP_USER after 5s"
 }
 
+# load Android's policy through rhizo-policy.service before the display manager starts
+load_policy_before_session() {
+  local out i
+  out=$(ssh_vm -t 60 'set -e
+systemctl stop display-manager.service
+systemctl unmask rhizo-policy.service >/dev/null
+mkdir -p /run/systemd/system/rhizo-policy.service.d
+printf "[Unit]\nConditionPathExists=\nConditionPathExists=/root/launcher3.py\n[Service]\nEnvironment=RHIZO_RIG_LOAD_UNDER_LOGIN=1\nExecStart=\nExecStart=/usr/bin/python3 /root/launcher3.py selinux_setup --policy-only\nExecStop=\nExecStop=/usr/bin/python3 /root/launcher3.py policy-stop\n" \
+  > /run/systemd/system/rhizo-policy.service.d/10-rig.conf
+systemctl daemon-reload
+systemctl start --no-block rhizo-policy.service
+echo RHIZO_POLICY_STARTED' 2>&1)
+  [[ "$out" == *RHIZO_POLICY_STARTED* ]] \
+    || { log "FAIL: could not start rhizo-policy.service ahead of the display manager: $(tr '\n' ' ' <<<"$out")"; return 1; }
+  # the load restarts sshd: poll over new connections
+  for (( i = 0; i < 150; i++ )); do
+    out=$(ssh_vm -t 10 'echo "RHIZO_POLICY state=$(systemctl show -p ActiveState --value rhizo-policy.service) enforce=$(cat /sys/fs/selinux/enforce) pid1=$(tr -d "\0" < /proc/1/attr/current)"' 2>/dev/null)
+    [[ "$out" == *"state=active "* || "$out" == *"state=failed "* ]] && break
+    sleep 2
+  done
+  if [[ "$out" != *"RHIZO_POLICY state=active enforce=1 pid1=u:r:rhizo_host:s0"* ]]; then
+    log "FAIL: rhizo-policy.service did not load the policy before the display manager: ${out:-<no answer>}"
+    return 1
+  fi
+  log "policy loaded before the display manager: ${out#*RHIZO_POLICY }"
+}
+
+# gnome-shell exits when a host-mode policy load restarts the system bus
+if [[ "$MODE" == start ]] \
+    && ssh_vm -t 10 '/usr/lib/rhizo/rhizo-selinux-mode --is host && [ -e /sys/fs/selinux/enforce ] && [ "$(tr -d "\0" < /proc/1/attr/current)" = kernel ]' >/dev/null 2>&1; then
+  load_policy_before_session || exit 1
+  MODE=stage-login UNSTAGE_LOGIN=1
+fi
 if [[ "$MODE" == stage-login ]]; then
   SESSION_MODE=login
 else
@@ -276,6 +321,10 @@ if [[ "$SESSION_MODE" == login ]]; then
   if ! shell_ctx=$(desk_compositor_context "$unit_pid" "$ctx_mode"); then
     log "FAIL: gnome-shell (pid $unit_pid) runs in '$shell_ctx', not rhizo_host"
     exit 1
+  fi
+  if [[ "${UNSTAGE_LOGIN:-0}" == 1 ]]; then
+    ssh_vm -t 20 "sed -i '/^\(TimedLoginEnable\|TimedLogin\|TimedLoginDelay\)=/d' /etc/gdm3/custom.conf && ! grep -q '^TimedLogin' /etc/gdm3/custom.conf" \
+      || { log "FAIL: could not remove $DESKTOP_USER's timed login from /etc/gdm3/custom.conf"; exit 1; }
   fi
   log "gnome-shell up as $DESKTOP_USER (uid $DESKTOP_UID, pid $unit_pid, context $shell_ctx) in gdm's seat login. Wayland socket: $RUNTIME_DIR/$WL_SOCK."
   log "harness: $ping_out"

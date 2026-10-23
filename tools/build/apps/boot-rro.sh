@@ -16,6 +16,7 @@ echo "[build-boot-rro] aapt2 compile + link"
 mkdir -p "$WORK/compiled"
 "$AAPT2" compile -o "$WORK/compiled" "$SRC/res/values/bools.xml"
 "$AAPT2" compile -o "$WORK/compiled" "$SRC/res/values/strings.xml"
+"$AAPT2" compile -o "$WORK/compiled" "$SRC/res/values-v37/bools.xml"
 "$AAPT2" link -o "$WORK/base.apk" --manifest "$SRC/AndroidManifest.xml" \
   -I "$ANDROID_JAR" --min-sdk-version 26 --target-sdk-version 36 \
   --no-resource-deduping --no-resource-removal "$WORK"/compiled/*.flat
@@ -35,6 +36,8 @@ for r in config_enableWallpaperService config_checkWallpaperAtBoot; do
 done
 grep -A1 "bool/config_disableLockscreenByDefault" <<<"$resources" | grep -q 'true' \
   || { echo "[build-boot-rro] FAIL: config_disableLockscreenByDefault is not a true bool in the overlay" >&2; exit 1; }
+grep -A1 "bool/config_localDisplaysMirrorContent" <<<"$resources" | grep -q '(v37) false' \
+  || { echo "[build-boot-rro] FAIL: config_localDisplaysMirrorContent is not a false bool scoped to v37 in the overlay" >&2; exit 1; }
 grep -A1 "string/config_recentsComponentName" <<<"$resources" | grep -qF '"com.android.systemui/.NoRecents"' \
   || { echo "[build-boot-rro] FAIL: config_recentsComponentName does not name com.android.systemui/.NoRecents in the overlay" >&2; exit 1; }
 

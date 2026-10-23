@@ -36,7 +36,7 @@ sudo pacman -U ./rhizo-[0-9]*.pkg.tar.zst ./linux-rhizo-*.pkg.tar.zst
 Ubuntu 24.04:
 
 ```bash
-sudo apt install ./rhizo_*.deb ./linux-image-rhizo_*.deb ./linux-headers-rhizo_*.deb
+sudo apt install ./rhizo_*.deb ./linux-image-*rhizo*.deb ./linux-headers-*rhizo*.deb
 ```
 
 Then:

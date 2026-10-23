@@ -83,6 +83,11 @@ def is_fifo_rr(policy):
 _RT_POLICY_NAME = {SCHED_FIFO: "fifo", SCHED_RR: "rr"}
 _RT_POLICY_FOR_NAME = {"fifo": SCHED_FIFO, "rr": SCHED_RR}
 ANDROID_INIT_CTX = "u:r:init:s0"
+ANDROID_INIT_ARGV = [b"/system/bin/init", b"second_stage"]
+RHIZO_STACK_RE = re.compile(
+    r"^/(rhizo(-[0-9]+)?|system\.slice/(system-androidd\.slice/)?androidd(@[0-9]+)?\.service/android)/")
+AID_SYSTEM = 1000
+POWER_HAL_PATH = "/vendor/bin/hw/rhizo-power-service"
 
 
 def _in_sandbox_ns(view, pid, namespaces):
@@ -591,6 +596,30 @@ class RealProcView:
         """return the security context of a process"""
         return read_proc_attr_current(pid)
 
+    def cmdline(self, pid):
+        """return the argv of a process"""
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                return f.read().split(b"\0")
+        except OSError:
+            return []
+
+    def exe_id(self, pid):
+        """return the device and inode of a process's executable"""
+        try:
+            st = os.stat("/proc/%d/exe" % pid)
+        except OSError:
+            return None
+        return (st.st_dev, st.st_ino)
+
+    def root_file_id(self, pid, path):
+        """return the device and inode of a path under a process's root"""
+        try:
+            st = os.stat("/proc/%d/root%s" % (pid, path))
+        except OSError:
+            return None
+        return (st.st_dev, st.st_ino)
+
     def cgroup_path(self, pid):
         """return the cgroup2 path of a process"""
         try:
@@ -659,6 +688,18 @@ class FakeProcView:
     def context(self, pid):
         """return the fake security context of a process"""
         return self.procs.get(pid, {}).get("ctx")
+
+    def cmdline(self, pid):
+        """return the fake argv of a process"""
+        return self.procs.get(pid, {}).get("cmdline", [])
+
+    def exe_id(self, pid):
+        """return the fake executable identity of a process"""
+        return self.procs.get(pid, {}).get("exe")
+
+    def root_file_id(self, pid, path):
+        """return the fake identity of a path under a process's root"""
+        return self.procs.get(pid, {}).get("root_files", {}).get(path)
 
     def cgroup_path(self, pid):
         """return the fake cgroup path of a process"""
@@ -773,9 +814,9 @@ class RefusalLog:
         return list(self._d)
 
 
-def refuse_peer(refusals, pid, ctx):
+def refuse_peer(refusals, pid, ctx, why=None):
     """record a refused peer"""
-    refusals.record("refused peer pid=%d ctx=%r" % (pid, ctx))
+    refusals.record("refused peer pid=%d ctx=%r" % (pid, ctx) + ("" if why is None else " why=%s" % why))
 
 
 def refuse_tid(refusals, tid, sid_key, reason):
@@ -1139,8 +1180,9 @@ class Daemon:
     def __init__(self, socket_path, status_path, cap_percent, view=None, clock=time.monotonic,
                  contain_enabled=False, contain_cap_percent=0,
                  contain_runtime_ns=0, contain_period_ns=0, self_reserve=False, cgroup_fs=CGROUP_FS,
-                 hard_period=("2ms", HARD_PERIOD_NS)):
+                 hard_period=("2ms", HARD_PERIOD_NS), selinux_mode="host"):
         """set the initial rhizo-rtd state"""
+        self.selinux_mode = selinux_mode
         self.socket_path = socket_path
         self.status_path = status_path
         self.cap_percent = cap_percent
@@ -1219,9 +1261,38 @@ class Daemon:
             if self.view.nspid_last(pid) != 1:
                 continue
             ino = self.view.ns_ino(pid)
-            if ino is not None and ino != own and (ino in wanted or self.view.context(pid) == ANDROID_INIT_CTX):
+            if ino is not None and ino != own and (ino in wanted or self.is_sandbox_init(pid)):
                 found[ino] = pid
         return found
+
+    def is_sandbox_init(self, pid):
+        """return whether a pid namespace's pid 1 is a sandbox init"""
+        if self.selinux_mode != "namespace":
+            return self.view.context(pid) == ANDROID_INIT_CTX
+        cgroup = self.view.cgroup_path(pid)
+        return (self.view.cmdline(pid)[:2] == ANDROID_INIT_ARGV and cgroup is not None
+                and RHIZO_STACK_RE.match(cgroup.rstrip("/") + "/") is not None)
+
+    def namespace_peer_refusal(self, pid, uid):
+        """return why a namespace-mode peer is not the power HAL, or None"""
+        ino = self.view.ns_ino(pid)
+        if ino is None:
+            return "its-pid-namespace-unreadable"
+        if ino == self.view.ns_ino(os.getpid()):
+            return "not-in-a-sandbox-pid-namespace"
+        init = None
+        for cand in self.view.pids():
+            if self.view.nspid_last(cand) == 1 and self.view.ns_ino(cand) == ino and self.is_sandbox_init(cand):
+                init = cand
+                break
+        if init is None:
+            return "its-pid-namespace-has-no-sandbox-init"
+        if uid != AID_SYSTEM:
+            return "uid-%d-not-%d" % (uid, AID_SYSTEM)
+        want = self.view.root_file_id(init, POWER_HAL_PATH)
+        if want is None or self.view.exe_id(pid) != want:
+            return "executable-not-the-sandbox's-%s" % POWER_HAL_PATH
+        return None
 
     def _resolve_tenant(self, ino, pid1):
         """find the tenant of a namespace from its pid 1 cgroup"""
@@ -1523,14 +1594,15 @@ class Daemon:
             log("accept failed: %s" % exc)
             return
         try:
-            pid, _uid, _gid = so_peercred(conn)
+            pid, uid, _gid = so_peercred(conn)
         except OSError as exc:
             log("could not read SO_PEERCRED on a new connection: %s" % exc)
             conn.close()
             return
         ctx = read_proc_attr_current(pid)
-        if ctx != REQUIRED_PEER_CTX:
-            refuse_peer(self.refusals, pid, ctx)
+        why = self.namespace_peer_refusal(pid, uid) if self.selinux_mode == "namespace" else None
+        if why is not None or (self.selinux_mode != "namespace" and ctx != REQUIRED_PEER_CTX):
+            refuse_peer(self.refusals, pid, ctx, why)
             conn.close()
             return
         try:
@@ -2244,11 +2316,18 @@ class Daemon:
         """revoke all grants"""
         for tid in list(self.grants):
             self._revoke(tid)
-        self.contain_scan(refresh=False)
-        for tid in list(self.contain_grants):
-            self._revoke_contain(tid)
-        for tid in [t for t in self.contained if t not in self.contain_grants]:
-            self._restore_ungranted_sibling(tid)
+        done = set()
+        while True:
+            self.contain_scan(refresh=False)
+            todo = [t for t in dict.fromkeys([*self.contained, *self.contain_grants]) if t not in done]
+            if not todo:
+                break
+            for tid in todo:
+                if tid in self.contain_grants:
+                    self._revoke_contain(tid)
+                else:
+                    self._restore_ungranted_sibling(tid)
+            done.update(todo)
 
     def _restore_ungranted_sibling(self, tid):
         """restore a thread's FIFO or RR policy"""
@@ -3205,6 +3284,29 @@ def _selftest_contain_pool_siblings(cases):
                              "pool-mates' FIFO/RR prior, and touches no other thread",
                       sorted(sets) == [("set", 103, SCHED_FIFO, 2), ("set", 105, SCHED_FIFO, 2)],
                       "calls %r contained %r" % (calls, sorted(d2.contained)))
+
+                d3 = Daemon(os.path.join(tmp, "rtd3"), os.path.join(tmp, "status3.json"), 25, clock=lambda: now[0],
+                            view=_pool_sibling_fake_tree(), contain_enabled=True, contain_cap_percent=50,
+                            contain_runtime_ns=2_000_000, contain_period_ns=16_666_667)
+                d3.sandbox_ns_ino = 777
+                _contain_sweeps(d3, now)
+
+                def revoke_and_spawn(tid, policy, nice, priority=0):
+                    """revoke, then spawn a SCHED_OTHER pool thread"""
+                    if 106 not in d3.view.procs:
+                        d3.view.procs[106] = {"ns_ino": 777, "tgid": 100, "uid": 1000, "comm": "binder:11_6",
+                                              "sched": (SCHED_OTHER, 0, 0), "start": 9, "schedstat": 0}
+                        d3.view.pid_tids[100].append(106)
+                    calls.append(("revoke", tid, policy, priority))
+                    return True, 0
+
+                revoke_to_prior = revoke_and_spawn
+                del calls[:]
+                d3.revoke_everything()
+                _case(cases, "the stop puts a pool thread spawned while its pool was SCHED_DEADLINE "
+                             "on the pool's FIFO/RR prior",
+                      ("set", 106, SCHED_FIFO, 2) in calls,
+                      "calls %r contained %r" % (calls, sorted(d3.contained)))
             finally:
                 set_rt_policy = real_set
         finally:
@@ -3290,6 +3392,71 @@ def _selftest_peer_check(cases):
         _case(cases, "a peer whose context is not %s is refused and its connection closed" % REQUIRED_PEER_CTX,
               not d.connections and closed and any(r.startswith(own) for r in d.refusals.snapshot()),
               "connections=%r closed=%r refusals=%r" % (d.connections, closed, d.refusals.snapshot()))
+        n = Daemon(os.path.join(tmp, "rtd-ns"), os.path.join(tmp, "status-ns.json"), 25, selinux_mode="namespace")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        listener.bind(n.socket_path)
+        listener.listen(1)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        client.connect(n.socket_path)
+        n.accept(listener)
+        client.settimeout(2)
+        try:
+            closed = client.recv(1) == b""
+        except OSError:
+            closed = True
+        client.close()
+        listener.close()
+        _case(cases, "namespace mode: a host peer is refused at accept and its connection closed",
+              not n.connections and closed
+              and any(r.startswith(own) and r.endswith("why=not-in-a-sandbox-pid-namespace") for r in n.refusals.snapshot()),
+              "connections=%r closed=%r refusals=%r" % (n.connections, closed, n.refusals.snapshot()))
+
+
+def _selftest_namespace_peer(cases):
+    """test the namespace-mode sandbox init and power HAL peer checks"""
+    import tempfile
+    hal = (37, 452115)
+    own = os.getpid()
+    procs = {
+        own: {"ns_ino": 1, "nspid_last": own},
+        10: {"ns_ino": 701, "nspid_last": 1, "cmdline": ANDROID_INIT_ARGV + [b""], "cgroup": "/rhizo/init",
+             "ctx": "kernel", "root_files": {POWER_HAL_PATH: hal}},
+        20: {"ns_ino": 701, "nspid_last": 116, "uid": AID_SYSTEM, "exe": hal},
+        30: {"ns_ino": 701, "nspid_last": 300, "uid": 2000, "exe": (37, 999)},
+        31: {"ns_ino": 701, "nspid_last": 301, "uid": 2000, "exe": hal},
+        40: {"ns_ino": 701, "nspid_last": 400, "uid": AID_SYSTEM, "exe": (37, 5)},
+        50: {"ns_ino": 1, "nspid_last": 50, "uid": AID_SYSTEM, "exe": hal},
+        60: {"ns_ino": 900, "nspid_last": 1, "cmdline": [b"/sbin/init", b""], "cgroup": "/user.slice/podman"},
+        61: {"ns_ino": 900, "nspid_last": 7, "uid": AID_SYSTEM, "exe": hal},
+        70: {"ns_ino": 901, "nspid_last": 1, "cmdline": ANDROID_INIT_ARGV + [b""], "cgroup": "/user.slice/app.scope",
+             "root_files": {POWER_HAL_PATH: hal}},
+        71: {"ns_ino": 901, "nspid_last": 9, "uid": AID_SYSTEM, "exe": hal},
+        80: {"ns_ino": 902, "nspid_last": 1, "cmdline": ANDROID_INIT_ARGV + [b""],
+             "cgroup": "/system.slice/androidd.service/android"},
+    }
+    view = FakeProcView(procs, {pid: [pid] for pid in procs})
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Daemon(os.path.join(tmp, "rtd"), os.path.join(tmp, "status.json"), 25, view=view,
+                   selinux_mode="namespace")
+        h = Daemon(os.path.join(tmp, "rtd2"), os.path.join(tmp, "status2.json"), 25, view=view)
+    got = {pid: d.namespace_peer_refusal(pid, procs[pid]["uid"]) for pid in (20, 30, 31, 40, 50, 61, 71)}
+    _case(cases, "namespace mode: the sandbox's power HAL (uid system, the sandbox's %s) is accepted"
+          % POWER_HAL_PATH, got[20] is None, "got %r" % got)
+    _case(cases, "namespace mode: a sandbox peer of another uid is refused, even running the power HAL's binary",
+          (got[30] or "").startswith("uid-2000") and (got[31] or "").startswith("uid-2000"), "got %r" % got)
+    _case(cases, "namespace mode: a uid-system sandbox peer running another executable is refused",
+          (got[40] or "").startswith("executable-not"), "got %r" % got)
+    _case(cases, "namespace mode: a host peer outside all of the sandbox pid namespaces is refused",
+          got[50] == "not-in-a-sandbox-pid-namespace", "got %r" % got)
+    _case(cases, "namespace mode: a peer whose pid namespace's init is not a sandbox init is refused "
+                 "(another container; an init argv outside a Rhizo cgroup stack)",
+          got[61] == got[71] == "its-pid-namespace-has-no-sandbox-init", "got %r" % got)
+    inits = d.sandbox_init_pids()
+    _case(cases, "namespace mode: the sandbox inits are found by argv and Rhizo cgroup stack, not by context",
+          inits == {701: 10, 902: 80}, "got %r" % inits)
+    hinits = h.sandbox_init_pids()
+    _case(cases, "host mode: a sandbox init is found by its context alone (none reads %s here)"
+          % ANDROID_INIT_CTX, hinits == {}, "got %r" % hinits)
 
 
 def _selftest_red_check(cases):
@@ -4906,6 +5073,7 @@ def run_selftest():
         _selftest_report_replay,
         _selftest_self_reserve,
         _selftest_peer_check,
+        _selftest_namespace_peer,
         _selftest_domain,
         _selftest_red_check,
     ]
@@ -5106,18 +5274,18 @@ def read_selinux_mode(path=os.environ.get("RHIZO_SELINUX_MODE_FILE", "/run/rhizo
 
 
 def enter_domain(ctx, argv):
-    """re-exec argv in the SELinux context ctx"""
+    """re-exec argv in the SELinux context ctx and return the mode"""
     mode = read_selinux_mode()
     if mode is None:
         sys.exit(SELINUX_MODE_EXIT)
     if mode == "namespace":
         log("RHIZO_MARKER rtd_domain state=no-selinux mode=namespace want=%s" % ctx)
-        return
+        return mode
     try:
         os.stat(SELINUXFS)
     except FileNotFoundError:
         log("RHIZO_MARKER rtd_domain state=no-selinux want=%s" % ctx)
-        return
+        return mode
     except OSError:
         pass
     with open(os.path.join(ATTR_DIR, "current")) as f:
@@ -5125,10 +5293,10 @@ def enter_domain(ctx, argv):
     if cur == ctx:
         os.environ.pop(ENTERING_ENV, None)
         log("RHIZO_MARKER rtd_domain entered=%s" % ctx)
-        return
+        return mode
     if cur == "kernel":
         log("RHIZO_MARKER rtd_domain state=deferred current=%s want=%s" % (cur, ctx))
-        return
+        return mode
     if cur == "u:r:kernel:s0":
         log("RHIZO_MARKER rtd_domain failed reason=domain-kernel current=%s want=%s" % (cur, ctx))
         sys.exit(1)
@@ -5156,7 +5324,7 @@ def main(argv=None):
     if args.selftest_root:
         return run_selftest_root()
 
-    enter_domain(DOMAIN, sys.argv)
+    selinux_mode = enter_domain(DOMAIN, sys.argv)
     hard_period = load_hard_period()
     if hard_period is None:
         log("%s=%r is neither 2ms nor frame -- refusing to start" % (HARD_PERIOD_ENV, os.environ.get(HARD_PERIOD_ENV)))
@@ -5169,7 +5337,8 @@ def main(argv=None):
     daemon = Daemon(args.socket, args.status_path, cap_percent,
                      contain_enabled=contain_enabled, contain_cap_percent=contain_percent,
                      contain_runtime_ns=contain_runtime_ns, contain_period_ns=contain_period_ns,
-                     self_reserve=(budgets_enabled or contain_enabled), hard_period=hard_period)
+                     self_reserve=(budgets_enabled or contain_enabled), hard_period=hard_period,
+                     selinux_mode=selinux_mode)
     signal.signal(signal.SIGTERM, lambda _sig, _frame: sys.exit(0))
     daemon.run()
     return 0

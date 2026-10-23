@@ -636,11 +636,12 @@ def release_hal_bin(gfx_src, name, release=None, exists=os.path.exists):
 
 
 A16_ONLY_PAYLOAD = ("audio_policy_configuration.xml", "RhizoAudioRouter.apk")
+AUDIO_SET_RELEASES = ("a16", "a17", "a15")
 
 
 def release_skips(name, release=None):
     """return whether a boot of release leaves the shipped file name out"""
-    return (RHIZO_RELEASE if release is None else release) != "a16" and name in A16_ONLY_PAYLOAD
+    return (RHIZO_RELEASE if release is None else release) not in AUDIO_SET_RELEASES and name in A16_ONLY_PAYLOAD
 
 
 KEYMINT_GSI_LIBS = (

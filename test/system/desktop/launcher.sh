@@ -234,7 +234,9 @@ while IFS=$'\t' read -r -u 3 pkg apkpath dtpath label; do
   ondisk=$(entry_field "$WORKDIR/verify-$pkg.desktop" Name)
   [[ "$ondisk" == "$label" ]] || { fail "$pkg: on-disk Name= ('$ondisk') != manifest label ('$label')"; continue; }
   pull "$apkpath" "$WORKDIR/verify-$pkg.apk" || { log "    $pkg: could not re-pull APK"; continue; }
-  pulled_label=$("$AAPT2" dump badging "$WORKDIR/verify-$pkg.apk" 2>/dev/null | grep '^application-label:' | head -1 | sed "s/^application-label:'//;s/'\$//")
+  pulled_badging=$("$AAPT2" dump badging "$WORKDIR/verify-$pkg.apk" 2>/dev/null)
+  pulled_label=$(grep '^application-label:' <<<"$pulled_badging" | head -1 | sed "s/^application-label:'//;s/'\$//")
+  [[ -n "$pulled_label" ]] || pulled_label=$(sed -n "s/^application: label='\(.*\)' icon='[^']*'.*/\1/p" <<<"$pulled_badging" | head -1)
   [[ "$pulled_label" == "$label" ]] || { fail "$pkg: new aapt2 label ('$pulled_label') != manifest label ('$label')"; continue; }
   verify_n=$((verify_n + 1))
   log "    re-verified $pkg: Name='$pulled_label' (new pull + new aapt2 run)"
@@ -242,9 +244,10 @@ done 3< "$WORKDIR/apps.tsv"
 [[ "$verify_n" -ge 2 ]] || fail "fewer than 2 entries independently re-verified against a new aapt2 run"
 pass ".desktop entries synthesized from real APKs and independently re-verified"
 
-NAPPS_TOTAL=$(python3 -c "import json; print(len(json.load(open('$MANIFEST'))['apps']))")
-read -r PKG1 ACT1 <<<"$(python3 -c "import json; a=json.load(open('$MANIFEST'))['apps']; print(a[0]['package'], a[0]['activity'])")"
-log "    app A (manifest[0]): $PKG1/$ACT1"
+APP_A_PKG=com.android.messaging
+read -r PKG1 ACT1 <<<"$(python3 -c "import json; a=[x for x in json.load(open('$MANIFEST'))['apps'] if x['package'] == '$APP_A_PKG']; print(a[0]['package'], a[0]['activity']) if a else None")"
+[[ "$PKG1" == "$APP_A_PKG" && -n "$ACT1" ]] || { fail "the manifest has no entry for app A, $APP_A_PKG"; exit 1; }
+log "    app A: $PKG1/$ACT1"
 
 step "2. primed spare: unmapped, unpainted"
 primary_id=$(_desktop_window_id_for_identity rhizo Rhizo 20)
@@ -275,7 +278,7 @@ if [[ -z "$spare_id" ]]; then
   fail "no primed spare in 'display list' after 60s: $dlist"
 else
   log "    primed spare: composer id=$spare_id ($dlist)"
-  windows=$(sway_windows)
+  windows=$(desk_windows)
   echo "$windows" > "$EV/spare-sway-windows.txt"
   if desktop_window_rect "$spare_id" >/dev/null 2>&1; then
     fail "spare $spare_id has a mapped sway toplevel"
@@ -329,35 +332,35 @@ assert_launch_identity appA "$PKG1" "$cdisp1"
 step "4. launch wrapper: app B (app A still open)"
 before_disps=$(android_sh "$INIT" "dumpsys display" | grep -c "^  Display Id=")
 cdisp2=""; logid2=""; resumed2=""; committed2=""; PKG2=""; ACT2=""
-for idx in $(seq 1 $((NAPPS_TOTAL - 1))); do
-  read -r cand_pkg cand_act <<<"$(python3 -c "import json; a=json.load(open('$MANIFEST'))['apps']; print(a[$idx]['package'], a[$idx]['activity'])")"
-  log "    trying app B candidate: $cand_pkg/$cand_act"
-  desktop_close_all_app_windows 20 "rhizo-$cand_pkg" || log "    candidate $cand_pkg's open windows did not close"
-  out=$(ssh_vm -t 45 "/usr/bin/rhizo launch $cand_pkg" 2>&1)
-  line2=$(ssh_vm -t 10 "tail -1 /run/rhizo-launch/rhizo-launch.log" 2>/dev/null)
-  log "    launch log: $line2"
-  cand_cdisp=$(cdisp_of "$line2")
-  cand_logid=$(logid_of "$line2")
-  cand_committed=$(committed_of "$line2")
-  if [[ -z "$cand_cdisp" || "$cand_cdisp" == "$cdisp1" || "$cand_committed" == skipped ]]; then
-    log "    candidate $cand_pkg produced no new display (committed=${cand_committed:-<none>}), trying next"
-    continue
-  fi
+APP_B_PKG=com.android.settings
+read -r cand_pkg cand_act <<<"$(python3 -c "import json; a=[x for x in json.load(open('$MANIFEST'))['apps'] if x['package'] == '$APP_B_PKG']; print(a[0]['package'], a[0]['activity']) if a else None")"
+[[ "$cand_pkg" == "$APP_B_PKG" && -n "$cand_act" ]] || { fail "the manifest has no entry for app B, $APP_B_PKG"; exit 1; }
+log "    app B: trying $cand_pkg/$cand_act"
+desktop_close_all_app_windows 20 "rhizo-$cand_pkg" || log "    app B's open windows did not close"
+out=$(ssh_vm -t 45 "/usr/bin/rhizo launch $cand_pkg" 2>&1)
+line2=$(ssh_vm -t 10 "tail -1 /run/rhizo-launch/rhizo-launch.log" 2>/dev/null)
+log "    launch log: $line2"
+cand_cdisp=$(cdisp_of "$line2")
+cand_logid=$(logid_of "$line2")
+cand_committed=$(committed_of "$line2")
+if [[ -z "$cand_cdisp" || "$cand_cdisp" == "$cdisp1" || "$cand_committed" == skipped ]]; then
+  log "    app B $cand_pkg produced no new display (committed=${cand_committed:-<none>})"
+else
   cand_resumed=""
   for _ in $(seq 1 15); do
     cand_resumed=$(resumed_on "$INIT" "$cand_logid")
     [[ -n "$cand_resumed" ]] && break
     sleep 1
   done
-  log "    candidate $cand_pkg: display=$cand_logid cdisplay=$cand_cdisp dumpsys resumed='$cand_resumed'"
+  log "    app B $cand_pkg: display=$cand_logid cdisplay=$cand_cdisp dumpsys resumed='$cand_resumed'"
   if [[ "$cand_resumed" == "$cand_pkg/$cand_act" ]]; then
     PKG2="$cand_pkg"; ACT2="$cand_act"; cdisp2="$cand_cdisp"; logid2="$cand_logid"; resumed2="$cand_resumed"
     committed2="$cand_committed"
-    break
+  else
+    log "    app B $cand_pkg did not resolve to itself (got '$cand_resumed')"
   fi
-  log "    candidate $cand_pkg did not resolve to itself (got '$cand_resumed') -- trying next"
-done
-[[ -n "$cdisp2" ]] || fail "no candidate app B (out of $((NAPPS_TOTAL - 1)) tried) launched cleanly"
+fi
+[[ -n "$cdisp2" ]] || fail "app B, $APP_B_PKG, did not launch cleanly"
 log "    app B: $PKG2/$ACT2 -> display=$logid2 cdisplay=$cdisp2 dumpsys resumed='$resumed2'"
 [[ -n "$PKG2" && "$resumed2" == "$PKG2/$ACT2" ]] || fail "app B never resolved to a clean launch"
 assert_power_confirmed appB "$logid2" "$committed2"
@@ -419,7 +422,7 @@ lch_dlist() {
   return 1
 }
 log "    app windows mapped: $(desktop_app_toplevel_count)"
-sway_windows | sed 's/^/      /'
+desk_windows | sed 's/^/      /'
 desktop_close_all_app_windows 20 || log "    desktop_close_all_app_windows did not clear them all"
 dlist=$(lch_dlist); log "    composer display list: ${dlist#display list }"
 spare_cid=$(rhizo_dl_spares "$dlist" | head -1)
@@ -446,7 +449,7 @@ if lch_clean; then
 else
   android_sh "$INIT" "dumpsys display" > "$EV/leftover-dumpsys-display.txt" 2>&1
   rhizo_ctl_out "$INIT" > "$EV/leftover-composer-control.txt" 2>&1
-  sway_windows > "$EV/leftover-sway-windows.txt" 2>&1
+  desk_windows > "$EV/leftover-sway-windows.txt" 2>&1
   fail "displays [$ids_end] are not the primary plus the spare (logical ${spare_lid:-none}), or an app window is still mapped (see $EV/leftover-*.txt)"
 fi
 

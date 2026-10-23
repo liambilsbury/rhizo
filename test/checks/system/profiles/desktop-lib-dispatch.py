@@ -64,7 +64,7 @@ ALLOWLIST = {
     "test/system/desktop/desktop.sh": "clipboard/notification/deskd fixture driving (gcmd_user, wait_guest) and mapped_window_rect have no desk_* equivalent",
     "test/system/desktop/display-stress.sh": "display.sh's stress sibling; not on desk_* verbs",
     "test/system/desktop/display.sh": "display_window_mapped/sway_windows/wait_guest/gcmd_user/inject_start for setup and debugging; no desk_* equivalent",
-    "test/system/desktop/launcher.sh": "sway_windows/wait_guest/gcmd_user for debugging; no desk_* equivalent",
+    "test/system/desktop/launcher.sh": "wait_guest/gcmd_user for debugging; no desk_* equivalent",
     "test/system/measure/host-delay.sh": "wheel-scrolls Settings at 30 events a second through the profile's own injector (inject_start on sway, the plasma input FIFO) as one guest loop",
     "test/system/install/installer.sh": "installs the sway package stack directly on a new vm; runs only under RHIZO_DESKTOP_PROFILE=sway",
     "test/system/boot/multi-instance.sh": "drives sway directly across multiple instances",

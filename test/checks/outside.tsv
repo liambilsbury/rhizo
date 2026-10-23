@@ -10,7 +10,7 @@ selftest	-	host snapshot diff check	python3 ../system/host/host-snapshot-diff.py
 run	-	the shipped host-snapshot allowlist parses	python3 ../system/host/host-snapshot-diff.py --check-allow ./data/host-snapshot-allow.tsv
 selftest	-	compositor pool planner check	python3 ../../tools/build/packaging/deb/deb-pool-plan.py --selftest
 selftest	-	compositor pool staging check	bash ../../tools/fetch/pools/deb/deb-pool-lib.sh --selftest
-selftest	-	runtime pool derivation check	bash ../../tools/fetch/pools/deb/runtime-debs.sh --selftest
+selftest	-	runtime pool derivation check	bash ../../tools/fetch/pools/deb/runtime-debs.sh --selftest	apt-get
 selftest	-	deb-pool fetch-env check	bash ../../tools/fetch/pools/deb/deb-pool-fetch-env-lib.sh --selftest
 selftest	-	pool fetcher check	bash ../../tools/fetch/pools/deb/fetch.sh --selftest
 selftest	-	appsync synthesis check	python3 ../../src/services/appsync/appsync.py --selftest
@@ -61,6 +61,7 @@ run	-	displayd waits for sandbox init	python3 ../../src/services/displayd/tests/
 run	-	displayd sends android's mouse gain	python3 ../../src/services/displayd/tests/test_displayd_cursor_gain.py
 run	-	displayd announces every display	python3 ../../src/services/displayd/tests/test_displayd_born.py
 run	-	displayd scales density by framework dpi	python3 ../../src/services/displayd/tests/test_displayd_scale.py
+run	-	displayd names the pointer type of a cursor image	python3 ../../src/services/displayd/tests/test_displayd_pointer_type.py
 run	-	apid.py's own offline test suite passes	python3 ../../src/services/api/tests/test_apid.py
 run	-	gsi-update.sh's own offline test suite passes	../../src/install/tests/test-gsi-update.sh
 selftest	-	debs.sh --at cleanup check	../../tools/build/packaging/deb/debs.sh --selftest

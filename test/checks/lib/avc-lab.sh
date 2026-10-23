@@ -148,8 +148,8 @@ cmd_build() {
   local lab_plat="$out_dir/plat_lab.cil" nlmsg
   nlmsg=$(strip_nlmsg_xperms "$PLAT_CIL" "$lab_plat") || return 1
 
-  local lab_vendor="$out_dir/rhizo_vendor_lab.cil"
-  cp "$out_dir/rhizo_vendor_sepolicy.cil" "$lab_vendor" || return 1
+  local lab_vendor="$out_dir/rhizo_vendor_lab.cil" vendor_nlmsg
+  vendor_nlmsg=$(strip_nlmsg_xperms "$out_dir/rhizo_vendor_sepolicy.cil" "$lab_vendor") || return 1
 
   local policy="$out_dir/policy.lab" err="$out_dir/secilc.lab.stderr"
   local caps=() cap built=0 rounds i
@@ -179,7 +179,7 @@ cmd_build() {
     return 1
   fi
 
-  log "stripped $nlmsg nlmsg extended-permission rule(s) from $(basename "$PLAT_CIL")"
+  log "stripped $nlmsg nlmsg extended-permission rule(s) from $(basename "$PLAT_CIL") and $vendor_nlmsg from rhizo_vendor_sepolicy.cil"
   if (( ${#caps[@]} > 0 )); then
     log "stripped ${#caps[@]} policycap(s) libsepol has no name for: ${caps[*]}"
   else

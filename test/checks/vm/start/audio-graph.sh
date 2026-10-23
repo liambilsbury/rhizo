@@ -9,8 +9,8 @@ for tool in pipewire wireplumber pw-cli pw-dump dbus-daemon python3 setsid; do
   command -v "$tool" >/dev/null || { echo "FAIL: $tool is not installed here" >&2; exit 1; }
 done
 SPA_DIR=""
-for d in /usr/lib/*/spa-0.2; do [[ -d "$d" ]] && { SPA_DIR="$d"; break; }; done
-[[ -d "$SPA_DIR/audioconvert" ]] || { echo "FAIL: no audioconvert plugin under ${SPA_DIR:-/usr/lib/*/spa-0.2}" >&2; exit 1; }
+for d in /usr/lib/*/spa-0.2 /usr/lib/spa-0.2; do [[ -d "$d" ]] && { SPA_DIR="$d"; break; }; done
+[[ -d "$SPA_DIR/audioconvert" ]] || { echo "FAIL: no audioconvert plugin under ${SPA_DIR:-/usr/lib/*/spa-0.2 or /usr/lib/spa-0.2}" >&2; exit 1; }
 
 START_AUDIO=test/vm/start/start-audio.sh
 SCRIPT=$(sed -n "/^AUDIO_GRAPH_SH=\$(cat <<'AUDIO_GRAPH_EOF'\$/,/^AUDIO_GRAPH_EOF\$/p" "$START_AUDIO" | sed '1d;$d')

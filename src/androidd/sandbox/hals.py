@@ -5,6 +5,7 @@ from sandbox import capabilities
 from sandbox import core
 from sandbox import rootfs
 from sandbox import guest_files
+from sandbox import selinux_policy
 from sandbox.core import (NETBPFLOAD_PRELOAD_PATH, NETBPFLOAD_PRELOAD_STAGE,
     RHIZO_ADB_ROOT, RHIZO_SF_ACQUIRED_BUFFERS, RUN_ROOT, SANDBOX_ID, SYSTEM_ADB_KEYS,
     beside, input_phys_prefix, kmsg, phase)
@@ -159,6 +160,8 @@ def _stage_framework_rc():
     if gl_preload not in ("true", "false"):
         gl_preload = "true"
     gl_preload_line = "    setprop ro.zygote.disable_gl_preload %s\n" % gl_preload
+    use_memfd_line = ("    setprop sys.use_memfd true\n"
+                      if selinux_policy.platform_opens_ashmem([f"{core.GSI}/etc/selinux/plat_sepolicy.cil"]) else "")
     init_loglevel_line = "    loglevel 7\n" if os.environ.get("RHIZO_INIT_LOGLEVEL") == "7" else ""
     hwui_hint_manager_line = ("    setprop debug.hwui.use_hint_manager true\n"
                                if _policy_for_density.allows("rt.budgets") else "")
@@ -169,7 +172,7 @@ def _stage_framework_rc():
     open(f"{RUN_ROOT}/system_ext_upper/etc/init/rhizo-props.rc","w").write(guest_files.render(
                 guest_files.read("init/props.rc"),
                 whole={"density_line": density_line, "gl_preload_line": gl_preload_line,
-                       "init_loglevel_line": init_loglevel_line,
+                       "init_loglevel_line": init_loglevel_line, "use_memfd_line": use_memfd_line,
                        "hwui_hint_manager_line": hwui_hint_manager_line,
                        "sf_adpf_hint_line": sf_adpf_hint_line,
                        "avoid_gfx_accel_line": avoid_gfx_accel_line,
@@ -461,27 +464,25 @@ def stage_hals():
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             "/vendor/bin/hw/rhizo-bluetooth-service u:object_r:rhizo_bluetooth_exec:s0\n"
         )
-        if not bluetooth_armed():
-            kmsg("RHIZO_MARKER bluetooth_hal=withheld -- devices.bluetooth is off or the host has no controller")
-        else:
-            open(f"{RUN_ROOT}/vendor/etc/init/rhizo-bluetooth.rc","w").write(
-                core.early_init_restorecon("/vendor/bin/hw/rhizo-bluetooth-service") +
-                "\n"
-                "service vendor.rhizo-bluetooth /vendor/bin/hw/rhizo-bluetooth-service\n"
-                "    class hal\n"
-                "    user bluetooth\n"
-                "    group bluetooth system\n"
-                "    stdio_to_kmsg\n"
-            )
-            os.makedirs(f"{RUN_ROOT}/product_upper/etc/permissions", exist_ok=True)
-            open(f"{RUN_ROOT}/product_upper/etc/permissions/rhizo-bluetooth.xml", "w").write(
-                '<?xml version="1.0" encoding="utf-8"?>\n'
-                "<permissions>\n"
-                '    <feature name="android.hardware.bluetooth" />\n'
-                '    <feature name="android.hardware.bluetooth_le" />\n'
-                "</permissions>\n"
-            )
-            kmsg("RHIZO_MARKER bluetooth_hal=staged -- rhizo-bluetooth-service on /vendor/bin/hw with rhizo-bluetooth.xml")
+        open(f"{RUN_ROOT}/vendor/etc/init/rhizo-bluetooth.rc","w").write(
+            core.early_init_restorecon("/vendor/bin/hw/rhizo-bluetooth-service") +
+            "\n"
+            "service vendor.rhizo-bluetooth /vendor/bin/hw/rhizo-bluetooth-service\n"
+            "    class hal\n"
+            "    user bluetooth\n"
+            "    group bluetooth system\n"
+            "    stdio_to_kmsg\n"
+        )
+        os.makedirs(f"{RUN_ROOT}/product_upper/etc/permissions", exist_ok=True)
+        open(f"{RUN_ROOT}/product_upper/etc/permissions/rhizo-bluetooth.xml", "w").write(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            "<permissions>\n"
+            '    <feature name="android.hardware.bluetooth" />\n'
+            '    <feature name="android.hardware.bluetooth_le" />\n'
+            "</permissions>\n"
+        )
+        kmsg("RHIZO_MARKER bluetooth_hal=staged armed=%d"
+             % bluetooth_armed())
     else:
         kmsg(f"rhizo-bluetooth-service NOT FOUND at {bluetooth_bin}")
     gnss_bin = f"{gfx_src}/rhizo-gnss-service"
@@ -671,13 +672,6 @@ def gnss_armed():
     return capabilities.policy_or_deny(log=kmsg).scope("rhizo.profile") == "server"
 
 
-BLUETOOTH_MANIFEST_HAL = (
-    '    <hal format="aidl">\n'
-    '        <name>android.hardware.bluetooth</name>\n'
-    '        <version>1</version>\n'
-    '        <fqname>IBluetoothHci/default</fqname>\n'
-    '    </hal>\n'
-)
 BLUETOOTH_SYSFS = "/sys/class/bluetooth"
 
 
@@ -698,8 +692,9 @@ def bluetooth_armed():
 def vendor_manifest_xml():
     """return the /vendor/manifest.xml text"""
     text = guest_files.read("vendor/manifest.xml")
-    if bluetooth_armed():
-        text = text.replace("</manifest>", BLUETOOTH_MANIFEST_HAL + "</manifest>")
+    if core.RHIZO_RELEASE == "a15":
+        # a15's framework matrix accepts vendor sepolicy up to 202404; 202504 fails isBuildConsistent()
+        text = text.replace("<version>202504</version>", "<version>202404</version>")
     if gnss_armed():
         text = text.replace("</manifest>", GNSS_MANIFEST_HAL + "</manifest>")
     policy = capabilities.policy_or_deny(log=kmsg)

@@ -28,6 +28,28 @@ UPLINK=$(awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit
 [[ -n "$UPLINK" ]] || { log "FAIL: the guest has no IPv4 default route ($route)"; exit 1; }
 ARGS="--uplink $UPLINK $ARGS"
 
+if [[ "${RHIZO_TEST_INSTALLED:-0}" == 1 ]]; then
+  # rerun the installed daemon with the launcher's argv plus ours
+  SAVED=/run/rhizo-test-netbridged.argv
+  ssh_vm -t 15 "[ -s $SAVED ] || { pid=\$(systemctl show -p MainPID --value $UNIT); [ -n \"\$pid\" ] && [ \"\$pid\" != 0 ] \
+      && tr '\\0' '\\n' < /proc/\$pid/cmdline > $SAVED.new && mv $SAVED.new $SAVED; }; [ -s $SAVED ]" >/dev/null \
+    || { log "FAIL: no running installed $UNIT to read the launcher's argv from"; exit 1; }
+  base=$(ssh_vm -t 10 "cat $SAVED" | tr -d '\r')
+  log "the launcher's $UNIT argv: $(tr '\n' ' ' <<<"$base")"
+  extra=$(printf ' %q' "$@")
+  want="${WANT_SERVICES:-dhcp,dns,ra,mdns,proxy}"
+  ARGV=$(awk -v svc="$want" 'NR == 1 { next } drop { drop = 0; next } $0 == "--local-a" || $0 == "--portal" { drop = 1; next }
+    skip { skip = 0; next } $0 == "--services" { print; print svc; skip = 1; next } { print }' <<<"$base" | tr '\n' ' ')
+  LOG=/tmp/$UNIT.log
+  KEPT=/run/rhizo-test-netbridged.leases.json
+  ssh_vm -t 25 "rm -f $KEPT; cp -p /run/$UNIT/leases.json $KEPT 2>/dev/null
+    systemctl stop $UNIT 2>/dev/null; systemctl reset-failed $UNIT 2>/dev/null; rm -f $LOG; true" >/dev/null 2>&1
+  start_out=$(ssh_vm -t 40 "systemd-run --unit=$UNIT --collect -p RuntimeDirectory=$UNIT -p User=rhizo-netbridged \
+    -p 'ExecStartPre=/bin/sh -c \"[ ! -e $KEPT ] || cp -p $KEPT /run/$UNIT/leases.json\"' \
+    -p 'CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE' -p 'AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE' \
+    -p NoNewPrivileges=yes -p StandardOutput=file:$LOG -p StandardError=file:$LOG /usr/bin/python3 $ARGV$extra" 2>&1)
+  start_rc=$?
+else
 ssh_vm -t 30 "mkdir -p $SRC && cp -f /root/share/netbridged/*.py $SRC/" >/dev/null \
   || { log "FAIL: could not stage src/services/netbridged from the 9p share into $SRC"; exit 1; }
 ssh_vm -t 20 "test -r $MAIN" >/dev/null \
@@ -37,6 +59,7 @@ ssh_vm -t 25 "systemctl stop $UNIT 2>/dev/null; systemctl reset-failed $UNIT 2>/
 
 start_out=$(ssh_vm -t 40 "systemd-run --unit=$UNIT --collect -p StandardOutput=file:$LOG -p StandardError=file:$LOG python3 $MAIN $ARGS" 2>&1)
 start_rc=$?
+fi
 if (( start_rc != 0 )); then
   log "FAIL: systemd-run did not start the daemon (rc=$start_rc)"
   sed 's/^/    /' <<<"$start_out"

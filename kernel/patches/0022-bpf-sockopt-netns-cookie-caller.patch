@@ -1,0 +1,31 @@
+diff --git a/kernel/bpf/cgroup.c b/kernel/bpf/cgroup.c
+index 876f6a81a9b..ea10f6cfd6f 100644
+--- a/kernel/bpf/cgroup.c
++++ b/kernel/bpf/cgroup.c
+@@ -9,6 +9,7 @@
+ #include <linux/atomic.h>
+ #include <linux/cgroup.h>
+ #include <linux/filter.h>
++#include <linux/nsproxy.h>
+ #include <linux/slab.h>
+ #include <linux/sysctl.h>
+ #include <linux/string.h>
+@@ -2485,9 +2486,17 @@ const struct bpf_prog_ops cg_sysctl_prog_ops = {
+ };
+ 
+ #ifdef CONFIG_NET
++/* A NULL ctx selects the calling task's network namespace. */
+ BPF_CALL_1(bpf_get_netns_cookie_sockopt, struct bpf_sockopt_kern *, ctx)
+ {
+-	const struct net *net = ctx ? sock_net(ctx->sk) : &init_net;
++	const struct net *net;
++
++	if (ctx)
++		net = sock_net(ctx->sk);
++	else if (current->nsproxy)
++		net = current->nsproxy->net_ns;
++	else
++		net = &init_net;
+ 
+ 	return net->net_cookie;
+ }

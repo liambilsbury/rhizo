@@ -412,6 +412,10 @@ class FakePolicy:
         """return the scope's value"""
         return self.scopes[key]
 
+    def allows(self, capability):
+        """return false: all optional capabilities are off"""
+        return False
+
 
 saved_policy = launcher.capabilities.policy_or_deny
 try:

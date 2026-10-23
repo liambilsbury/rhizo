@@ -116,7 +116,7 @@ derive_audioserver_rc() {
   sed -i -E '/^[[:space:]]*#/d' "$f"
   sed -i -E '0,/^[[:space:]]*class core$/{s|^([[:space:]]*)class core$|\1class main\n\1stdio_to_kmsg|}' "$f"
   sed -i -E 's|^([[:space:]]*group audio camera drmrpc media mediadrm net_bt net_bt_admin net_bw_acct) wakelock$|\1 net_bw_stats net_raw system|' "$f"
-  sed -i -E 's|^([[:space:]]*)(onrestart restart\|stop\|start) audio_proxy_service$|&\n\1\2 vendor.rhizo-audio-core|' "$f"
+  sed -i -E 's|^([[:space:]]*)(onrestart restart\|stop\|start) audio_?proxy_service$|&\n\1\2 vendor.rhizo-audio-core|' "$f"
   grep -qx '    class main' "$f" && grep -qx '    stdio_to_kmsg' "$f" && grep -q ' net_raw system$' "$f" \
     && [[ $(grep -c 'vendor.rhizo-audio-core$' "$f") -eq 6 ]]
 }
@@ -125,7 +125,7 @@ derive_mediametrics_rc() {
   sed -i -E '0,/^[[:space:]]*class main$/{s|^([[:space:]]*)class main$|\1class core|}' "$1"
   grep -qx '    class core' "$1"
 }
-if [[ "$LABEL" == a16 ]]; then
+if [[ "$LABEL" == a16 || "$LABEL" == a17 || "$LABEL" == a15 ]]; then
   if grab etc/init/audioserver.rc audioserver.rc; then
     derive_audioserver_rc "$OUT/audioserver.rc" && log "  audioserver.rc: class main, audio HAL restarts" \
       || { log "  audioserver.rc: an edit did not apply -- stock content changed"; miss=1; }
