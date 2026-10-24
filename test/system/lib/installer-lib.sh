@@ -418,7 +418,7 @@ installer_seed_gsi_zip_release() {
   [[ "$seeded_sha" == "$want_sha" ]] \
     && pass "[$leg] the seeded $release image matches its pin" \
     || fail "[$leg] the seeded $release image does not match its pin"
-  [[ "$release" == a16 ]] && return 0
+  [[ "$release" == a16 || "$release" == a17 ]] && return 0
   row=$(base64 -w0 <<<"$pin")
   ssh_vm -t 60 "mkdir -p /etc/rhizo && touch /etc/rhizo/gsi-pins.tsv && sed -i '/^$release\t/d' /etc/rhizo/gsi-pins.tsv && echo $row | base64 -d >> /etc/rhizo/gsi-pins.tsv" >/dev/null 2>&1 \
     || { fail "[$leg] could not add the $release pin to /etc/rhizo/gsi-pins.tsv"; return 1; }

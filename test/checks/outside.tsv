@@ -22,6 +22,7 @@ selftest	-	test-restart-smoke assertions check	../system/boot/restart-smoke.sh -
 selftest	-	test-device-filter assertions check	../system/android/device-filter.sh --selftest
 selftest	-	test-software-render assertions check	../system/boot/software-render.sh --selftest
 selftest	-	build inputs fetch	../../tools/fetch/build-inputs.sh --selftest
+selftest	-	a17 AOSP checkout fetch	../../tools/fetch/aosp-a17.sh --selftest
 selftest	-	GSI lib extraction	../../tools/build/image/extract-gsi-libs.sh --selftest
 selftest	-	GSI build tree, signing and posture check	../../tools/build/image/gsi.sh --selftest
 selftest	-	GSI signing key arguments check	../../tools/build/image/gsi-keys.sh --selftest

@@ -10,6 +10,8 @@ mesa-src
 mesa-src/
 aosp-android16-qpr2
 aosp-android16-qpr2/
+aosp-android17
+aosp-android17/
 
 *.raw
 *.log

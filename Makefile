@@ -6,7 +6,7 @@ SHELL := /bin/bash
 
 # host or container
 IN_ENV := tools/build/env/run.sh
-HOST_GOALS := help lint test setup container shell inputs kernel-inputs kernel-deb kernel-arch
+HOST_GOALS := help lint test setup container shell inputs inputs-a17 kernel-inputs kernel-deb kernel-arch
 BUILD_GOALS := $(filter-out $(HOST_GOALS) env-%,$(or $(MAKECMDGOALS),payload))
 ON_HOST := $(if $(wildcard /run/.containerenv /.dockerenv),,$(wildcard $(IN_ENV)))
 
@@ -48,7 +48,7 @@ arch: deb
 # GSI
 .PHONY: gsi
 gsi:
-	tools/build/image/gsi.sh --variant $(or $(VARIANT),user) --revision $(or $(REVISION),1) --release $(or $(GSI_RELEASE),bp4a)
+	tools/build/image/gsi.sh --release $(or $(RELEASE),a16) --variant $(or $(VARIANT),user) --revision $(or $(REVISION),1) $(if $(RELEASE_CONFIG),--release-config $(RELEASE_CONFIG))
 FORCE:
 
 # inputs
@@ -90,7 +90,7 @@ lint:
 	exit $$rc
 
 # build container
-.PHONY: setup container shell inputs
+.PHONY: setup container shell inputs inputs-a17
 setup:
 	tools/build/env/setup-host.sh
 	$(IN_ENV) --build-image
@@ -103,6 +103,8 @@ inputs:
 	  echo "make inputs fetches Google's Android SDK build tools, under https://developer.android.com/studio/terms" >&2; \
 	  echo "  read those terms, then run: make inputs ACCEPT_ANDROID_SDK_LICENSE=1" >&2; exit 1; fi
 	$(IN_ENV) tools/fetch/build-inputs.sh --accept-android-sdk-license --sync-aosp
+inputs-a17:
+	$(IN_ENV) tools/fetch/aosp-a17.sh --sync
 env-%:
 	$(IN_ENV) make $* $(MAKEOVERRIDES)
 

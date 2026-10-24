@@ -19,7 +19,8 @@ VM-based approaches typically virtualize graphics, audio, input, network and sto
 ## Supported
 
 - x86_64
-- Android 16
+- Android 16, Android 17
+- Android 15, for app testing only, on Google's GSI
 - CachyOS + KDE Plasma
 - Ubuntu 24.04 + GNOME
 
@@ -45,6 +46,22 @@ Then:
 rhizo start
 ```
 
+Android 16 is the default. To switch to Android 17:
+
+```bash
+sudo rhizo gsi update --release a17
+```
+
+Android 15 uses Google's GSI, licensed by Google for app testing only. Setup erases Android's data:
+
+```bash
+printf 'a15\t%s\t%s\t%s\n' \
+  https://dl.google.com/developers/android/vic/images/gsi/aosp_x86_64-exp-BP1A.250405.005.C1-13151952-12978bf9.zip \
+  12978bf94c1e8dfee598941641df2aa73d29a0f967cc00f4f36b87ac1ed77bf2 \
+  "Android 15 BP1A.250405.005.C1, Google's GSI" | sudo tee -a /etc/rhizo/gsi-pins.tsv
+sudo rhizo prepare --release a15 --wipe-data
+```
+
 ## Build
 
 ```bash
@@ -61,7 +78,9 @@ make kernel-inputs kernel-deb   # -> var/kernel/ubuntu/
 The install downloads the prebuilt `gsi_x86_64` GSI from [Releases](https://github.com/liambilsbury/rhizo/releases). To build it from AOSP:
 
 ```bash
-make gsi                        # -> var/gsi-build/
+make gsi                        # Android 16 -> var/gsi-build/
+make inputs-a17                 # the Android 17 AOSP checkout
+make gsi RELEASE=a17            # Android 17 -> var/gsi-build/
 ```
 
 ## License

@@ -300,6 +300,24 @@ def platform_opens_ashmem(cils):
     return any("open" in m.group(1).split() for c in cils for m in rule.finditer(open(c).read()))
 
 
+ASHMEM_OPEN_NEVERALLOW = re.compile(r"^\(neverallow \S+ ashmem_libcutils_device \(chr_file \(open\)\)\)\n", re.M)
+
+
+def platform_bars_ashmem(cils):
+    """search the CILs for a neverallow on opening the libcutils ashmem device"""
+    return any(ASHMEM_OPEN_NEVERALLOW.search(open(c).read()) for c in cils)
+
+
+def compile_input(cil, out_dir):
+    """return the CIL secilc compiles, dropping the ashmem open neverallows when the vendor policy grants that open"""
+    if platform_opens_ashmem([cil]) or not platform_bars_ashmem([cil]):
+        return cil
+    out = os.path.join(out_dir, os.path.basename(cil))
+    with open(cil) as src, open(out, "w") as dst:
+        dst.write(ASHMEM_OPEN_NEVERALLOW.sub("", src.read()))
+    return out
+
+
 def declares_perm(cils, common_name, perm):
     """search the common for a permission"""
     needle = f"(common {common_name} ("

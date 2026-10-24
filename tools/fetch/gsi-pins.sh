@@ -8,9 +8,9 @@ GSI_URL[a16]="https://github.com/liambilsbury/rhizo/releases/download/gsi-a16-BP
 GSI_SHA[a16]="32d7103f1e54622d47256a32b0dc09400979d7a72b6111adf5340a504021906f"
 GSI_DESC[a16]="Android 16 BP4A.251205.006, Rhizo's gsi_x86_64 build"
 
-GSI_URL[a17]="https://dl.google.com/developers/android/cinnamonbun/images/gsi/aosp_x86_64-exp-CP3A.260905.010-16176746-81e37ae9.zip"
-GSI_SHA[a17]="81e37ae9e9280497c92fbda758b998a7dfab91ab9de000021622afa868a43b70"
-GSI_DESC[a17]="Android 17 (cinnamonbun) CP3A.260905.010"
+GSI_URL[a17]="https://github.com/liambilsbury/rhizo/releases/download/gsi-a17-CP2A.260605.016-1/rhizo-gsi_x86_64-user-CP2A.260605.016-1.zip"
+GSI_SHA[a17]="302bb7605f62f96a37afedb045ca0b5f955179e1d2d64b2ae6b4bea3ada3e1c9"
+GSI_DESC[a17]="Android 17 CP2A.260605.016, Rhizo's gsi_x86_64 build"
 
 GSI_URL[a16-arm64]="https://dl.google.com/developers/android/baklava/images/gsi/aosp_arm64-exp-BP4A.251205.006-14401865-2171cf0e.zip"
 GSI_SHA[a16-arm64]="2171cf0ea849f8eaa399f4bad2165fab80b0fd9e98d37723a705dca6c41e49ea"

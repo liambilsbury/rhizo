@@ -146,7 +146,7 @@ cmd_build() {
   fi
 
   local lab_plat="$out_dir/plat_lab.cil" nlmsg
-  nlmsg=$(strip_nlmsg_xperms "$PLAT_CIL" "$lab_plat") || return 1
+  nlmsg=$(strip_nlmsg_xperms "$(compile_plat_cil "$out_dir")" "$lab_plat") || return 1
 
   local lab_vendor="$out_dir/rhizo_vendor_lab.cil" vendor_nlmsg
   vendor_nlmsg=$(strip_nlmsg_xperms "$out_dir/rhizo_vendor_sepolicy.cil" "$lab_vendor") || return 1

@@ -2174,11 +2174,15 @@ def compile_precompiled_sepolicy(pc, rhizo_cil, wakeup_genfs=None):
         cils.append(guest_files.path("sepolicy/policy-debug-proc.cil"))
         kmsg("RHIZO_DEBUG_PROC_READ=1: debug proc-read fragment staged for this "
              "boot -- NEVER shippable")
+    plat_dir = tempfile.mkdtemp(prefix="rhizo-compile-cils-")
+    compile_cils = [selinux_policy.compile_input(c, plat_dir) for c in cils]
+    if compile_cils != cils:
+        kmsg("the platform policy neverallows the ashmem open the vendor policy grants -- compiling without those neverallows")
     if RHIZO_SEPOLICY_NODONTAUDIT:
         kmsg("RHIZO_SEPOLICY_NODONTAUDIT: secilc cache bypassed for this boot, compiling anew with -D (dontaudit rules disabled, every would-be-suppressed denial becomes a real avc: line)")
         rc = os.system(gsi_bootstrap_cmd(
             "bin/secilc",
-            f"-m -M true -G -c 30 -D {' '.join(cils)} -o {pc} -f /dev/null 2>/tmp/secilc.err"))
+            f"-m -M true -G -c 30 -D {' '.join(compile_cils)} -o {pc} -f /dev/null 2>/tmp/secilc.err"))
     else:
         cache_dir = RHIZO_CACHE_DIR
         cache_path = None
@@ -2205,7 +2209,7 @@ def compile_precompiled_sepolicy(pc, rhizo_cil, wakeup_genfs=None):
                 kmsg(f"precompiled policy: cache entry at {cache_path} is empty/corrupt -- discarding and recompiling")
             rc=os.system(gsi_bootstrap_cmd(
                 "bin/secilc",
-                f"-m -M true -G -c 30 {' '.join(cils)} -o {pc} -f /dev/null 2>/tmp/secilc.err"))
+                f"-m -M true -G -c 30 {' '.join(compile_cils)} -o {pc} -f /dev/null 2>/tmp/secilc.err"))
             if rc==0 and os.path.exists(pc) and cache_path:
                 try:
                     import shutil as _shsepol2
@@ -2215,6 +2219,10 @@ def compile_precompiled_sepolicy(pc, rhizo_cil, wakeup_genfs=None):
                     kmsg("precompiled policy: cache MISS, compiled and cached for next boot (atomic rename)")
                 except OSError as e:
                     kmsg(f"sepolicy cache write: {e}")
+    for c in compile_cils:
+        if c not in cils:
+            os.unlink(c)
+    os.rmdir(plat_dir)
     if rc == 0 and os.path.exists(pc):
         for src_cil, sha in CIL_PARTS:
             sha_src = f"{os.path.dirname(src_cil)}/{sha}"

@@ -299,11 +299,13 @@ else
 fi
 echo RHIZO_STAGE_CHUNK=stage-dirs'
 if [[ -n "$RELEASE" && "$RELEASE" != a16 ]]; then
-  # shellcheck source=tools/fetch/gsi-pins.sh
-  pin_row=$(source ../../tools/fetch/gsi-pins.sh && gsi_pin_row "$RELEASE" | base64 -w0) \
-    || { log "FAIL: tools/fetch/gsi-pins.sh has no $RELEASE pin"; exit 1; }
-  stage_cmd+=$'\n'"mkdir -p /etc/rhizo && touch /etc/rhizo/gsi-pins.tsv && sed -i '/^$RELEASE\t/d' /etc/rhizo/gsi-pins.tsv && echo $pin_row | base64 -d >> /etc/rhizo/gsi-pins.tsv"
-  log "  gsi pin for --release $RELEASE: /etc/rhizo/gsi-pins.tsv"
+  if [[ "$RELEASE" != a17 ]]; then
+    # shellcheck source=tools/fetch/gsi-pins.sh
+    pin_row=$(source ../../tools/fetch/gsi-pins.sh && gsi_pin_row "$RELEASE" | base64 -w0) \
+      || { log "FAIL: tools/fetch/gsi-pins.sh has no $RELEASE pin"; exit 1; }
+    stage_cmd+=$'\n'"mkdir -p /etc/rhizo && touch /etc/rhizo/gsi-pins.tsv && sed -i '/^$RELEASE\t/d' /etc/rhizo/gsi-pins.tsv && echo $pin_row | base64 -d >> /etc/rhizo/gsi-pins.tsv"
+    log "  gsi pin for --release $RELEASE: /etc/rhizo/gsi-pins.tsv"
+  fi
   for b in "${RELEASE_GFX_HAL_BIN[@]}"; do
     rel_bin="$SHARE_DIR/rel/$RELEASE/$b"
     if [[ -f "$rel_bin" ]]; then

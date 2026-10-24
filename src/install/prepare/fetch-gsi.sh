@@ -13,7 +13,7 @@ usage() {
   cat <<'EOF'
 Usage: src/install/prepare/fetch-gsi.sh [options]
   (no options)     fetch, verify and stage the default release
-  --release LABEL  a16, a release in /etc/rhizo/gsi-pins.tsv, or current; default a16
+  --release LABEL  a16, a17, a release in /etc/rhizo/gsi-pins.tsv, or current; default a16
                    current is RHIZO_RELEASE from the androidd.service
                    EnvironmentFile, a16 when unset
   --from-zip PATH  stage a zip already on disk; it is still checked against the sha256 pin
@@ -40,6 +40,9 @@ declare -A GSI_URL GSI_SHA GSI_DESC
 GSI_URL[a16]="https://github.com/liambilsbury/rhizo/releases/download/gsi-a16-BP4A.251205.006-1/rhizo-gsi_x86_64-user-BP4A.251205.006-1.zip"
 GSI_SHA[a16]="32d7103f1e54622d47256a32b0dc09400979d7a72b6111adf5340a504021906f"
 GSI_DESC[a16]="Android 16 BP4A.251205.006, Rhizo's gsi_x86_64 build"
+GSI_URL[a17]="https://github.com/liambilsbury/rhizo/releases/download/gsi-a17-CP2A.260605.016-1/rhizo-gsi_x86_64-user-CP2A.260605.016-1.zip"
+GSI_SHA[a17]="302bb7605f62f96a37afedb045ca0b5f955179e1d2d64b2ae6b4bea3ada3e1c9"
+GSI_DESC[a17]="Android 17 CP2A.260605.016, Rhizo's gsi_x86_64 build"
 
 # add the release pins a test rig lists in a tab-separated file
 load_extra_pins() {
@@ -47,7 +50,7 @@ load_extra_pins() {
   [[ -f "$f" ]] || return 0
   while IFS=$'\t' read -r rel url sha desc || [[ -n "$rel" ]]; do
     [[ -z "$rel" || "$rel" == \#* ]] && continue
-    [[ "$rel" =~ ^[a-z0-9][a-z0-9-]*$ && "$rel" != a16 && "$sha" =~ ^[0-9a-f]{64}$ && "$url" == https://* ]] \
+    [[ "$rel" =~ ^[a-z0-9][a-z0-9-]*$ && "$rel" != a16 && "$rel" != a17 && "$sha" =~ ^[0-9a-f]{64}$ && "$url" == https://* ]] \
       || { log "skipping a bad pin row for '$rel' in $f"; continue; }
     GSI_URL[$rel]="$url"; GSI_SHA[$rel]="$sha"; GSI_DESC[$rel]="$desc"
   done < "$f"

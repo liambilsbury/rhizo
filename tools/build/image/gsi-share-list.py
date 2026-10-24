@@ -12,7 +12,7 @@ GPL_TEXT = re.compile(r"GNU (LESSER |LIBRARY |AFFERO )?GENERAL PUBLIC LICENSE|GN
 GPL_KIND = re.compile(r"SPDX-license-identifier-(A|L)?GPL|legacy_restricted")
 PREBUILT_TYPES = re.compile(r"prebuilt|_import$")
 
-USAGE = """Usage: gsi-share-list.py <aosp dir> <product out, relative to it> <compliance-metadata.db> <apex listing> <image listing>
+USAGE = """Usage: gsi-share-list.py <aosp dir> <product out, relative to it> <compliance-metadata.db> <apex listing> <image listing> [<prebuilt table>]
        gsi-share-list.py --selftest
 The apex listing has one "<apex file name><TAB><path inside it>" line per file; the image listing one path under
 /system per line, as the target-files SYSTEM/ entries name them."""
@@ -250,10 +250,11 @@ def selftest():
 def main(argv):
     if argv[1:] == ["--selftest"]:
         return selftest()
-    if len(argv) != 6:
+    if len(argv) not in (6, 7):
         print(USAGE, file=sys.stderr)
         return 2
-    rows, unmapped = share_list(*argv[1:], os.path.join(os.path.dirname(os.path.abspath(__file__)), "gsi-prebuilt-licenses.tsv"))
+    table = argv[6] if len(argv) == 7 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "gsi-prebuilt-licenses.tsv")
+    rows, unmapped = share_list(*argv[1:6], table)
     for r in rows:
         print(r)
     for u in unmapped:

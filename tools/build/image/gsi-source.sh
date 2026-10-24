@@ -9,7 +9,7 @@ log() { echo "[gsi-source] $*" >&2; }
 # print the usage text
 usage() {
   cat <<'EOF'
-Usage: tools/build/image/gsi-source.sh [--revision N]
+Usage: tools/build/image/gsi-source.sh [--release a16|a17] [--revision N]
        tools/build/image/gsi-source.sh --selftest
 EOF
 }
@@ -60,32 +60,60 @@ selftest() {
   touch "$tmp/upstream/kernel.source.tar.zst"
   out=$(missing_upstream "$tmp/share.csv" "$tmp/upstream")
   [[ -z "$out" ]] || { echo "FAIL an upstream component with its source bundled is not named -- got: $out"; fail=1; }
+  local self="${BASH_SOURCE[0]}"
+  out=$(RHIZO_AOSP_A17_DIR="$tmp/none" "$self" --release a17 2>&1)
+  [[ $? -ne 0 && "$out" == *"no $tmp/none/out-gsi-user -- run tools/build/image/gsi.sh --release a17 --variant user first"* ]] \
+    || { echo "FAIL an a17 bundle reads the android17 checkout -- got: $out"; fail=1; }
+  out=$("$self" --release a18 2>&1)
+  [[ $? -eq 2 && "$out" == *"--release must be a16 or a17"* ]] || { echo "FAIL an unknown release is refused -- got: $out"; fail=1; }
   rm -rf "$tmp"
   if (( fail )); then echo "gsi-source.sh selftest: FAILED"; return 1; fi
   echo "gsi-source.sh selftest: ok"
 }
 
+# print the paths inside an apex, extracting an erofs payload deapexer cannot list
+apex_paths() {
+  local a="$1" d rc=0
+  "$BIN/deapexer" --debugfs_path "$BIN/debugfs" --fsckerofs_path "$BIN/fsck.erofs" list "$a" 2>/dev/null && return 0
+  d=$(mktemp -d) || return 1
+  if "$BIN/deapexer" --debugfs_path "$BIN/debugfs" --fsckerofs_path "$BIN/fsck.erofs" extract "$a" "$d/x" >/dev/null; then
+    (cd "$d/x" && find . -mindepth 1 | sort)
+  else
+    rc=1
+  fi
+  rm -rf "$d"
+  return $rc
+}
+
 [[ "${1:-}" == --selftest ]] && { selftest; exit $?; }
 
-REVISION=1
+RELEASE=a16 REVISION=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --release) RELEASE="${2:-}"; shift 2 ;;
     --revision) REVISION="${2:-}"; shift 2 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.." || exit 1
 ROOT="$PWD"
-AOSP_DIR="$(readlink -f "${RHIZO_AOSP_DIR:-$ROOT/aosp-android16-qpr2}")"
+case "$RELEASE" in
+  a16) AOSP_DIR="$(readlink -f "${RHIZO_AOSP_DIR:-$ROOT/aosp-android16-qpr2}")" PIN_VAR=AOSP_BUILD_ID PIN_FILE=tools/fetch/build-inputs.sh
+       PREBUILT_TABLE=tools/build/image/gsi-prebuilt-licenses.tsv ;;
+  a17) AOSP_DIR="$(readlink -f "${RHIZO_AOSP_A17_DIR:-$ROOT/aosp-android17}")" PIN_VAR=AOSP_A17_BUILD_ID PIN_FILE=tools/fetch/aosp-a17.sh
+       PREBUILT_TABLE=tools/build/image/gsi-prebuilt-licenses-a17.tsv ;;
+  *) log "--release must be a16 or a17"; exit 2 ;;
+esac
 BUILD_DIR="$ROOT/var/gsi-build"
-PIN_ID=$(sed -n 's/^AOSP_BUILD_ID=//p' "$ROOT/tools/fetch/build-inputs.sh")
+PIN_ID=$(sed -n "s/^$PIN_VAR=//p" "$ROOT/$PIN_FILE")
+[[ -n "$PIN_ID" ]] || { log "no $PIN_VAR in $PIN_FILE"; exit 1; }
 OUT_DIR="out-gsi-user"
 BASE="$BUILD_DIR/gpl-source-$PIN_ID-$REVISION.tar"
 LIST="$BUILD_DIR/gpl-projects-$PIN_ID-$REVISION.txt"
-[[ -d "$AOSP_DIR/$OUT_DIR" ]] || { log "no $AOSP_DIR/$OUT_DIR -- run tools/build/image/gsi.sh --variant user first"; exit 1; }
+[[ -d "$AOSP_DIR/$OUT_DIR" ]] || { log "no $AOSP_DIR/$OUT_DIR -- run tools/build/image/gsi.sh --release $RELEASE --variant user first"; exit 1; }
 PRODUCT_OUT="$OUT_DIR/target/product/generic_x86_64"
 BIN="$AOSP_DIR/$OUT_DIR/host/linux-x86/bin"
-UPSTREAM_DIR="$BUILD_DIR/upstream"
+UPSTREAM_DIR="$BUILD_DIR/upstream"; [[ "$RELEASE" == a16 ]] || UPSTREAM_DIR="$BUILD_DIR/upstream-$RELEASE"
 mkdir -p "$UPSTREAM_DIR"
 TF="$AOSP_DIR/$OUT_DIR/dist/gsi_x86_64-target_files-rhizo$REVISION.zip"
 [[ -f "$TF" ]] || { log "no $TF -- build revision $REVISION first"; exit 1; }
@@ -100,14 +128,13 @@ for f in "$AOSP_DIR/$PRODUCT_OUT"/system/apex/*.apex "$AOSP_DIR/$PRODUCT_OUT"/sy
     unzip -q -o "$f" original_apex -d "$t" || { log "cannot unpack $f"; exit 1; }
     a="$t/original_apex"
   fi
-  "$BIN/deapexer" --debugfs_path "$BIN/debugfs" --fsckerofs_path "$BIN/fsck.erofs" list "$a" \
-    | sed "s|^\./||; s|^|${f##*/}\t|" >> "$BUILD_DIR/apex.txt" || { log "deapexer cannot list $f"; exit 1; }
+  apex_paths "$a" | sed "s|^\./||; s|^|${f##*/}\t|" >> "$BUILD_DIR/apex.txt" || { log "deapexer cannot list $f"; exit 1; }
 done
 rm -rf "$t"
 log "listing the projects of every GPL-family module and file in the image"
 python3 "$ROOT/tools/build/image/gsi-share-list.py" "$AOSP_DIR" "$PRODUCT_OUT" \
   "$AOSP_DIR/$OUT_DIR/soong/compliance-metadata/gsi_x86_64/compliance-metadata.db" "$BUILD_DIR/apex.txt" "$BUILD_DIR/image.txt" \
-  > "$BUILD_DIR/share.csv" || { log "the share list is incomplete -- see above"; exit 1; }
+  "$ROOT/$PREBUILT_TABLE" > "$BUILD_DIR/share.csv" || { log "the share list is incomplete -- see above"; exit 1; }
 cp "$BUILD_DIR/share.csv" "$LIST"
 share_projects "$BUILD_DIR/share.csv" > "$BUILD_DIR/share.projects"
 log "$(wc -l < "$BUILD_DIR/share.projects") projects to share"

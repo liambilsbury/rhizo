@@ -247,6 +247,18 @@ else:
 PY
 }
 
+# print the platform CIL a compile takes, dropping the ashmem open neverallows when the vendor policy grants that open
+compile_plat_cil() {
+  python3 - "$REPO/src/androidd" "$PLAT_CIL" "$1" <<'PY'
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from sandbox import selinux_policy
+
+print(selinux_policy.compile_input(sys.argv[2], sys.argv[3]))
+PY
+}
+
 # run secilc on the CILs into a directory
 do_compile() {
   local out_dir="$1" strip="$2"; shift 2
@@ -259,7 +271,9 @@ do_compile() {
   else
     emit_rhizo_cil "$rhizo_cil" "$strip" "$PLAT_CIL" "$SYSTEM_EXT_CIL" "$PRODUCT_CIL" || return 1
   fi
-  local cils=("$PLAT_CIL" "$SYSTEM_EXT_CIL" "$PRODUCT_CIL" "$rhizo_cil" "$@")
+  local plat
+  plat=$(compile_plat_cil "$out_dir") || return 1
+  local cils=("$plat" "$SYSTEM_EXT_CIL" "$PRODUCT_CIL" "$rhizo_cil" "$@")
   local pc="$out_dir/precompiled_sepolicy"
   "$SECILC" -m -M true -G -c 30 "${cils[@]}" -o "$pc" -f /dev/null 2>"$out_dir/secilc.stderr"
   local rc=$?

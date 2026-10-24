@@ -28,7 +28,7 @@ def write_rig_pins(path):
     with open(GSI_PINS) as f:
         text = f.read()
     rows = []
-    for rel in sorted(set(re.findall(r'^GSI_URL\[([\w-]+)\]=', text, re.M)) - {"a16"}):
+    for rel in sorted(set(re.findall(r'^GSI_URL\[([\w-]+)\]=', text, re.M)) - {"a16", "a17"}):
         url, sha, desc = (re.search(r'^GSI_%s\[%s\]="([^"]*)"' % (k, re.escape(rel)), text, re.M).group(1)
                           for k in ("URL", "SHA", "DESC"))
         rows.append("\t".join((rel, url, sha, desc)))

@@ -1,5 +1,5 @@
 #!/bin/bash
-# build the Android 16 GSI from unmodified AOSP source with the stock gsi_x86_64 target
+# build the Android 16 or 17 GSI from unmodified AOSP source with the stock gsi_x86_64 target
 set -uo pipefail
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX \
       GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
@@ -9,7 +9,7 @@ log() { echo "[gsi] $*" >&2; }
 # print the usage text
 usage() {
   cat <<'EOF'
-Usage: tools/build/image/gsi.sh --variant user|userdebug [--revision N] [--release CONFIG] [--jobs N] [--skip-build]
+Usage: tools/build/image/gsi.sh --variant user|userdebug [--release a16|a17] [--revision N] [--release-config CONFIG] [--jobs N] [--skip-build]
        tools/build/image/gsi.sh --selftest
 EOF
 }
@@ -79,10 +79,15 @@ presigned_names() {
   grep -hE '(^|[[:space:]])(container_)?certificate="PRESIGNED"' "$1/apkcerts.txt" "$1/apexkeys.txt" | sed -n 's/^name="\([^"]*\)".*/\1/p' | sort -u
 }
 
+# print the certificate digests of apksigner --print-certs output
+apksigner_certs() {
+  sed -nE 's/^(Signer #[0-9]+|V[0-9.]+ Signer:) certificate SHA-256 digest: */cert /p'
+}
+
 # print the signer digests of an apk, apex or capex
 signer_digests() {
   local f="$1" t
-  apksigner verify --print-certs "$f" 2>/dev/null | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: */cert /p'
+  apksigner verify --print-certs "$f" 2>/dev/null | apksigner_certs
   case "$f" in
     *.apex)
       t=$(mktemp)
@@ -133,9 +138,18 @@ check_image_avb() {
   return 1
 }
 
-# check a zip's sha against the a16 pin in a gsi-pins.sh
+# check a zip's sha against a release's pin in a gsi-pins.sh
 pin_matches() {
-  [[ "$1" == "$(sed -n 's/^GSI_SHA\[a16\]="\(.*\)"$/\1/p' "$2")" ]]
+  [[ "$1" == "$(sed -n "s/^GSI_SHA\[${3:-a16}\]=\"\(.*\)\"$/\1/p" "$2")" ]]
+}
+
+# print a release's make target for its checkout, pin file, checkout link, override variable, BUILD_ID pin and release config
+release_paths() {
+  case "$1" in
+    a16) echo "inputs tools/fetch/build-inputs.sh aosp-android16-qpr2 RHIZO_AOSP_DIR AOSP_BUILD_ID bp4a" ;;
+    a17) echo "inputs-a17 tools/fetch/aosp-a17.sh aosp-android17 RHIZO_AOSP_A17_DIR AOSP_A17_BUILD_ID cp2a" ;;
+    *) return 1 ;;
+  esac
 }
 
 # check that an image is ext4
@@ -143,17 +157,17 @@ is_ext4_image() {
   dumpe2fs -h "$1" 2>/dev/null | grep -q '^Filesystem features:.*\bextent\b'
 }
 
-# check the build.prop of the image against the variant
+# check the build.prop of the image and of its product partition against the variant
 check_posture() {
-  local prop="$1" variant="$2" build_id="$3" revision="$4" k want got bad=0 tags=release-keys
+  local prop="$1" variant="$2" build_id="$3" revision="$4" product_prop="${5:-$1}" k want got bad=0 tags=release-keys
   [[ "$variant" == userdebug ]] && tags=test-keys
   for k in ro.build.id="$build_id" ro.build.type="$variant" ro.build.tags="$tags" ro.build.version.incremental="rhizo$revision"; do
     want="${k#*=}"; k="${k%%=*}"
     got=$(sed -n "s/^${k//./\\.}=//p" "$prop" | tail -1)
     if [[ "$got" == "$want" ]]; then log "  ok: $k=$got"; else log "  WRONG: $k=$got, want $want"; bad=1; fi
   done
-  got=$(sed -n 's/^ro\.system\.build\.fingerprint=//p' "$prop" | tail -1)
-  if [[ "$got" == Android/gsi_x86_64/* ]]; then log "  ok: fingerprint $got"; else log "  WRONG: fingerprint $got, want Android/gsi_x86_64/..."; bad=1; fi
+  got=$(sed -n 's/^ro\.product\.build\.fingerprint=//p' "$product_prop" | tail -1)
+  if [[ "$got" == Android/gsi_x86_64/* ]]; then log "  ok: product fingerprint $got"; else log "  WRONG: product fingerprint $got, want Android/gsi_x86_64/..."; bad=1; fi
   (( bad == 0 ))
 }
 
@@ -217,6 +231,11 @@ selftest() {
   grep -qx Pre.apk "$tmp/pre" && grep -qx com.pre.apex "$tmp/pre" && [[ "$(grep -c . "$tmp/pre")" == 2 ]] \
     || { echo "FAIL presigned names are read from META -- got: $(cat "$tmp/pre")"; fail=1; }
 
+  out=$(printf 'Signer #1 certificate DN: CN=Android\nSigner #1 certificate SHA-256 digest: aaaa\nSigner #1 certificate SHA-1 digest: bbbb\n' | apksigner_certs)
+  [[ "$out" == "cert aaaa" ]] || { echo "FAIL a16's apksigner signer line is read -- got: $out"; fail=1; }
+  out=$(printf 'V3.0 Signer: certificate DN: CN=Android\nV3.0 Signer: certificate SHA-256 digest: cccc\nV3.0 Signer: certificate MD5 digest: dddd\n' | apksigner_certs)
+  [[ "$out" == "cert cccc" ]] || { echo "FAIL a17's apksigner signer line is read -- got: $out"; fail=1; }
+
   touch "$tmp/signed/SYSTEM/app/a.apk" "$tmp/signed/SYSTEM/apex/b.apex"
   signer_digests() { case "$1" in *a.apk) echo "cert $own_cert" ;; *b.apex) echo "cert $own_cert"; echo "avb $own_avb" ;; esac; }
   check_signed_files "$tmp/signed" "$tmp/own" /dev/null >/dev/null 2>&1 || { echo "FAIL files signed only with our keys pass"; fail=1; }
@@ -245,9 +264,36 @@ selftest() {
   printf 'GSI_SHA[a16]="%s"\n' "$own_cert" > "$tmp/pins.sh"
   pin_matches "$own_cert" "$tmp/pins.sh" || { echo "FAIL a zip whose sha is the a16 pin is staged"; fail=1; }
   pin_matches ffff "$tmp/pins.sh" && { echo "FAIL a zip whose sha is not the a16 pin is not staged"; fail=1; }
+  printf 'GSI_SHA[a17]="%s"\n' ffff >> "$tmp/pins.sh"
+  pin_matches ffff "$tmp/pins.sh" a17 || { echo "FAIL a zip whose sha is the a17 pin is staged as a17"; fail=1; }
+  pin_matches "$own_cert" "$tmp/pins.sh" a17 && { echo "FAIL the a16 pin does not stage an a17 build"; fail=1; }
+
+  local root a17_id
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+  [[ "$(release_paths a16)" == "inputs tools/fetch/build-inputs.sh aosp-android16-qpr2 RHIZO_AOSP_DIR AOSP_BUILD_ID bp4a" ]] || { echo "FAIL a16 builds from android16-qpr2 with bp4a -- got: $(release_paths a16)"; fail=1; }
+  [[ "$(release_paths a17)" == "inputs-a17 tools/fetch/aosp-a17.sh aosp-android17 RHIZO_AOSP_A17_DIR AOSP_A17_BUILD_ID cp2a" ]] || { echo "FAIL a17 builds from android17 with cp2a -- got: $(release_paths a17)"; fail=1; }
+  release_paths a15 >/dev/null && { echo "FAIL a15 is not a release this script builds"; fail=1; }
+  a17_id=$(sed -n 's/^AOSP_A17_BUILD_ID=//p' "$root/tools/fetch/aosp-a17.sh")
+  [[ "rhizo-gsi_x86_64-user-$a17_id-1" == rhizo-gsi_x86_64-user-CP2A.260605.016-1 ]] || { echo "FAIL the a17 user zip is named for CP2A.260605.016 -- got BUILD_ID $a17_id"; fail=1; }
+  mkdir -p "$tmp/a17/.repo" "$tmp/a17/build/make/core"
+  echo BUILD_ID=XX1A.000000.001 > "$tmp/a17/build/make/core/build_id.mk"
+  out=$(RHIZO_AOSP_A17_DIR="$tmp/a17" "$root/tools/build/image/gsi.sh" --release a17 --variant user 2>&1)
+  [[ $? -ne 0 && "$out" == *"BUILD_ID XX1A.000000.001, the pin is $a17_id"* ]] || { echo "FAIL an a17 build refuses a checkout of another BUILD_ID -- got: $out"; fail=1; }
+  out=$(RHIZO_AOSP_A17_DIR="$tmp/none" "$root/tools/build/image/gsi.sh" --release a17 --variant user 2>&1)
+  [[ $? -ne 0 && "$out" == *"no AOSP checkout at $tmp/none -- run make inputs-a17 first"* ]] || { echo "FAIL an a17 build with no checkout names make inputs-a17 -- got: $out"; fail=1; }
+  out=$("$root/tools/build/image/gsi.sh" --release a18 --variant user 2>&1)
+  [[ $? -eq 2 && "$out" == *"--release must be a16 or a17"* ]] || { echo "FAIL an unknown release is refused -- got: $out"; fail=1; }
 
 
   printf 'ro.build.id=B1\nro.build.type=user\nro.build.tags=release-keys\nro.build.version.incremental=rhizo2\nro.product.system.name=mainline\nro.system.build.fingerprint=Android/gsi_x86_64/generic_x86_64:16/B1/rhizo2:user/release-keys\n' > "$tmp/build.prop"
+  printf 'ro.product.product.name=gsi_x86_64\nro.product.build.fingerprint=Android/gsi_x86_64/generic_x86_64:16/B1/rhizo2:user/release-keys\n' > "$tmp/product.prop"
+  check_posture "$tmp/build.prop" user B1 2 "$tmp/product.prop" >/dev/null 2>&1 || { echo "FAIL a gsi_x86_64 user build passes"; fail=1; }
+  sed -i 's|^ro.system.build.fingerprint=.*|ro.system.build.fingerprint=Android/generic_system/generic:17/B1/rhizo2:user/release-keys|' "$tmp/build.prop"
+  check_posture "$tmp/build.prop" user B1 2 "$tmp/product.prop" >/dev/null 2>&1 || { echo "FAIL an a17 gsi_x86_64 build, whose system partition is generic_system, passes"; fail=1; }
+  sed -i 's|/gsi_x86_64/|/aosp_x86_64/|' "$tmp/product.prop"
+  check_posture "$tmp/build.prop" user B1 2 "$tmp/product.prop" >/dev/null 2>&1 && { echo "FAIL an aosp_x86_64 product partition is refused"; fail=1; }
+  check_posture "$tmp/build.prop" user B1 2 >/dev/null 2>&1 && { echo "FAIL an image with no product fingerprint is refused"; fail=1; }
+  printf 'ro.build.id=B1\nro.build.type=user\nro.build.tags=release-keys\nro.build.version.incremental=rhizo2\nro.product.build.fingerprint=Android/gsi_x86_64/generic_x86_64:16/B1/rhizo2:user/release-keys\n' > "$tmp/build.prop"
   check_posture "$tmp/build.prop" user B1 2 >/dev/null 2>&1 || { echo "FAIL a gsi_x86_64 user build passes"; fail=1; }
   check_posture "$tmp/build.prop" user B1 1 >/dev/null 2>&1 && { echo "FAIL a build of another revision is refused"; fail=1; }
   sed -i 's|/gsi_x86_64/|/aosp_x86_64/|' "$tmp/build.prop"
@@ -265,12 +311,13 @@ selftest() {
 
 [[ "${1:-}" == --selftest ]] && { selftest; exit $?; }
 
-VARIANT="" REVISION=1 RELEASE_CONFIG="${GSI_RELEASE:-bp4a}" JOBS="${RHIZO_BUILD_J:-18}" SKIP_BUILD=0
+VARIANT="" RELEASE=a16 REVISION=1 RELEASE_CONFIG="" JOBS="${RHIZO_BUILD_J:-18}" SKIP_BUILD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --variant) VARIANT="${2:-}"; shift 2 ;;
+    --release) RELEASE="${2:-}"; shift 2 ;;
     --revision) REVISION="${2:-}"; shift 2 ;;
-    --release) RELEASE_CONFIG="${2:-}"; shift 2 ;;
+    --release-config) RELEASE_CONFIG="${2:-}"; shift 2 ;;
     --jobs) JOBS="${2:-}"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     *) usage >&2; exit 2 ;;
@@ -278,19 +325,23 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$VARIANT" == user || "$VARIANT" == userdebug ]] || { log "--variant must be user or userdebug"; exit 2; }
 [[ "$REVISION" =~ ^[0-9]+$ ]] || { log "--revision must be a number"; exit 2; }
+paths=$(release_paths "$RELEASE") || { log "--release must be a16 or a17"; exit 2; }
+read -r AOSP_TARGET PIN_FILE AOSP_LINK AOSP_ENV PIN_VAR DEFAULT_CONFIG <<< "$paths"
+RELEASE_CONFIG="${RELEASE_CONFIG:-$DEFAULT_CONFIG}"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.." || exit 1
 ROOT="$PWD"
-AOSP_DIR="$(readlink -f "${RHIZO_AOSP_DIR:-$ROOT/aosp-android16-qpr2}")"
+AOSP_DIR="$(readlink -f "${!AOSP_ENV:-$ROOT/$AOSP_LINK}")"
 KEYS="${RHIZO_GSI_KEYS:-$HOME/.config/rhizo/gsi-keys}"
 CACHE="${RHIZO_INPUT_CACHE:-$HOME/.cache/rhizo/inputs}"
 BUILD_DIR="$ROOT/var/gsi-build"
-PIN_ID=$(sed -n 's/^AOSP_BUILD_ID=//p' "$ROOT/tools/fetch/build-inputs.sh")
+PIN_ID=$(sed -n "s/^$PIN_VAR=//p" "$ROOT/$PIN_FILE")
+[[ -n "$PIN_ID" ]] || { log "no $PIN_VAR in $PIN_FILE"; exit 1; }
 NAME="rhizo-gsi_x86_64-$VARIANT-$PIN_ID-$REVISION"
 OUT_DIR="out-gsi-$VARIANT"
-LOG="$BUILD_DIR/build-$VARIANT-$REVISION.log"
+LOG="$BUILD_DIR/build-$VARIANT-$PIN_ID-$REVISION.log"
 
-[[ -d "$AOSP_DIR/.repo" ]] || { log "no AOSP checkout at $AOSP_DIR -- run make inputs first"; exit 1; }
+[[ -d "$AOSP_DIR/.repo" ]] || { log "no AOSP checkout at $AOSP_DIR -- run make $AOSP_TARGET first"; exit 1; }
 id=$(sed -n 's/^BUILD_ID=//p' "$AOSP_DIR/build/make/core/build_id.mk")
 [[ "$id" == "$PIN_ID" ]] || { log "the AOSP checkout is BUILD_ID $id, the pin is $PIN_ID"; exit 1; }
 mkdir -p "$BUILD_DIR"
@@ -305,7 +356,7 @@ stage_user_zip() {
 
 if [[ -e "$BUILD_DIR/$NAME.zip" ]]; then
   sha=$(sha256sum "$BUILD_DIR/$NAME.zip" | cut -d' ' -f1)
-  if [[ "$VARIANT" == user ]] && pin_matches "$sha" "$ROOT/tools/fetch/gsi-pins.sh"; then
+  if [[ "$VARIANT" == user ]] && pin_matches "$sha" "$ROOT/tools/fetch/gsi-pins.sh" "$RELEASE"; then
     log "$NAME.zip is already built and pinned"
     stage_user_zip
     exit 0
@@ -368,11 +419,12 @@ in_aosp img_from_target_files "$TF" "$STAGE/img.zip" >> "$LOG" 2>&1 \
   || { tail -30 "$LOG" >&2; log "img_from_target_files failed -- see $LOG"; exit 1; }
 unzip -q -o "$STAGE/img.zip" system.img -d "$STAGE" || { log "no system.img in $STAGE/img.zip"; exit 1; }
 unzip -p "$TF" SYSTEM/build.prop > "$STAGE/build.prop" || { log "no SYSTEM/build.prop in $TF"; exit 1; }
+unzip -p "$TF" SYSTEM/product/etc/build.prop > "$STAGE/product.prop" || { log "no SYSTEM/product/etc/build.prop in $TF"; exit 1; }
 if file -b "$STAGE/system.img" | grep -q "Android sparse image"; then
   in_aosp simg2img "$STAGE/system.img" "$STAGE/system.raw" && mv "$STAGE/system.raw" "$STAGE/system.img" || exit 1
 fi
 is_ext4_image "$STAGE/system.img" || { log "system.img is not ext4: $(file -b "$STAGE/system.img")"; exit 1; }
-check_posture "$STAGE/build.prop" "$VARIANT" "$PIN_ID" "$REVISION" || { log "the image is not the $VARIANT build this script makes"; exit 1; }
+check_posture "$STAGE/build.prop" "$VARIANT" "$PIN_ID" "$REVISION" "$STAGE/product.prop" || { log "the image is not the $VARIANT build this script makes"; exit 1; }
 if [[ "$VARIANT" == user ]]; then
   in_aosp check_image_avb "$STAGE/system.img" "$STAGE/own-keys" || { log "system.img's AVB footer is not signed with our key"; exit 1; }
 fi
@@ -389,13 +441,14 @@ sha=$(sha256sum "$BUILD_DIR/$NAME.zip" | cut -d' ' -f1)
 echo "$sha  $NAME.zip" > "$BUILD_DIR/$NAME.zip.sha256"
 log "built $BUILD_DIR/$NAME.zip sha256=$sha"
 
-if [[ "$VARIANT" == user ]] && ! pin_matches "$sha" "$ROOT/tools/fetch/gsi-pins.sh"; then
-  log "not staged: the a16 pin is another build -- to ship this one, set GSI_URL[a16] and GSI_SHA[a16] to $NAME.zip and $sha"
+if [[ "$VARIANT" == user ]] && ! pin_matches "$sha" "$ROOT/tools/fetch/gsi-pins.sh" "$RELEASE"; then
+  log "not staged: the $RELEASE pin is another build -- to ship this one, set GSI_URL[$RELEASE] and GSI_SHA[$RELEASE] to $NAME.zip and $sha"
   log "  in tools/fetch/gsi-pins.sh and src/install/prepare/fetch-gsi.sh, then run this again to stage it"
 elif [[ "$VARIANT" == user ]]; then
   stage_user_zip
 else
+  label=userdebug; [[ "$RELEASE" == a16 ]] || label="$RELEASE-userdebug"
   mkdir -p "$ROOT/var/share"
-  cp --remove-destination "$STAGE/system.img" "$ROOT/var/share/gsi_userdebug.img.part" && mv "$ROOT/var/share/gsi_userdebug.img.part" "$ROOT/var/share/gsi_userdebug.img"
-  log "staged -> var/share/gsi_userdebug.img (next: tools/fetch/images/gsi.sh userdebug --from-image var/share/gsi_userdebug.img)"
+  cp --remove-destination "$STAGE/system.img" "$ROOT/var/share/gsi_$label.img.part" && mv "$ROOT/var/share/gsi_$label.img.part" "$ROOT/var/share/gsi_$label.img"
+  log "staged -> var/share/gsi_$label.img (next: tools/fetch/images/gsi.sh $label --from-image var/share/gsi_$label.img)"
 fi

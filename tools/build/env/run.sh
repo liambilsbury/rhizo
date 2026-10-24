@@ -34,6 +34,9 @@ args+=(-v "$GSI_KEYS:$GSI_KEYS" -e RHIZO_GSI_KEYS="$GSI_KEYS")
 if [[ -n "${RHIZO_AOSP_DIR:-}" ]]; then
   args+=(-v "$RHIZO_AOSP_DIR:$RHIZO_AOSP_DIR" -e RHIZO_AOSP_DIR="$RHIZO_AOSP_DIR")
 fi
+if [[ -n "${RHIZO_AOSP_A17_DIR:-}" ]]; then
+  args+=(-v "$RHIZO_AOSP_A17_DIR:$RHIZO_AOSP_A17_DIR" -e RHIZO_AOSP_A17_DIR="$RHIZO_AOSP_A17_DIR")
+fi
 COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 MAIN="${COMMON%/.git}"
 if [[ -n "$MAIN" && "$MAIN" != "$ROOT" ]]; then
