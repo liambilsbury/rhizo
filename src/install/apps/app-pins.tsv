@@ -1,0 +1,4 @@
+# name	release	url	sha256	size	signer_sha256	desc
+aurora	any	https://f-droid.org/repo/com.aurora.store_76.apk	fd9c75d90d0f4a7c132b9b4a5a2cf1992a45e03b8d8ff988b7dcfbc0db2c4d11	9360088	5c83c7672b929955dc0a1db89a5e6ae4389e2eae7ec939956041694e5815f532	Aurora Store 4.8.4 (76), F-Droid's build
+litegapps	a16	https://downloads.sourceforge.net/project/litegapps/litegapps/x86_64/36/core/2026-10-01/LiteGapps-core-x86_64-16.0-20261001-official.zip	7beabc8df62cd826a4ae732bec604938b6c03cc11c08bb38148766f02a88d49e	122196440	-	LiteGapps core 2026-10-01 for Android 16 x86_64
+litegapps	a17	https://downloads.sourceforge.net/project/litegapps/litegapps/x86_64/37/core/2026-10-01/LiteGapps-core-x86_64-17.0-20261001-official.zip	975501feb5f0a68cf023847291155eaa33e76fe6db8dae3c588e12af61d4bba0	149104693	-	LiteGapps core 2026-10-01 for Android 17 x86_64

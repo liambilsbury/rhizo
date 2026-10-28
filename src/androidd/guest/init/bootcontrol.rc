@@ -1,0 +1,7 @@
+# @RHIZO_SUBST early_init_restorecon
+
+service vendor.rhizo-bootcontrol /vendor/bin/hw/rhizo-bootcontrol-service
+    class early_hal
+    user system
+    group system
+    stdio_to_kmsg

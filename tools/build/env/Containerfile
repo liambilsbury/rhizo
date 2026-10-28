@@ -1,0 +1,29 @@
+# the rhizo build environment
+FROM docker.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+
+ARG SNAPSHOT=20261008T000000Z
+ARG MESON=1.5.2
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
+RUN printf 'Acquire::Retries "10";\n' > /etc/apt/apt.conf.d/80-retries
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends -t a=noble ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN sed -i -E "s#^URIs: http://(archive|security)\.ubuntu\.com/ubuntu/?\$#URIs: https://snapshot.ubuntu.com/ubuntu/${SNAPSHOT}/#" \
+      /etc/apt/sources.list.d/ubuntu.sources \
+ && grep -q "snapshot.ubuntu.com/ubuntu/${SNAPSHOT}/" /etc/apt/sources.list.d/ubuntu.sources
+
+COPY packages.txt /tmp/packages.txt
+RUN apt-get update \
+ && apt-get -y --no-install-recommends dist-upgrade \
+ && sed 's/#.*//' /tmp/packages.txt | xargs apt-get install -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* /tmp/packages.txt
+RUN pip3 install --break-system-packages --no-cache-dir "meson==${MESON}"
+ARG REPO_LAUNCHER=2.69
+ARG REPO_SHA256=6ed2f6325705b6ea0af99466d6ebd04adec387a5b6a906cd77bc8c6da65123e5
+RUN curl -fsSL "https://storage.googleapis.com/git-repo-downloads/repo-${REPO_LAUNCHER}" -o /usr/local/bin/repo \
+ && echo "${REPO_SHA256}  /usr/local/bin/repo" | sha256sum -c - \
+ && chmod 0755 /usr/local/bin/repo
+RUN printf 'ALL ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/rhizo-build \
+ && chmod 0440 /etc/sudoers.d/rhizo-build \
+ && visudo -cf /etc/sudoers.d/rhizo-build

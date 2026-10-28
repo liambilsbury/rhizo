@@ -1,0 +1,81 @@
+diff --git a/include/linux/bpf.h b/include/linux/bpf.h
+index b4b703c90ca..07aa3f91003 100644
+--- a/include/linux/bpf.h
++++ b/include/linux/bpf.h
+@@ -1699,6 +1699,7 @@ struct bpf_prog_aux {
+ 	bool might_sleep;
+ 	bool kprobe_write_ctx;
+ 	u64 prog_array_member_cnt; /* counts how many times as member of prog_array */
++	u64 loader_netns_cookie; /* netns of the task that loaded the prog */
+ 	struct mutex ext_mutex; /* mutex for is_extended and prog_array_member_cnt */
+ 	struct bpf_arena *arena;
+ 	void (*recursion_detected)(struct bpf_prog *prog); /* callback if recursion is detected */
+diff --git a/kernel/bpf/syscall.c b/kernel/bpf/syscall.c
+index a3c0214ca93..1c160c1faae 100644
+--- a/kernel/bpf/syscall.c
++++ b/kernel/bpf/syscall.c
+@@ -41,7 +41,9 @@
+ #include <linux/overflow.h>
+ #include <linux/cookie.h>
+ #include <linux/verification.h>
++#include <linux/nsproxy.h>
+ 
++#include <net/net_namespace.h>
+ #include <net/netfilter/nf_bpf_link.h>
+ #include <net/netkit.h>
+ #include <net/tcx.h>
+@@ -3006,6 +3008,10 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
+ 	token = NULL;
+ 
+ 	prog->aux->user = get_current_user();
++#ifdef CONFIG_NET
++	prog->aux->loader_netns_cookie = current->nsproxy ?
++		current->nsproxy->net_ns->net_cookie : init_net.net_cookie;
++#endif
+ 	prog->len = attr->insn_cnt;
+ 
+ 	err = -EFAULT;
+diff --git a/net/core/filter.c b/net/core/filter.c
+index 716df27ddbe..cbba4d34197 100644
+--- a/net/core/filter.c
++++ b/net/core/filter.c
+@@ -5244,6 +5244,28 @@ static const struct bpf_func_proto bpf_get_netns_cookie_sock_create_proto = {
+ 	.arg1_type	= ARG_PTR_TO_CTX_OR_NULL,
+ };
+ 
++#ifdef CONFIG_CGROUP_BPF
++/* A NULL ctx selects the loading task's netns: cg_skb runs in softirq. */
++BPF_CALL_1(bpf_get_netns_cookie_cg_skb, struct sk_buff *, skb)
++{
++	struct bpf_cg_run_ctx *run_ctx;
++
++	if (skb)
++		return __bpf_get_netns_cookie(skb->sk);
++	if (!current->bpf_ctx)
++		return init_net.net_cookie;
++	run_ctx = container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
++	return run_ctx->prog_item->prog->aux->loader_netns_cookie;
++}
++
++static const struct bpf_func_proto bpf_get_netns_cookie_cg_skb_proto = {
++	.func		= bpf_get_netns_cookie_cg_skb,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX_OR_NULL,
++};
++#endif
++
+ BPF_CALL_1(bpf_get_netns_cookie_sock_addr, struct bpf_sock_addr_kern *, ctx)
+ {
+ 	return __bpf_get_netns_cookie(ctx ? ctx->sk : NULL);
+@@ -8319,6 +8341,10 @@ cg_skb_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+ 		return &bpf_sk_storage_delete_proto;
+ 	case BPF_FUNC_perf_event_output:
+ 		return &bpf_skb_event_output_proto;
++#ifdef CONFIG_CGROUP_BPF
++	case BPF_FUNC_get_netns_cookie:
++		return &bpf_get_netns_cookie_cg_skb_proto;
++#endif
+ #ifdef CONFIG_SOCK_CGROUP_DATA
+ 	case BPF_FUNC_skb_cgroup_id:
+ 		return &bpf_skb_cgroup_id_proto;

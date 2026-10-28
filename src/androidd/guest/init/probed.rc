@@ -1,0 +1,8 @@
+on early-init
+    restorecon /system_ext/bin/hw/rhizo-probed
+
+service vendor.rhizo-probed /system_ext/bin/hw/rhizo-probed
+    class core
+    user shell
+    group shell log readproc inet input uhid
+    stdio_to_kmsg

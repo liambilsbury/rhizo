@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = rhizo
+
+[Action]
+Description = Configuring Rhizo after the kernel and boot loader hooks...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/rhizo-configure

@@ -1,0 +1,11 @@
+# @RHIZO_SUBST early_init_restorecon
+
+service vendor.rhizo-audio-effect /vendor/bin/hw/rhizo-audio-effect-service
+    class core
+    user system
+    group system
+    stdio_to_kmsg
+
+on property:sys.audio.restart.hal=1
+    stop vendor.rhizo-audio-effect
+    start vendor.rhizo-audio-effect

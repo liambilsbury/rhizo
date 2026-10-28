@@ -1,0 +1,75 @@
+#!/bin/sh
+# run the embedded host teardown
+set -e
+
+PROG=rhizo
+
+# ---- BEGIN embedded teardown: debian/embed-teardown.py --write ----
+# ---- END embedded teardown ----
+
+# run the embedded teardown script
+rhizo_run_teardown() {
+  rhizo_td=$(mktemp -d) || return 1
+  if rhizo_teardown_write "$rhizo_td"; then
+    rhizo_td_rc=0
+    bash "$rhizo_td/install/teardown/teardown.sh" "$@" || rhizo_td_rc=$?
+  else
+    echo "[$PROG] could not write the embedded teardown to $rhizo_td -- host changes were NOT reversed" >&2
+    rhizo_td_rc=1
+  fi
+  rm -rf "$rhizo_td"
+  return "$rhizo_td_rc"
+}
+
+DESKTOP_USER_DROPINS="rhizo-app-events.service rhizo-deskd.service rhizo-desktop-session.service rhizo-audiod.service rhizo-camerad.service rhizo-locationd.service"
+# remove the desktop-user drop-ins of the desktop units
+remove_desktop_user_dropins() {
+  for unit in $DESKTOP_USER_DROPINS; do
+    rm -f "/etc/systemd/system/$unit.d/10-desktop-user.conf"
+    rmdir "/etc/systemd/system/$unit.d" 2>/dev/null || true
+  done
+}
+
+# remove __pycache__ directories under /usr/lib/rhizo
+remove_payload_bytecode() {
+  [ -d /usr/lib/rhizo ] || return 0
+  find /usr/lib/rhizo -depth -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+  find /usr/lib/rhizo -depth -type d -empty -delete 2>/dev/null || true
+}
+
+# restore the keys moved out of androidd.env
+rhizo_restore_env_keys() {
+  _m=/var/lib/rhizo/androidd-runtime.env.migrated
+  _r=/var/lib/rhizo/androidd-runtime.env
+  [ -s "$_m" ] || return 0
+  cat "$_m" >> /etc/rhizo/androidd.env || return 1
+  if [ -f "$_r" ]; then
+    _rc=0
+    grep -vxFf "$_m" "$_r" > "$_r.restore" || _rc=$?
+    [ "$_rc" -le 1 ] || return 1
+    mv "$_r.restore" "$_r" || return 1
+  fi
+  rm -f "$_m"
+}
+
+case "$1" in
+  abort-upgrade|abort-install)
+    rhizo_restore_env_keys
+    ;;
+  remove)
+    rhizo_run_teardown || echo "[$PROG] teardown reported a problem; see its output above" >&2
+    rm -rf /var/cache/rhizo /var/log/rhizo 2>/dev/null || true
+    remove_desktop_user_dropins
+    remove_payload_bytecode
+    ;;
+  purge)
+    rhizo_run_teardown --purge || echo "[$PROG] teardown reported a problem; see its output above" >&2
+    rm -rf /var/cache/rhizo /var/log/rhizo 2>/dev/null || true
+    remove_desktop_user_dropins
+    remove_payload_bytecode
+    rmdir /srv/rhizo 2>/dev/null || true
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

@@ -1,0 +1,45 @@
+diff --git a/kernel/bpf/cgroup.c b/kernel/bpf/cgroup.c
+index ea10f6cfd6f..fb4c72c5e1e 100644
+--- a/kernel/bpf/cgroup.c
++++ b/kernel/bpf/cgroup.c
+@@ -10,6 +10,7 @@
+ #include <linux/cgroup.h>
+ #include <linux/filter.h>
+ #include <linux/nsproxy.h>
++#include <linux/pid.h>
+ #include <linux/slab.h>
+ #include <linux/sysctl.h>
+ #include <linux/string.h>
+@@ -2509,6 +2510,23 @@ static const struct bpf_func_proto bpf_get_netns_cookie_sockopt_proto = {
+ };
+ #endif
+ 
++/* The current pid and tgid in the task's pid namespace. */
++BPF_CALL_0(bpf_get_current_pid_tgid_vnr)
++{
++	struct task_struct *task = current;
++
++	if (unlikely(!task))
++		return -EINVAL;
++
++	return (u64)task_tgid_vnr(task) << 32 | task_pid_vnr(task);
++}
++
++static const struct bpf_func_proto bpf_get_current_pid_tgid_vnr_proto = {
++	.func		= bpf_get_current_pid_tgid_vnr,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++};
++
+ static const struct bpf_func_proto *
+ cg_sockopt_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+ {
+@@ -2541,6 +2559,8 @@ cg_sockopt_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+ #endif
+ 	case BPF_FUNC_perf_event_output:
+ 		return &bpf_event_output_data_proto;
++	case BPF_FUNC_get_current_pid_tgid:
++		return &bpf_get_current_pid_tgid_vnr_proto;
+ 	default:
+ 		return bpf_base_func_proto(func_id, prog);
+ 	}

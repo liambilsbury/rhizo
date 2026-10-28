@@ -1,0 +1,57 @@
+diff --git a/net/bluetooth/hci_sock.c b/net/bluetooth/hci_sock.c
+index 0290dea081f..2d80e8fa5ea 100644
+--- a/net/bluetooth/hci_sock.c
++++ b/net/bluetooth/hci_sock.c
+@@ -898,6 +898,43 @@ void hci_mgmt_chan_unregister(struct hci_mgmt_chan *c)
+ }
+ EXPORT_SYMBOL(hci_mgmt_chan_unregister);
+ 
++struct hci_sock_close {
++	struct work_struct work;
++	struct hci_dev *hdev;
++};
++
++static void hci_sock_close_work(struct work_struct *work)
++{
++	struct hci_sock_close *close = container_of(work, struct hci_sock_close,
++						    work);
++
++	hci_dev_do_close(close->hdev);
++}
++
++/* Close the device of a user channel being released. The close sends
++ * commands to the controller, the driver's shutdown routine and a reset,
++ * and waits for each interruptibly. A task exiting on a signal drops its
++ * last socket reference from exit_task_work() with the signal still
++ * pending, so every one of those waits would return -EINTR at once and
++ * leave the controller as the user channel left it, scanning for
++ * instance, until its next open fails to reset it. Run the close from a
++ * worker then, and wait for it.
++ */
++static void hci_sock_close_user_channel(struct hci_dev *hdev)
++{
++	struct hci_sock_close close = { .hdev = hdev };
++
++	if (!signal_pending(current)) {
++		hci_dev_do_close(hdev);
++		return;
++	}
++
++	INIT_WORK_ONSTACK(&close.work, hci_sock_close_work);
++	queue_work(system_dfl_wq, &close.work);
++	flush_work(&close.work);
++	destroy_work_on_stack(&close.work);
++}
++
+ static int hci_sock_release(struct socket *sock)
+ {
+ 	struct sock *sk = sock->sk;
+@@ -950,7 +987,7 @@ static int hci_sock_release(struct socket *sock)
+ 			 * been complete and hdev will get released when we put
+ 			 * below.
+ 			 */
+-			hci_dev_do_close(hdev);
++			hci_sock_close_user_channel(hdev);
+ 			hci_dev_clear_flag(hdev, HCI_USER_CHANNEL);
+ 			mgmt_index_added(hdev);
+ 		}

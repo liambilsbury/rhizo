@@ -1,0 +1,247 @@
+--- a/src/gallium/auxiliary/vl/vl_csc.c
++++ b/src/gallium/auxiliary/vl/vl_csc.c
+@@ -242,3 +242,74 @@
+                      (*cstd)[2][1] * (x * cbbias + y * crbias) +
+                      (*cstd)[2][2] * (x * crbias - y * cbbias);
+ }
++
++/* compute a sample's texel and full-scale codes in 8-bit units */
++static void
++vl_csc_sample_scale(unsigned bits, unsigned container_bits, double *texel, double *full)
++{
++   assert(bits >= 8 && bits <= container_bits && container_bits <= 16);
++   *texel = (double)((1u << container_bits) - 1) / (double)(1u << (container_bits - 8));
++   *full = (double)((1u << bits) - 1) / (double)(1u << (bits - 8));
++}
++
++void vl_csc_get_ycbcr_to_rgb_matrix(double kr, double kb,
++                                    unsigned bits, unsigned container_bits,
++                                    bool ycbcr_full_range, bool rgb_full_range,
++                                    vl_csc_matrix *matrix)
++{
++   const double kg = 1.0 - kr - kb;
++   double q, f;
++
++   vl_csc_sample_scale(bits, container_bits, &q, &f);
++
++   const double ydiv = ycbcr_full_range ? f : 219.0;
++   const double yoff = ycbcr_full_range ? 0.0 : 16.0;
++   const double cdiv = ycbcr_full_range ? f : 224.0;
++   const double os = rgb_full_range ? 1.0 : 219.0 / 255.0;
++   const double oo = rgb_full_range ? 0.0 : 16.0 / 255.0;
++   const double pb[3] = { 0.0, -2.0 * (1.0 - kb) * kb / kg, 2.0 * (1.0 - kb) };
++   const double pr[3] = { 2.0 * (1.0 - kr), -2.0 * (1.0 - kr) * kr / kg, 0.0 };
++
++   assert(matrix);
++
++   for (unsigned i = 0; i < 3; i++) {
++      (*matrix)[i][0] = os * q / ydiv;
++      (*matrix)[i][1] = os * q / cdiv * pb[i];
++      (*matrix)[i][2] = os * q / cdiv * pr[i];
++      (*matrix)[i][3] = oo - os * (yoff / ydiv + 128.0 / cdiv * (pb[i] + pr[i]));
++   }
++}
++
++void vl_csc_get_rgb_to_ycbcr_matrix(double kr, double kb,
++                                    bool rgb_full_range,
++                                    unsigned bits, unsigned container_bits,
++                                    bool ycbcr_full_range,
++                                    vl_csc_matrix *matrix)
++{
++   const double kg = 1.0 - kr - kb;
++   double q, f;
++
++   vl_csc_sample_scale(bits, container_bits, &q, &f);
++
++   const double is = rgb_full_range ? 1.0 : 255.0 / 219.0;
++   const double io = rgb_full_range ? 0.0 : 16.0 / 255.0;
++   const double ydiv = ycbcr_full_range ? f : 219.0;
++   const double yoff = ycbcr_full_range ? 0.0 : 16.0;
++   const double cdiv = ycbcr_full_range ? f : 224.0;
++   const double w[3][3] = {
++      { kr, kg, kb },
++      { -0.5 * kr / (1.0 - kb), -0.5 * kg / (1.0 - kb), 0.5 },
++      { 0.5, -0.5 * kg / (1.0 - kr), -0.5 * kb / (1.0 - kr) },
++   };
++   const double scale[3] = { ydiv / q, cdiv / q, cdiv / q };
++   const double offset[3] = { yoff / q, 128.0 / q, 128.0 / q };
++
++   assert(matrix);
++
++   for (unsigned i = 0; i < 3; i++) {
++      (*matrix)[i][0] = scale[i] * is * w[i][0];
++      (*matrix)[i][1] = scale[i] * is * w[i][1];
++      (*matrix)[i][2] = scale[i] * is * w[i][2];
++      (*matrix)[i][3] = offset[i] - scale[i] * is * io * (w[i][0] + w[i][1] + w[i][2]);
++   }
++}
+--- a/src/gallium/auxiliary/vl/vl_csc.h
++++ b/src/gallium/auxiliary/vl/vl_csc.h
+@@ -57,4 +57,16 @@
+                        bool full_range,
+                        vl_csc_matrix *matrix);
+ 
++/* build Y'CbCr <-> R'G'B' matrices from luma weights */
++void vl_csc_get_ycbcr_to_rgb_matrix(double kr, double kb,
++                                    unsigned bits, unsigned container_bits,
++                                    bool ycbcr_full_range, bool rgb_full_range,
++                                    vl_csc_matrix *matrix);
++
++void vl_csc_get_rgb_to_ycbcr_matrix(double kr, double kb,
++                                    bool rgb_full_range,
++                                    unsigned bits, unsigned container_bits,
++                                    bool ycbcr_full_range,
++                                    vl_csc_matrix *matrix);
++
+ #endif /* vl_csc_h */
+--- a/src/gallium/frontends/va/postproc.c
++++ b/src/gallium/frontends/va/postproc.c
+@@ -60,6 +60,90 @@
+    return !util_format_is_yuv(format);
+ }
+ 
++/* return the MatrixCoefficients code of a colour standard */
++static unsigned
++vlVaMatrixCoefficients(VAProcColorStandardType standard,
++                       const VAProcColorProperties *props)
++{
++   switch (standard) {
++   case VAProcColorStandardBT709:
++   case VAProcColorStandardGenericFilm:
++   case VAProcColorStandardXVYCC709:
++      return 1;
++   case VAProcColorStandardBT470M:
++      return 4;
++   case VAProcColorStandardBT470BG:
++   case VAProcColorStandardXVYCC601:
++      return 5;
++   case VAProcColorStandardBT601:
++   case VAProcColorStandardSMPTE170M:
++      return 6;
++   case VAProcColorStandardSMPTE240M:
++      return 7;
++   case VAProcColorStandardBT2020:
++      return 9;
++   case VAProcColorStandardExplicit:
++      return props->matrix_coefficients;
++   default:
++      return 0;
++   }
++}
++
++/* return the luma weights of a MatrixCoefficients code */
++static bool
++vlVaLumaWeights(unsigned mc, double *kr, double *kb)
++{
++   switch (mc) {
++   case 1: /* Rec. ITU-R BT.709-6 */
++      *kr = 0.2126;
++      *kb = 0.0722;
++      return true;
++   case 4: /* US FCC Title 47 CFR 73.682 (a)(20) */
++      *kr = 0.30;
++      *kb = 0.11;
++      return true;
++   case 5: /* Rec. ITU-R BT.470-6 System B, G; BT.601-7 625 */
++   case 6: /* Rec. ITU-R BT.601-7 525; SMPTE ST 170 */
++      *kr = 0.299;
++      *kb = 0.114;
++      return true;
++   case 7: /* SMPTE ST 240 */
++      *kr = 0.212;
++      *kb = 0.087;
++      return true;
++   case 9: /* Rec. ITU-R BT.2020-2 non-constant luminance; BT.2100 Y'CbCr */
++      *kr = 0.2627;
++      *kb = 0.0593;
++      return true;
++   default:
++      return false;
++   }
++}
++
++/* return a Y'CbCr format's sample and container bits */
++static void
++vlVaSampleBits(enum pipe_format format, unsigned *bits, unsigned *container_bits)
++{
++   switch (format) {
++   case PIPE_FORMAT_P010:
++      *bits = 10;
++      *container_bits = 16;
++      break;
++   case PIPE_FORMAT_P012:
++      *bits = 12;
++      *container_bits = 16;
++      break;
++   case PIPE_FORMAT_P016:
++      *bits = 16;
++      *container_bits = 16;
++      break;
++   default:
++      *bits = 8;
++      *container_bits = 8;
++      break;
++   }
++}
++
+ static unsigned
+ vlVaGetChromaLocation(unsigned va_chroma_location, enum pipe_format format)
+ {
+@@ -141,28 +228,49 @@
+    dst_rect.x1 = dst_region->x + dst_region->width;
+    dst_rect.y1 = dst_region->y + dst_region->height;
+ 
++   double kr, kb;
++   bool weighted = false;
++
+    if (src_yuv == dst_yuv) {
+       color_standard = VL_CSC_COLOR_STANDARD_IDENTITY;
+    } else if (src_yuv) {
+-      switch (param->surface_color_standard) {
+-      case VAProcColorStandardBT601:
++      bool is_explicit = param->surface_color_standard == VAProcColorStandardExplicit;
++      unsigned mc = vlVaMatrixCoefficients(param->surface_color_standard,
++                                           &param->input_color_properties);
++      if (!is_explicit && (mc == 5 || mc == 6) && !src_full_range) {
+          color_standard = VL_CSC_COLOR_STANDARD_BT_601;
+-         break;
+-      case VAProcColorStandardBT709:
+-      default:
++      } else if ((is_explicit || mc != 1) && vlVaLumaWeights(mc, &kr, &kb)) {
++         weighted = true;
++      } else {
+          color_standard = src_full_range ?
+             VL_CSC_COLOR_STANDARD_BT_709_FULL :
+             VL_CSC_COLOR_STANDARD_BT_709;
+-         break;
+       }
+    } else {
++      bool is_explicit = param->output_color_standard == VAProcColorStandardExplicit;
++      unsigned mc = vlVaMatrixCoefficients(param->output_color_standard,
++                                           &param->output_color_properties);
+       color_standard = VL_CSC_COLOR_STANDARD_BT_709_REV;
++      weighted = (is_explicit || mc != 1) && vlVaLumaWeights(mc, &kr, &kb);
+    }
+ 
+-   if (util_format_get_nr_components(src->buffer_format) == 1)
++   if (util_format_get_nr_components(src->buffer_format) == 1) {
+       color_standard = VL_CSC_COLOR_STANDARD_IDENTITY;
++      weighted = false;
++   }
++
++   if (weighted) {
++      unsigned bits, container_bits;
+ 
+-   vl_csc_get_matrix(color_standard, NULL, dst_full_range, &drv->csc);
++      vlVaSampleBits(src_yuv ? src->buffer_format : dst->buffer_format, &bits, &container_bits);
++      if (src_yuv)
++         vl_csc_get_ycbcr_to_rgb_matrix(kr, kb, bits, container_bits,
++                                        src_full_range, dst_full_range, &drv->csc);
++      else
++         vl_csc_get_rgb_to_ycbcr_matrix(kr, kb, src_full_range, bits, container_bits,
++                                        dst_full_range, &drv->csc);
++   } else
++      vl_csc_get_matrix(color_standard, NULL, dst_full_range, &drv->csc);
+    vl_compositor_set_csc_matrix(&drv->cstate, &drv->csc, 1.0f, 0.0f);
+ 
+    if (src_yuv)

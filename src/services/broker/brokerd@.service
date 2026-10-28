@@ -1,0 +1,15 @@
+[Unit]
+Description=Rhizo app broker connection
+After=rhizo-host-labels.service
+
+[Service]
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/broker/brokerd.py
+User=root
+TasksMax=64
+NoNewPrivileges=yes
+ProtectHome=read-only
+PrivateTmp=yes

@@ -1,0 +1,36 @@
+Source: rhizo
+Section: misc
+Priority: optional
+Maintainer: Liam Bilsbury <liam.bilsbury@proton.me>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: rhizo
+Architecture: amd64
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+         linux-image-rhizo (>= 7.1.0-rc1-rhizo-47),
+         linux-headers-rhizo (>= 7.1.0-rc1-rhizo-47),
+         python3 (>= 3.12),
+         systemd,
+         grub2-common,
+         kmod,
+         fuse3,
+         iproute2,
+         e2fsprogs,
+         zstd,
+         adduser,
+         libva2,
+         libva-drm2,
+         libxkbcommon0
+Recommends: desktop-file-utils,
+            shared-mime-info,
+            hicolor-icon-theme,
+            intel-media-va-driver | mesa-va-drivers,
+            pipewire,
+            wireplumber,
+            geoclue-2.0
+Suggests: xdg-utils
+Description: Android on Linux
+

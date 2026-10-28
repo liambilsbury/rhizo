@@ -1,0 +1,140 @@
+--- a/src/gallium/drivers/virgl/virgl_encode.c
++++ b/src/gallium/drivers/virgl/virgl_encode.c
+@@ -1781,7 +1781,7 @@
+ 
+    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_CREATE_VIDEO_CODEC, 0, len));
+    virgl_encoder_write_dword(ctx->cbuf, cdc->handle);
+-   virgl_encoder_write_dword(ctx->cbuf, cdc->base.profile);
++   virgl_encoder_write_dword(ctx->cbuf, virgl_video_profile_to_wire(cdc->base.profile));
+    virgl_encoder_write_dword(ctx->cbuf, cdc->base.entrypoint);
+    virgl_encoder_write_dword(ctx->cbuf, cdc->base.chroma_format);
+    virgl_encoder_write_dword(ctx->cbuf, cdc->base.level);
+--- a/src/gallium/drivers/virgl/virgl_screen.c
++++ b/src/gallium/drivers/virgl/virgl_screen.c
+@@ -40,6 +40,7 @@
+ #include "virgl_public.h"
+ #include "virgl_context.h"
+ #include "virgl_encode.h"
++#include "virgl_video_profile.h"
+ 
+ int virgl_debug = 0;
+ const struct debug_named_value virgl_debug_options[] = {
+@@ -117,7 +118,7 @@
+    if (drv_supported) {
+        /* Check if the device supports it, vcaps is NULL means not supported */
+        for (i = 0;  i < vscreen->caps.caps.v2.num_video_caps; i++) {
+-           if (vscreen->caps.caps.v2.video_caps[i].profile == profile &&
++           if (virgl_video_profile_from_wire(vscreen->caps.caps.v2.video_caps[i].profile) == profile &&
+                vscreen->caps.caps.v2.video_caps[i].entrypoint == entrypoint) {
+                vcaps = &vscreen->caps.caps.v2.video_caps[i];
+                break;
+--- a/src/gallium/drivers/virgl/virgl_video.c
++++ b/src/gallium/drivers/virgl/virgl_video.c
+@@ -101,7 +101,7 @@
+ static int fill_base_picture_desc(const struct pipe_picture_desc *desc,
+                                   struct virgl_base_picture_desc *vbase)
+ {
+-    ITEM_SET(vbase, desc, profile);
++    vbase->profile = virgl_video_profile_to_wire(desc->profile);
+     ITEM_SET(vbase, desc, entry_point);
+     ITEM_SET(vbase, desc, protected_playback);
+     ITEM_SET(vbase, desc, key_size);
+@@ -1201,6 +1201,9 @@
+                      templ->chroma_format, templ->width, templ->height,
+                      templ->max_references, templ->expect_chunked_decode);
+ 
++    if (virgl_video_profile_to_wire(templ->profile) == VIRGL_VIDEO_PROFILE_UNKNOWN)
++        return NULL;
++
+     switch (u_reduce_video_profile(templ->profile)) {
+     case PIPE_VIDEO_FORMAT_MPEG4: /* fall through */
+     case PIPE_VIDEO_FORMAT_MPEG4_AVC:
+--- a/src/gallium/drivers/virgl/virgl_video.h
++++ b/src/gallium/drivers/virgl/virgl_video.h
+@@ -40,6 +40,7 @@
+ #include "vl/vl_video_buffer.h"
+ #include "pipe/p_video_codec.h"
+ #include "virtio-gpu/virgl_video_hw.h"
++#include "virgl_video_profile.h"
+ 
+ #define VIRGL_VIDEO_CODEC_BUF_NUM    10
+ 
+--- /dev/null
++++ b/src/gallium/drivers/virgl/virgl_video_profile.h
+@@ -0,0 +1,76 @@
++/* video profiles in virglrenderer's wire numbering */
++
++#ifndef VIRGL_VIDEO_PROFILE_H
++#define VIRGL_VIDEO_PROFILE_H
++
++#include <stdint.h>
++
++#include "pipe/p_video_enums.h"
++
++enum virgl_video_profile {
++   VIRGL_VIDEO_PROFILE_UNKNOWN = 0,
++   VIRGL_VIDEO_PROFILE_MPEG1 = 1,
++   VIRGL_VIDEO_PROFILE_MPEG2_SIMPLE = 2,
++   VIRGL_VIDEO_PROFILE_MPEG2_MAIN = 3,
++   VIRGL_VIDEO_PROFILE_MPEG4_SIMPLE = 4,
++   VIRGL_VIDEO_PROFILE_MPEG4_ADVANCED_SIMPLE = 5,
++   VIRGL_VIDEO_PROFILE_VC1_SIMPLE = 6,
++   VIRGL_VIDEO_PROFILE_VC1_MAIN = 7,
++   VIRGL_VIDEO_PROFILE_VC1_ADVANCED = 8,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_BASELINE = 9,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_CONSTRAINED_BASELINE = 10,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_MAIN = 11,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_EXTENDED = 12,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_HIGH = 13,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_HIGH10 = 14,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_HIGH422 = 15,
++   VIRGL_VIDEO_PROFILE_MPEG4_AVC_HIGH444 = 16,
++   VIRGL_VIDEO_PROFILE_HEVC_MAIN = 17,
++   VIRGL_VIDEO_PROFILE_HEVC_MAIN_10 = 18,
++   VIRGL_VIDEO_PROFILE_HEVC_MAIN_STILL = 19,
++   VIRGL_VIDEO_PROFILE_HEVC_MAIN_12 = 20,
++   VIRGL_VIDEO_PROFILE_HEVC_MAIN_444 = 21,
++   VIRGL_VIDEO_PROFILE_JPEG_BASELINE = 22,
++   VIRGL_VIDEO_PROFILE_VP9_PROFILE0 = 23,
++   VIRGL_VIDEO_PROFILE_VP9_PROFILE2 = 24,
++   VIRGL_VIDEO_PROFILE_AV1_MAIN = 25,
++};
++
++#define VIRGL_VIDEO_WIRE_PROFILES(X) \
++   X(MPEG1) X(MPEG2_SIMPLE) X(MPEG2_MAIN) X(MPEG4_SIMPLE) X(MPEG4_ADVANCED_SIMPLE) \
++   X(VC1_SIMPLE) X(VC1_MAIN) X(VC1_ADVANCED) \
++   X(MPEG4_AVC_BASELINE) X(MPEG4_AVC_CONSTRAINED_BASELINE) X(MPEG4_AVC_MAIN) \
++   X(MPEG4_AVC_EXTENDED) X(MPEG4_AVC_HIGH) X(MPEG4_AVC_HIGH10) X(MPEG4_AVC_HIGH422) \
++   X(MPEG4_AVC_HIGH444) \
++   X(HEVC_MAIN) X(HEVC_MAIN_10) X(HEVC_MAIN_STILL) X(HEVC_MAIN_12) X(HEVC_MAIN_444) \
++   X(JPEG_BASELINE) X(VP9_PROFILE0) X(VP9_PROFILE2) X(AV1_MAIN)
++
++/* map a Mesa profile to its wire number */
++static inline enum virgl_video_profile
++virgl_video_profile_to_wire(enum pipe_video_profile profile)
++{
++   switch (profile) {
++#define VIRGL_VIDEO_TO_WIRE(name) \
++   case PIPE_VIDEO_PROFILE_##name: return VIRGL_VIDEO_PROFILE_##name;
++   VIRGL_VIDEO_WIRE_PROFILES(VIRGL_VIDEO_TO_WIRE)
++#undef VIRGL_VIDEO_TO_WIRE
++   default:
++      return VIRGL_VIDEO_PROFILE_UNKNOWN;
++   }
++}
++
++/* map a wire number to its Mesa profile */
++static inline enum pipe_video_profile
++virgl_video_profile_from_wire(uint32_t wire)
++{
++   switch (wire) {
++#define VIRGL_VIDEO_FROM_WIRE(name) \
++   case VIRGL_VIDEO_PROFILE_##name: return PIPE_VIDEO_PROFILE_##name;
++   VIRGL_VIDEO_WIRE_PROFILES(VIRGL_VIDEO_FROM_WIRE)
++#undef VIRGL_VIDEO_FROM_WIRE
++   default:
++      return PIPE_VIDEO_PROFILE_UNKNOWN;
++   }
++}
++
++#endif /* VIRGL_VIDEO_PROFILE_H */

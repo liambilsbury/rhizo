@@ -1,0 +1,366 @@
+diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
+index 898486aef..be97f81bf 100644
+--- a/security/selinux/global_sidtab.c
++++ b/security/selinux/global_sidtab.c
+@@ -977,8 +977,11 @@ bool security_sid_defined(struct selinux_state *state, u32 sid)
+ 	u32 len, ss_sid;
+ 
+ 	sid = security_sid_for_state(sid, state);
+-	if (sid <= SECINITSID_NUM || !selinux_initialized(state))
++	if (!selinux_initialized(state))
+ 		return true;
++	/* an initial SID's name is no context a policy defines */
++	if (sid <= SECINITSID_NUM)
++		return false;
+ 	if (global_sid_to_context(sid, &scontext, &len))
+ 		return true;
+ 	return !selinux_ss_context_to_sid(state, scontext, len, &ss_sid,
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 99a2a54e5..9fa03e8d6 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -683,6 +683,61 @@ static int fd_use_has_perm(const struct cred *cred,
+ 	return 0;
+ }
+ 
++/* return the first namespace from @cred's up that has a policy, or NULL */
++static const struct cred_security_struct *
++cred_policy_level(const struct cred *cred)
++{
++	const struct cred_security_struct *crsec = selinux_cred(cred);
++
++	while (!selinux_initialized(crsec->state)) {
++		if (!crsec->parent_cred)
++			return NULL;
++		crsec = selinux_cred(crsec->parent_cred);
++	}
++	return crsec;
++}
++
++/* return whether a namespace above @cred's with a policy cannot define @sid */
++static bool ancestor_cannot_define(const struct cred *cred, u32 sid)
++{
++	const struct cred_security_struct *crsec = selinux_cred(cred);
++
++	while (crsec->parent_cred) {
++		crsec = selinux_cred(crsec->parent_cred);
++		if (selinux_initialized(crsec->state) &&
++		    !security_sid_defined(crsec->state, sid))
++			return true;
++	}
++	return false;
++}
++
++/* return whether the current namespace is below init and has no policy to validate a string */
++static bool unvalidated_in_namespace(void)
++{
++	const struct selinux_state *state = current_selinux_state;
++
++	return state->parent && !selinux_initialized(state);
++}
++
++/* log a context a caller without mac_admin may not set */
++static void audit_invalid_context(const char *op, const char *str,
++				  size_t size)
++{
++	struct audit_buffer *ab;
++
++	/* strip a nul only at the end; one inside the context is audited */
++	if (str && size && str[size - 1] == '\0')
++		size--;
++	if (!str)
++		size = 0;
++	ab = audit_log_start(audit_context(), GFP_ATOMIC, AUDIT_SELINUX_ERR);
++	if (!ab)
++		return;
++	audit_log_format(ab, "op=%s invalid_context=", op);
++	audit_log_n_untrustedstring(ab, str, size);
++	audit_log_end(ab);
++}
++
+ /* return @sb's labelling behavior, or before its set-up, the nearest policy's for its type */
+ static unsigned short sb_behavior_seen(const struct cred_security_struct *crsec,
+ 				       const struct super_block *sb)
+@@ -2213,6 +2268,13 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+ 	    (sbsec->behavior == SECURITY_FS_USE_MNTPOINT)) {
+ 		*_new_isid = sbsec->mntpoint_sid;
+ 		return 0;
++	} else if (current_selinux_state->parent &&
++		   !selinux_initialized(current_selinux_state) &&
++		   (sb_behavior_seen(crsec, dir->i_sb) == SECURITY_FS_USE_XATTR ||
++		    sb_behavior_seen(crsec, dir->i_sb) == SECURITY_FS_USE_NATIVE)) {
++		/* no xattr is written, so every namespace reads the default */
++		*_new_isid = sbsec->def_sid;
++		return 0;
+ 	} else if (selinux_is_sblabel_mnt(dir->i_sb) &&
+ 		   crsec->create_sid) {
+ 		*_new_isid = security_sid_primary(crsec->create_sid);
+@@ -2745,7 +2807,14 @@ static int selinux_bprm_creds_for_exec(struct linux_binprm *bprm)
+ 		new_crsec->sid = SECINITSID_INIT;
+ 		/* also clear the exec_sid just in case */
+ 		new_crsec->exec_sid = 0;
+-		return 0;
++		/* the ancestors' SIDs do not change: each checks execute_no_trans */
++		if (!old_crsec->parent_cred)
++			return 0;
++		ad.type = LSM_AUDIT_DATA_FILE;
++		ad.u.file = bprm->file;
++		return cred_tsid_has_perm(old_crsec->parent_cred, isec->sid,
++					  SECCLASS_FILE, FILE__EXECUTE_NO_TRANS,
++					  &ad);
+ 	}
+ 
+ 	if (old_crsec->exec_sid) {
+@@ -3480,18 +3549,21 @@ static int selinux_inode_init_security_anon(struct inode *inode,
+ 					    const struct qstr *name,
+ 					    const struct inode *context_inode)
+ {
++	const struct cred_security_struct *lvl;
+ 	u32 sid = current_sid();
+ 	struct common_audit_data ad;
+ 	struct inode_security_struct *isec;
+ 	int rc;
+ 	bool is_memfd = false;
+ 
+-	if (unlikely(!selinux_initialized(current_selinux_state)))
++	/* label it when this namespace or one above has a policy */
++	lvl = cred_policy_level(current_cred());
++	if (unlikely(!lvl))
+ 		return 0;
+ 
+ 	if (name != NULL && name->name != NULL &&
+ 	    !strcmp(name->name, MEMFD_ANON_NAME)) {
+-		if (!selinux_policycap_memfd_class())
++		if (!READ_ONCE(lvl->state->policycap[POLICYDB_CAP_MEMFD_CLASS]))
+ 			return 0;
+ 		is_memfd = true;
+ 	}
+@@ -3898,7 +3970,8 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+ 	if (strcmp(name, XATTR_NAME_SELINUX))
+ 		return dentry_has_perm(current_cred(), dentry, FILE__SETATTR);
+ 
+-	if (!selinux_initialized(current_selinux_state))
++	/* with no policy here or above, any owner may set the label */
++	if (!cred_policy_level(cred))
+ 		return (inode_owner_or_capable(idmap, inode) ? 0 : -EPERM);
+ 
+ 	if (!selinux_is_sblabel_mnt(inode->i_sb))
+@@ -3916,37 +3989,30 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+ 	if (rc)
+ 		return rc;
+ 
+-	rc = security_context_to_sid(current_selinux_state, value, size, &newsid,
+-				     GFP_KERNEL);
+-	if (rc == -EINVAL) {
+-		if (!has_cap_mac_admin(true)) {
+-			struct audit_buffer *ab;
+-			size_t audit_size;
+-
+-			/* We strip a nul only if it is at the end, otherwise the
+-			 * context contains a nul and we should audit that */
+-			if (value) {
+-				const char *str = value;
+-
+-				if (str[size - 1] == '\0')
+-					audit_size = size - 1;
+-				else
+-					audit_size = size;
+-			} else {
+-				audit_size = 0;
+-			}
+-			ab = audit_log_start(audit_context(),
+-					     GFP_ATOMIC, AUDIT_SELINUX_ERR);
+-			if (!ab)
+-				return rc;
+-			audit_log_format(ab, "op=setxattr invalid_context=");
+-			audit_log_n_untrustedstring(ab, value, audit_size);
+-			audit_log_end(ab);
+-
+-			return rc;
+-		}
++	/* a namespace with no policy keeps the string; the ones above decide */
++	if (!selinux_initialized(current_selinux_state)) {
+ 		rc = security_context_to_sid_force(current_selinux_state, value,
+ 						   size, &newsid);
++		/* a label kept in memory by transition changes no ancestor's view */
++		if (!rc &&
++		    !sb_labels_by_transition(selinux_cred(cred), inode->i_sb) &&
++		    ancestor_cannot_define(cred, newsid) &&
++		    !has_cap_mac_admin(true)) {
++			audit_invalid_context("setxattr", value, size);
++			return -EINVAL;
++		}
++	} else {
++		rc = security_context_to_sid(current_selinux_state, value,
++					     size, &newsid, GFP_KERNEL);
++		if (rc == -EINVAL) {
++			if (!has_cap_mac_admin(true)) {
++				audit_invalid_context("setxattr", value, size);
++				return rc;
++			}
++			rc = security_context_to_sid_force(current_selinux_state,
++							   value, size,
++							   &newsid);
++		}
+ 	}
+ 	if (rc)
+ 		return rc;
+@@ -4065,7 +4131,7 @@ static int selinux_inode_removexattr(struct mnt_idmap *idmap,
+ 	if (strcmp(name, XATTR_NAME_SELINUX))
+ 		return dentry_has_perm(current_cred(), dentry, FILE__SETATTR);
+ 
+-	if (!selinux_initialized(current_selinux_state))
++	if (!cred_policy_level(current_cred()))
+ 		return 0;
+ 
+ 	/* No one is allowed to remove a SELinux security label.
+@@ -4225,8 +4291,13 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
+ 		return 0;
+ 	}
+ 
+-	rc = security_context_to_sid(current_selinux_state, value, size, &newsid,
+-				     GFP_KERNEL);
++	/* a namespace with no policy keeps the string selinux_inode_setxattr() checked */
++	if (!selinux_initialized(current_selinux_state))
++		rc = security_context_to_sid_force(current_selinux_state,
++						   value, size, &newsid);
++	else
++		rc = security_context_to_sid(current_selinux_state, value,
++					     size, &newsid, GFP_KERNEL);
+ 	if (rc)
+ 		return rc;
+ 
+@@ -5556,8 +5627,10 @@ static int socket_sockcreate_sid(const struct cred_security_struct *crsec,
+ 	return rc;
+ }
+ 
+-static bool sock_skip_has_perm(u32 sid)
++static bool sock_skip_has_perm(struct selinux_state *state, u32 sid)
+ {
++	/* decide by the label this namespace sees */
++	sid = security_sid_for_state(sid, state);
+ 	if (sid == SECINITSID_KERNEL)
+ 		return true;
+ 
+@@ -5572,12 +5645,42 @@ static bool sock_skip_has_perm(u32 sid)
+ 	 * still be skipped in this check regardless of the policycap
+ 	 * setting.
+ 	 */
+-	if (!selinux_policycap_userspace_initial_context() &&
++	if (!READ_ONCE(state->policycap[POLICYDB_CAP_USERSPACE_INITIAL_CONTEXT]) &&
+ 	    sid == SECINITSID_INIT)
+ 		return true;
+ 	return false;
+ }
+ 
++/* check @perms on a socket in each namespace of the current cred that does not skip it */
++static int sock_cred_has_perm(u32 sid, u16 sclass, u32 perms, bool xperm,
++			      u8 driver, u8 xp, struct common_audit_data *ad)
++{
++	const struct cred *cred = current_cred();
++	const struct cred_security_struct *crsec;
++	int rc;
++
++	do {
++		crsec = selinux_cred(cred);
++		if (!sock_skip_has_perm(crsec->state, sid)) {
++			if (xperm)
++				rc = avc_has_extended_perms(crsec->state,
++							    crsec->sid, sid,
++							    sclass, perms,
++							    driver,
++							    AVC_EXT_NLMSG, xp,
++							    ad);
++			else
++				rc = avc_has_perm(crsec->state, crsec->sid,
++						  sid, sclass, perms, ad);
++			if (rc)
++				return rc;
++		}
++		cred = crsec->parent_cred;
++	} while (cred);
++
++	return 0;
++}
++
+ 
+ static int sock_has_perm(struct sock *sk, u32 perms)
+ {
+@@ -5585,13 +5688,10 @@ static int sock_has_perm(struct sock *sk, u32 perms)
+ 	struct common_audit_data ad;
+ 	struct lsm_network_audit net;
+ 
+-	if (sock_skip_has_perm(sksec->sid))
+-		return 0;
+-
+ 	ad_net_init_from_sk(&ad, &net, sk);
+ 
+-	return cred_tsid_has_perm(current_cred(), sksec->sid, sksec->sclass,
+-				  perms, &ad);
++	return sock_cred_has_perm(sksec->sid, sksec->sclass, perms, false, 0,
++				  0, &ad);
+ }
+ 
+ static int selinux_socket_create(int family, int type,
+@@ -6959,18 +7059,14 @@ static int nlmsg_sock_has_extended_perms(struct sock *sk, u32 perms, u16 nlmsg_t
+ 	u8 driver;
+ 	u8 xperm;
+ 
+-	if (sock_skip_has_perm(sksec->sid))
+-		return 0;
+-
+ 	ad.type = LSM_AUDIT_DATA_NLMSGTYPE;
+ 	ad.u.nlmsg_type = nlmsg_type;
+ 
+ 	driver = nlmsg_type >> 8;
+ 	xperm = nlmsg_type & 0xff;
+ 
+-	return cred_has_extended_perms(current_cred(), sksec->sid,
+-				       sksec->sclass, perms, driver,
+-				       AVC_EXT_NLMSG, xperm, &ad);
++	return sock_cred_has_perm(sksec->sid, sksec->sclass, perms, true,
++				  driver, xperm, &ad);
+ }
+ 
+ static int selinux_netlink_send(struct sock *sk, struct sk_buff *skb)
+@@ -7539,26 +7635,7 @@ static int selinux_lsm_setattr(u64 attr, void *value, size_t size)
+ 						&sid, GFP_KERNEL);
+ 		if (error == -EINVAL && attr == LSM_ATTR_FSCREATE) {
+ 			if (!has_cap_mac_admin(true)) {
+-				struct audit_buffer *ab;
+-				size_t audit_size;
+-
+-				/* We strip a nul only if it is at the end,
+-				 * otherwise the context contains a nul and
+-				 * we should audit that */
+-				if (str[size - 1] == '\0')
+-					audit_size = size - 1;
+-				else
+-					audit_size = size;
+-				ab = audit_log_start(audit_context(),
+-						     GFP_ATOMIC,
+-						     AUDIT_SELINUX_ERR);
+-				if (!ab)
+-					return error;
+-				audit_log_format(ab, "op=fscreate invalid_context=");
+-				audit_log_n_untrustedstring(ab, value,
+-							    audit_size);
+-				audit_log_end(ab);
+-
++				audit_invalid_context("fscreate", str, size);
+ 				return error;
+ 			}
+ 			error = security_context_to_sid_force(state, value,
+@@ -7566,6 +7643,12 @@ static int selinux_lsm_setattr(u64 attr, void *value, size_t size)
+ 		}
+ 		if (error)
+ 			return error;
++		/* no namespace validated it: keep the ancestors' mac_admin check */
++		if (attr != LSM_ATTR_UNSHARE && unvalidated_in_namespace() &&
++		    !has_cap_mac_admin(true)) {
++			audit_invalid_context("setattr", str, size);
++			return -EINVAL;
++		}
+ 	}
+ 
+ 	new = prepare_creds();

@@ -1,0 +1,73 @@
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 1842f134b..718ab3a56 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -9084,6 +9084,14 @@ unsigned int selinux_maxnsdepth = CONFIG_SECURITY_SELINUX_MAXNSDEPTH;
+ 
+ static atomic_t selinux_nsnum = ATOMIC_INIT(0);
+ 
++#ifdef CONFIG_SECURITY_SELINUX_NS
++/* return the number of SELinux namespaces alive */
++unsigned int selinux_ns_count(void)
++{
++	return atomic_read(&selinux_nsnum);
++}
++#endif
++
+ /* ids of SELinux namespaces, never reused */
+ static atomic64_t selinux_state_ids = ATOMIC64_INIT(0);
+ 
+diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
+index baa0e346a..07f600b98 100644
+--- a/security/selinux/include/security.h
++++ b/security/selinux/include/security.h
+@@ -119,6 +119,7 @@ struct selinux_state {
+ } __randomize_layout;
+ 
+ extern unsigned int selinux_maxns, selinux_maxnsdepth;
++unsigned int selinux_ns_count(void);
+ int selinux_state_create(const struct cred *cred);
+ void __put_selinux_state(struct selinux_state *state);
+ 
+diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
+index 269e28762..4c18de105 100644
+--- a/security/selinux/selinuxfs.c
++++ b/security/selinux/selinuxfs.c
+@@ -70,6 +70,7 @@ enum sel_inos {
+ #ifdef CONFIG_SECURITY_SELINUX_NS
+ 	SEL_MAXNS,	    /* maximum number of SELinux namespaces */
+ 	SEL_MAXNSDEPTH,	    /* maximum depth of SELinux namespaces */
++	SEL_NSCOUNT,	    /* number of SELinux namespaces alive */
+ #endif
+ 	SEL_INO_NEXT,	/* The next inode number to use */
+ };
+@@ -327,6 +328,21 @@ static const struct file_operations sel_disable_ops = {
+ };
+ 
+ #ifdef CONFIG_SECURITY_SELINUX_NS
++static ssize_t sel_read_nscount(struct file *filp, char __user *buf,
++				size_t count, loff_t *ppos)
++{
++	char tmpbuf[TMPBUFLEN];
++	ssize_t length;
++
++	length = scnprintf(tmpbuf, TMPBUFLEN, "%u", selinux_ns_count());
++	return simple_read_from_buffer(buf, count, ppos, tmpbuf, length);
++}
++
++static const struct file_operations sel_nscount_ops = {
++	.read		= sel_read_nscount,
++	.llseek		= generic_file_llseek,
++};
++
+ static ssize_t sel_read_maxns(struct file *filp, char __user *buf,
+ 			     size_t count, loff_t *ppos)
+ {
+@@ -2278,6 +2294,7 @@ static int sel_fill_super(struct super_block *sb, struct fs_context *fc)
+ #ifdef CONFIG_SECURITY_SELINUX_NS
+ 		[SEL_MAXNS] = {"maxns", &sel_maxns_ops, 0600},
+ 		[SEL_MAXNSDEPTH] = {"maxnsdepth", &sel_maxnsdepth_ops, 0600},
++		[SEL_NSCOUNT] = {"nscount", &sel_nscount_ops, 0400},
+ #endif
+ 		/* last one */ {"", NULL, 0}
+ 	};

@@ -1,0 +1,220 @@
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 2ae1a9b13..706277dfd 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -477,6 +477,84 @@ static int may_context_mount_inode_relabel(u32 sid,
+ 				 FILESYSTEM__ASSOCIATE, NULL);
+ }
+ 
++/* return the SID of superblock @sb in @state's own policy */
++static u32 sb_sid_for_state(struct selinux_state *state,
++			    const struct super_block *sb)
++{
++	struct superblock_security_struct *sbsec = selinux_superblock(sb);
++	unsigned short behavior;
++	u32 sid;
++	int rc;
++
++	if ((sbsec->flags & (CONTEXT_MNT | FSCONTEXT_MNT)) ||
++	    (state == init_selinux_state && !(sbsec->flags & SE_SBNSLABEL)) ||
++	    !selinux_initialized(state))
++		return sbsec->sid;
++
++	if (sbsec->behavior == SECURITY_FS_USE_GENFS)
++		rc = security_genfs_sid(state, sb->s_type->name, "/",
++					SECCLASS_DIR, &sid);
++	else
++		rc = security_fs_use(state, sb->s_type->name, &behavior, &sid);
++	if (rc)
++		return sbsec->sid;
++	return sid;
++}
++
++/* check @cred's @perms on @sb in each namespace */
++static int cred_sb_has_perm(const struct cred *cred,
++			    const struct super_block *sb, u32 perms,
++			    struct common_audit_data *ad)
++{
++	struct superblock_security_struct *sbsec = selinux_superblock(sb);
++	const struct cred_security_struct *crsec = selinux_cred(cred);
++	int rc;
++
++	if (!crsec->parent_cred && !(sbsec->flags & SE_SBNSLABEL))
++		return cred_tsid_has_perm(cred, sbsec->sid, SECCLASS_FILESYSTEM,
++					  perms, ad);
++
++	do {
++		crsec = selinux_cred(cred);
++		rc = avc_has_perm(crsec->state, crsec->sid,
++				  sb_sid_for_state(crsec->state, sb),
++				  SECCLASS_FILESYSTEM, perms, ad);
++		if (rc)
++			return rc;
++		cred = crsec->parent_cred;
++	} while (cred);
++
++	return 0;
++}
++
++/* check that @ssid may be associated with @sb in each namespace */
++static int cred_obj_sb_associate(const struct cred *cred, u32 ssid,
++				 const struct super_block *sb,
++				 struct common_audit_data *ad)
++{
++	struct superblock_security_struct *sbsec = selinux_superblock(sb);
++	const struct cred_security_struct *crsec = selinux_cred(cred);
++	int rc;
++
++	if (!crsec->parent_cred && !(sbsec->flags & SE_SBNSLABEL))
++		return cred_obj_has_perm(cred, ssid, sbsec->sid,
++					 SECCLASS_FILESYSTEM,
++					 FILESYSTEM__ASSOCIATE, ad);
++
++	do {
++		crsec = selinux_cred(cred);
++		rc = avc_has_perm(crsec->state, ssid,
++				  sb_sid_for_state(crsec->state, sb),
++				  SECCLASS_FILESYSTEM, FILESYSTEM__ASSOCIATE,
++				  ad);
++		if (rc)
++			return rc;
++		cred = crsec->parent_cred;
++	} while (cred);
++
++	return 0;
++}
++
+ static int selinux_is_genfs_special_handling(struct super_block *sb)
+ {
+ 	/* Special handling. Genfs but also in-core setxattr handler */
+@@ -668,6 +746,8 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
+ 			}
+ 			if (current_selinux_state == init_selinux_state)
+ 				sbsec->flags |= SE_SBINITNSDEFER;
++			else if (!(sbsec->flags & SE_SBINITIALIZED))
++				sbsec->flags |= SE_SBNSLABEL;
+ 			goto out;
+ 		}
+ 		rc = -EINVAL;
+@@ -738,6 +818,8 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
+ 	}
+ 
+ 	sbsec->creator_sid = creator_sid;
++	if (current_selinux_state != init_selinux_state)
++		sbsec->flags |= SE_SBNSLABEL;
+ 
+ 	if (strcmp(sb->s_type->name, "proc") == 0)
+ 		sbsec->flags |= SE_SBPROC | SE_SBGENFS;
+@@ -1014,6 +1096,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
+ 		}
+ 		if (current_selinux_state == init_selinux_state)
+ 			newsbsec->flags |= SE_SBINITNSDEFER;
++		else if (!(newsbsec->flags & SE_SBINITIALIZED))
++			newsbsec->flags |= SE_SBNSLABEL;
+ 		goto out;
+ 	}
+ 
+@@ -1029,6 +1113,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
+ 	}
+ 
+ 	newsbsec->flags = oldsbsec->flags;
++	if (current_selinux_state != init_selinux_state)
++		newsbsec->flags |= SE_SBNSLABEL;
+ 
+ 	newsbsec->sid = oldsbsec->sid;
+ 	newsbsec->def_sid = oldsbsec->def_sid;
+@@ -1596,7 +1682,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+ 		break;
+ 	case SECURITY_FS_USE_TRANS:
+ 		/* Default to the fs SID. */
+-		sid = sbsec->sid;
++		sid = sb_sid_for_state(state, sb);
+ 
+ 		/* Try to obtain a transition SID. */
+ 		rc = security_transition_sid(state, task_sid, sid, sclass,
+@@ -1609,7 +1695,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+ 		break;
+ 	default:
+ 		/* Default to the fs superblock SID. */
+-		sid = sbsec->sid;
++		sid = sb_sid_for_state(state, sb);
+ 
+ 		if ((sbsec->flags & SE_SBGENFS) &&
+ 		     (!S_ISLNK(inode->i_mode) ||
+@@ -1930,13 +2016,11 @@ static int may_create(struct inode *dir,
+ 	const struct cred *cred = current_cred();
+ 	const struct cred_security_struct *crsec = selinux_cred(cred);
+ 	struct inode_security_struct *dsec;
+-	struct superblock_security_struct *sbsec;
+ 	u32 newsid;
+ 	struct common_audit_data ad;
+ 	int rc;
+ 
+ 	dsec = inode_security(dir);
+-	sbsec = selinux_superblock(dir->i_sb);
+ 
+ 	ad.type = LSM_AUDIT_DATA_DENTRY;
+ 	ad.u.dentry = dentry;
+@@ -1956,9 +2040,7 @@ static int may_create(struct inode *dir,
+ 	if (rc)
+ 		return rc;
+ 
+-	return cred_obj_has_perm(cred, newsid, sbsec->sid,
+-				 SECCLASS_FILESYSTEM, FILESYSTEM__ASSOCIATE,
+-				 &ad);
++	return cred_obj_sb_associate(cred, newsid, dir->i_sb, &ad);
+ }
+ 
+ #define MAY_LINK	0
+@@ -2069,11 +2151,7 @@ static int superblock_has_perm(const struct cred *cred,
+ 			       u32 perms,
+ 			       struct common_audit_data *ad)
+ {
+-	struct superblock_security_struct *sbsec;
+-
+-	sbsec = selinux_superblock(sb);
+-	return cred_tsid_has_perm(cred, sbsec->sid, SECCLASS_FILESYSTEM, perms,
+-				  ad);
++	return cred_sb_has_perm(cred, sb, perms, ad);
+ }
+ 
+ /* Convert a Linux mode and permission mask to an access vector. */
+@@ -3577,7 +3655,6 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+ 	const struct cred *cred = current_cred();
+ 	struct inode *inode = d_backing_inode(dentry);
+ 	struct inode_security_struct *isec;
+-	struct superblock_security_struct *sbsec;
+ 	struct common_audit_data ad;
+ 	u32 newsid;
+ 	int rc = 0;
+@@ -3589,7 +3666,6 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+ 	if (!selinux_initialized(current_selinux_state))
+ 		return (inode_owner_or_capable(idmap, inode) ? 0 : -EPERM);
+ 
+-	sbsec = selinux_superblock(inode->i_sb);
+ 	if (!selinux_is_sblabel_mnt(inode->i_sb))
+ 		return -EOPNOTSUPP;
+ 
+@@ -3650,9 +3726,7 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+ 	if (rc)
+ 		return rc;
+ 
+-	return cred_obj_has_perm(cred, newsid, sbsec->sid,
+-				 SECCLASS_FILESYSTEM,
+-				 FILESYSTEM__ASSOCIATE, &ad);
++	return cred_obj_sb_associate(cred, newsid, inode->i_sb, &ad);
+ }
+ 
+ static int selinux_inode_set_acl(struct mnt_idmap *idmap,
+diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
+index 5f43e950a..b3a1e4950 100644
+--- a/security/selinux/include/security.h
++++ b/security/selinux/include/security.h
+@@ -70,6 +70,7 @@
+ #define SE_SBNATIVE	 0x1000
+ #define SE_SBINITNSDEFER 0x2000	/* deferred in the init namespace */
+ #define SE_SBINITFAIL	 0x4000	/* lazy initialization failed */
++#define SE_SBNSLABEL	 0x8000	/* labelled in a non-init namespace */
+ 
+ #define CONTEXT_STR	"context"
+ #define FSCONTEXT_STR	"fscontext"

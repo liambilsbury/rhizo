@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Rhizo app manager
+Icon=system-software-install
+Exec=/usr/lib/rhizo/tools/appstream-open.py %u
+NoDisplay=true

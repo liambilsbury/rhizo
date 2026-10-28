@@ -1,0 +1,1226 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Rhizo
+Source: https://github.com/liambilsbury/rhizo
+
+Files: *
+Copyright: 2026 Liam Bilsbury
+License: BSL-1.1
+
+Files: usr/lib/rhizo/tools/aapt2
+Copyright: 2005-2025 The Android Open Source Project
+ 2017-2025 The Abseil Authors
+ 2008 Google Inc.
+ 2022 Google LLC
+ 2019 Yibo Cai
+ 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper
+ 2001-2025 Expat maintainers
+ 2012-2025 Victor Zverovich and {fmt} contributors
+ 1995-2025 The PNG Reference Library Authors
+ 2018-2025 Cosmin Truta
+ 2000-2018 Glenn Randers-Pehrson
+ 1996-1997 Andreas Dilger
+ 1995-1996 Guy Eric Schalnat, Group 42, Inc.
+ 1995-2022 Jean-loup Gailly and Mark Adler
+ 2017-2018 The Chromium Authors
+ 2013 Intel Corporation
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: Apache-2.0 and Apache-2.0-LLVM and BSD-3-clause-protobuf and BSD-3-clause-chromium-zlib and Expat and MIT-fmtlib and MIT-utf8-range and Zlib and libpng-2.0
+
+Files: usr/lib/rhizo/gfx_hal/libgallium_dri.so
+ usr/lib/rhizo/gpu_driver/lib/libgallium_dri.so
+ usr/lib/rhizo/gpu_driver/dri/virtio_gpu_drv_video.so
+ usr/lib/rhizo/gpu_driver_32/lib/libgallium_dri.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libgallium_dri.so
+ usr/lib/rhizo/gpu_driver_amd/dri/radeonsi_drv_video.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libgallium_dri.so
+Copyright: 2008-2024 Intel Corporation
+ 1999-2023 VMware, Inc.
+ 1999-2010 Brian Paul
+ 2013-2025 Advanced Micro Devices, Inc.
+ 2017-2025 Valve Corporation
+ 2010-2023 Red Hat, Inc.
+ 2012-2025 Collabora, Ltd.
+ 2017-2024 Google, Inc.
+ 2014-2019 Broadcom
+ 2009-2013 Marek Olsak
+ 2010-2013 LunarG, Inc.
+ 2009-2011 Chia-I Wu
+ and the other holders named in each source file
+ 2019 Jack O'Connor and Samuel Neves
+ 2012-2016 Yann Collet
+ 2011-2018 The Regents of the University of California
+ 2010 Jorge Jimenez, Belen Masia, Jose I. Echevarria, Fernando Navarro and
+ Diego Gutierrez
+ 2011 Lauri Kasanen
+ 2012 yohhoy
+ 2022 Yonggang Luo
+ Steve Reid
+ 2012-2015 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: MIT-Mesa and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic and BSD-2-clause-xxHash and BSD-3-clause-MLAA and BSD-3-clause-SoftFloat and BSL-1.0 and public-domain-sha1
+
+Files: usr/lib/rhizo/gpu_driver_software/lib/libgallium_dri.so
+Copyright: 2008-2024 Intel Corporation
+ 1999-2023 VMware, Inc.
+ 1999-2010 Brian Paul
+ 2013-2025 Advanced Micro Devices, Inc.
+ 2017-2025 Valve Corporation
+ 2010-2023 Red Hat, Inc.
+ 2012-2025 Collabora, Ltd.
+ 2017-2024 Google, Inc.
+ 2014-2019 Broadcom
+ 2009-2013 Marek Olsak
+ 2010-2013 LunarG, Inc.
+ 2009-2011 Chia-I Wu
+ and the other holders named in each source file
+ 2019 Jack O'Connor and Samuel Neves
+ 2012-2021 Yann Collet
+ 2011-2018 The Regents of the University of California
+ 2010 Jorge Jimenez, Belen Masia, Jose I. Echevarria, Fernando Navarro and
+ Diego Gutierrez
+ 2011 Lauri Kasanen
+ 2012 yohhoy
+ 2022 Yonggang Luo
+ Steve Reid
+ 2012-2015 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+ 1992-1994 Henry Spencer
+ 1992-1994 The Regents of the University of California
+ 1991-2015 Unicode, Inc.
+ 2001 Alexander Peslyak
+ 1998 Todd C. Miller
+License: MIT-Mesa and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic and BSD-2-clause-xxHash and BSD-3-clause-spencer-regex and BSD-3-clause-MLAA and BSD-3-clause-SoftFloat and BSL-1.0 and ISC-strlcpy and public-domain-sha1 and public-domain-md5 and Unicode-DFS-2015
+
+Files: usr/lib/rhizo/gfx_hal/dri_gbm.so
+ usr/lib/rhizo/gpu_driver/lib/dri_gbm.so
+ usr/lib/rhizo/gpu_driver_32/lib/dri_gbm.so
+ usr/lib/rhizo/gpu_driver/egl/libEGL_rhizo.so
+ usr/lib/rhizo/gpu_driver_32/egl/libEGL_rhizo.so
+ usr/lib/rhizo/gpu_driver_software/lib/dri_gbm.so
+ usr/lib/rhizo/gpu_driver_software/egl/libEGL_rhizo.so
+ usr/lib/rhizo/gpu_driver_amd/lib/dri_gbm.so
+ usr/lib/rhizo/gpu_driver_amd/egl/libEGL_rhizo.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/dri_gbm.so
+ usr/lib/rhizo/gpu_driver_amd_32/egl/libEGL_rhizo.so
+Copyright: 2008-2010 VMware, Inc.
+ 2009-2022 Intel Corporation
+ 2010-2011 LunarG, Inc.
+ 2009-2011 Chia-I Wu
+ 2016-2024 Advanced Micro Devices, Inc.
+ 1999-2008 Brian Paul
+ 2017-2025 Valve Corporation
+ 2012-2022 Collabora, Ltd.
+ 2017-2024 Google, Inc.
+ 2022 Yonggang Luo
+ and the other holders named in each source file
+ Steve Reid
+ 2012-2015 The Android Open Source Project
+License: MIT-Mesa and Apache-2.0-LLVM and BSD-2-clause-bionic and public-domain-sha1
+
+Files: usr/lib/rhizo/gfx_hal/libgbm_mesa.so
+ usr/lib/rhizo/gpu_driver/egl/libGLESv1_CM_rhizo.so
+ usr/lib/rhizo/gpu_driver/egl/libGLESv2_rhizo.so
+ usr/lib/rhizo/gpu_driver/lib/libgbm_mesa.so
+ usr/lib/rhizo/gpu_driver/lib/libhardware.so
+ usr/lib/rhizo/gpu_driver_32/egl/libGLESv1_CM_rhizo.so
+ usr/lib/rhizo/gpu_driver_32/egl/libGLESv2_rhizo.so
+ usr/lib/rhizo/gpu_driver_32/lib/libgbm_mesa.so
+ usr/lib/rhizo/gpu_driver_software/egl/libGLESv1_CM_rhizo.so
+ usr/lib/rhizo/gpu_driver_software/egl/libGLESv2_rhizo.so
+ usr/lib/rhizo/gpu_driver_software/lib/libgbm_mesa.so
+ usr/lib/rhizo/gpu_driver_software/lib/libhardware.so
+ usr/lib/rhizo/gpu_driver_amd/egl/libGLESv1_CM_rhizo.so
+ usr/lib/rhizo/gpu_driver_amd/egl/libGLESv2_rhizo.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libgbm_mesa.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libhardware.so
+ usr/lib/rhizo/gpu_driver_amd_32/egl/libGLESv1_CM_rhizo.so
+ usr/lib/rhizo/gpu_driver_amd_32/egl/libGLESv2_rhizo.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libgbm_mesa.so
+Copyright: 2008-2010 VMware, Inc.
+ 2009-2022 Intel Corporation
+ 2016-2024 Advanced Micro Devices, Inc.
+ 2017-2025 Valve Corporation
+ 1999-2008 Brian Paul
+ 2012-2022 Collabora, Ltd.
+ 2017-2024 Google, Inc.
+ 2011 Red Hat, Inc.
+ 2020 Lag Free Games, LLC
+ and the other holders named in each source file
+ 2012-2015 The Android Open Source Project
+License: MIT-Mesa and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/gfx_hal/libdrm.so
+ usr/lib/rhizo/gpu_driver/lib/libdrm.so
+ usr/lib/rhizo/gpu_driver_32/lib/libdrm.so
+ usr/lib/rhizo/gpu_driver_software/lib/libdrm.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libdrm.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libdrm.so
+Copyright: 1999 Precision Insight, Inc.
+ 2000 VA Linux Systems, Inc.
+ 2007-2008 Tungsten Graphics, Inc.
+ 2007-2008 Dave Airlie
+ 2007-2008 Jakob Bornecrantz
+ 2012-2015 The Android Open Source Project
+License: MIT-libdrm and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/gpu_driver_amd/lib/libdrm_amdgpu.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libdrm_amdgpu.so
+Copyright: 2014-2018 Advanced Micro Devices, Inc.
+ 1999 Precision Insight, Inc.
+ 2000 VA Linux Systems, Inc.
+ 2012-2015 The Android Open Source Project
+License: MIT-libdrm and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/gpu_driver/lib/libva.so
+ usr/lib/rhizo/gpu_driver/lib/libva-drm.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libva.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libva-drm.so
+Copyright: 2007-2024 Intel Corporation
+ 2009 Splitted-Desktop Systems
+ 2023 Emil Velikov
+ 2012-2015 The Android Open Source Project
+License: MIT-libva and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/gpu_driver_amd/hw/vulkan.rhizo.so
+ usr/lib/rhizo/gpu_driver_amd_32/hw/vulkan.rhizo.so
+Copyright: 2016 Red Hat, Inc.
+ 2016 Bas Nieuwenhuizen
+ 2013-2025 Advanced Micro Devices, Inc.
+ 2015-2024 Intel Corporation
+ 2017-2025 Valve Corporation
+ 2012-2025 Collabora, Ltd.
+ 2017-2024 Google, Inc.
+ and the other holders named in each source file
+ 2019 Jack O'Connor and Samuel Neves
+ 2012-2016 Yann Collet
+ 2011-2018 The Regents of the University of California
+ Steve Reid
+ 2012-2015 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: MIT-Mesa and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic and BSD-2-clause-xxHash and BSD-3-clause-SoftFloat and public-domain-sha1
+
+Files: usr/lib/rhizo/gfx_hal/libc++_shared.so
+Copyright: 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: Apache-2.0-LLVM
+
+Files: usr/lib/rhizo/gfx_hal/libcutils_real.so
+ usr/lib/rhizo/gpu_driver/lib/libcutils.so
+ usr/lib/rhizo/gpu_driver_32/lib/libcutils.so
+ usr/lib/rhizo/gpu_driver_32/lib/libhardware.so
+ usr/lib/rhizo/gpu_driver_software/lib/libcutils.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libcutils.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libcutils.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libhardware.so
+Copyright: 2006-2025 The Android Open Source Project
+License: Apache-2.0
+
+Files: usr/lib/rhizo/gpu_driver/lib/libbase.so
+ usr/lib/rhizo/gpu_driver_32/lib/libbase.so
+ usr/lib/rhizo/gpu_driver_software/lib/libbase.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libbase.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libbase.so
+Copyright: 2006-2025 The Android Open Source Project
+ 2012-2025 Victor Zverovich and {fmt} contributors
+License: Apache-2.0 and MIT-fmtlib
+
+Files: usr/lib/rhizo/gpu_driver/lib/libc++.so
+ usr/lib/rhizo/gpu_driver_32/lib/libc++.so
+ usr/lib/rhizo/gpu_driver_software/lib/libc++.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libc++.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libc++.so
+Copyright: 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: Apache-2.0-LLVM
+
+Files: usr/lib/rhizo/gpu_driver/lib/libz.so
+ usr/lib/rhizo/gpu_driver_32/lib/libz.so
+ usr/lib/rhizo/gpu_driver_software/lib/libz.so
+ usr/lib/rhizo/gpu_driver_amd/lib/libz.so
+ usr/lib/rhizo/gpu_driver_amd_32/lib/libz.so
+Copyright: 1995-2024 Jean-loup Gailly and Mark Adler
+ 2013 Intel Corporation
+ 2017-2018 The Chromium Authors
+License: Zlib and BSD-3-clause-chromium-zlib
+
+Files: usr/lib/rhizo/rhizo-keymint-service
+Copyright: 2006-2025 The Android Open Source Project
+ 2019 Google LLC
+ 2013 Ted Krovetz
+License: Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic and ISC-ocb
+
+Files: usr/lib/rhizo/gfx_hal/rhizo-audio-core-service
+ usr/lib/rhizo/gfx_hal/rhizo-audio-effect-service
+Copyright: 2026 Liam Bilsbury
+ 2012-2024 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: BSL-1.1 and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/gfx_hal/rhizo-bootcontrol-service
+ usr/lib/rhizo/gfx_hal/rhizo-gatekeeper-service
+ usr/lib/rhizo/gfx_hal/rhizo-graphics-allocator
+ usr/lib/rhizo/gfx_hal/rhizo-health-service
+ usr/lib/rhizo/gfx_hal/rhizo-power-service
+ usr/lib/rhizo/gfx_hal/rhizo-thermal-service
+ usr/lib/rhizo/gfx_hal/rhizo-bluetooth-service
+ usr/lib/rhizo/gfx_hal/rhizo-gnss-service
+ usr/lib/rhizo/gfx_hal/rhizo-sensors-service
+ usr/lib/rhizo/rel/a15/rhizo-power-service
+Copyright: 2026 Liam Bilsbury
+ 2005-2024 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: BSL-1.1 and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/gfx_hal/mapper.rhizo.so
+ usr/lib/rhizo/gfx_hal_32/mapper.rhizo.so
+Copyright: 2026 Liam Bilsbury
+ 2005-2022 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: BSL-1.1 and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/rhizo-probed
+ usr/lib/rhizo/rhizo-wayland-probe
+Copyright: 2026 Liam Bilsbury
+ 2012-2015 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: BSL-1.1 and Apache-2.0-LLVM and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/rhizo-host-delay
+Copyright: 2026 Liam Bilsbury
+ 2012-2023 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: BSL-1.1 and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/gfx_hal/rhizo_bpf_preload.so
+ usr/lib/rhizo/gfx_hal/rhizo_netbpfload_preload
+Copyright: 2026 Liam Bilsbury
+ 2012-2015 The Android Open Source Project
+License: BSL-1.1 and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/deskbridge/rhizo-wlbridge
+Copyright: 2026 Liam Bilsbury
+ 2008-2013 Kristian Høgsberg
+ 2010-2013 Intel Corporation
+ 2013 Rafael Antognolli
+ 2013 Jasper St. Pierre
+ 2015-2017 Samsung Electronics Co., Ltd
+ 2015-2017 Red Hat Inc.
+ 2017 Drew DeVault
+ 2018 Simon Ser
+ 2019 Ivan Molodetskikh
+ 2019 Josef Gajdusek
+ 2024 Neal Gompa
+License: BSL-1.1 and MIT-wayland and HPND-sell-variant
+
+Files: usr/lib/rhizo/gfx_hal/rhizo-composer
+Copyright: 2026 Liam Bilsbury
+ 2008-2013 Kristian Høgsberg
+ 2010-2013 Intel Corporation
+ 2012-2016 Collabora, Ltd.
+ 2013 Jason Ekstrand
+ 2013 Rafael Antognolli
+ 2013 Jasper St. Pierre
+ 2014 Stephen "Lyude" Chandler Paul
+ 2015-2017 Samsung Electronics Co., Ltd
+ 2015-2017 Red Hat Inc.
+ 2018 The Chromium Authors
+ 2018, 2023 Simon Ser
+ 2020 Aleix Pol Gonzalez
+ 2020 Carlos Garnacho
+ 2022 Kenny Levinsen
+ 1996-2024 Anthony Green, Red Hat, Inc and others
+ 2012-2024 The Android Open Source Project
+ 2003-2019 University of Illinois at Urbana-Champaign
+ 2009-2019 the LLVM contributors listed in CREDITS.TXT
+License: BSL-1.1 and MIT-wayland and MIT-libffi and public-domain-dlmalloc and Apache-2.0 and Apache-2.0-LLVM and BSD-2-clause-bionic
+
+Files: usr/lib/rhizo/plat_pub_versioned.cil
+Copyright: The Android Open Source Project
+License: public-domain-sepolicy
+
+Files: usr/share/icons/hicolor/256x256/apps/rhizo.png
+Copyright: Google LLC
+License: CC-BY-3.0
+
+Files: src/android/hal/common/libfmq/*
+Copyright: 2016-2024 The Android Open Source Project
+License: Apache-2.0
+
+Files: src/android/hal/common/libfmq/base/fmq/MQDescriptorBase.h
+ src/android/hal/common/libfmq/include/fmq/MessageQueueBase.h
+Copyright: 2016-2020 The Android Open Source Project
+ 2026 Liam Bilsbury
+License: Apache-2.0 and BSL-1.1
+
+Files: src/services/deskbridge/protocols/virtual-keyboard-unstable-v1.xml
+Copyright: 2008-2011 Kristian Høgsberg
+ 2010-2013 Intel Corporation
+ 2012-2013 Collabora, Ltd.
+ 2018 Purism SPC
+License: MIT-wayland
+
+Files: src/services/deskbridge/protocols/wlr-data-control-unstable-v1.xml
+Copyright: 2018 Simon Ser
+ 2019 Ivan Molodetskikh
+License: HPND-sell-variant
+
+Files: src/services/deskbridge/protocols/wlr-layer-shell-unstable-v1.xml
+Copyright: 2017 Drew DeVault
+License: HPND-sell-variant
+
+Files: src/services/deskbridge/protocols/wlr-virtual-pointer-unstable-v1.xml
+Copyright: 2019 Josef Gajdusek
+License: MIT-wayland
+
+Files: tools/patches/keymint/*
+Copyright: 2026 Liam Bilsbury
+ 2015-2021 The Android Open Source Project
+License: BSL-1.1 and Apache-2.0
+
+Files: tools/patches/mesa/*
+Copyright: 2026 Liam Bilsbury
+ 2014-2015 Red Hat
+ 2017 Intel Corporation
+License: BSL-1.1 and MIT-Mesa
+
+Files: kernel/*
+Copyright: 2026 Liam Bilsbury
+License: GPL-2.0-only
+
+Files: kernel/patches/0003-*
+Copyright: 2026 Denis V. Lunev
+License: GPL-2.0-only
+Comment: Mainline commit 1aac65f3e651.
+
+Files: kernel/patches/0021-*
+Copyright: 2026 Liam Bilsbury
+ 2008 Google Inc.
+License: GPL-2.0-with-Linux-syscall-note or Apache-2.0, and GPL-2.0-only
+
+License: BSL-1.1
+ Business Source License 1.1. The full text is in /usr/share/doc/rhizo/LICENSE.
+
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+ .
+     http://www.apache.org/licenses/LICENSE-2.0
+ .
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+ .
+ The full Apache-2.0 text is in /usr/share/common-licenses/Apache-2.0 on Debian
+ systems.
+
+License: Apache-2.0-LLVM
+ The LLVM Project is under the Apache License v2.0 with LLVM Exceptions:
+ .
+ ---- LLVM Exceptions to the Apache 2.0 License ----
+ .
+ As an exception, if, as a result of your compiling your source code, portions
+ of this Software are embedded into an Object form of such source code, you
+ may redistribute such embedded portions in such Object form without complying
+ with the conditions of Sections 4(a), 4(b) and 4(d) of the License.
+ .
+ In addition, if you combine or link compiled forms of this Software with
+ software that is licensed under the GPLv2 ("Combined Software") and if a
+ court of competent jurisdiction determines that the patent provision (Section
+ 3), the indemnity provision (Section 9) or other Section of the License
+ conflicts with the conditions of the GPLv2, you may retroactively and
+ prospectively choose to deem waived or otherwise exclude such Section(s) of
+ the License, but only in their entirety and only with respect to the Combined
+ Software.
+ .
+ The full Apache-2.0 text is in /usr/share/common-licenses/Apache-2.0.
+
+License: BSD-2-clause-bionic
+ Copyright (C) 2012 The Android Open Source Project
+ All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in
+    the documentation and/or other materials provided with the
+    distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+ OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+ AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ SUCH DAMAGE.
+
+License: BSD-2-clause-xxHash
+ xxHash - Extremely Fast Hash algorithm
+ Header File
+ Copyright (C) 2012-2016, Yann Collet.
+ .
+ BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ .
+    * Redistributions of source code must retain the above copyright
+ notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+ copyright notice, this list of conditions and the following disclaimer
+ in the documentation and/or other materials provided with the
+ distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ .
+ You can contact the author at :
+ - xxHash source repository : https://github.com/Cyan4973/xxHash
+
+License: BSD-3-clause-protobuf
+ Copyright 2008 Google Inc.  All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ .
+     * Redistributions of source code must retain the above copyright
+ notice, this list of conditions and the following disclaimer.
+     * Redistributions in binary form must reproduce the above
+ copyright notice, this list of conditions and the following disclaimer
+ in the documentation and/or other materials provided with the
+ distribution.
+     * Neither the name of Google Inc. nor the names of its
+ contributors may be used to endorse or promote products derived from
+ this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ .
+ Code generated by the Protocol Buffer compiler is owned by the owner
+ of the input file used when generating it.  This code is not
+ standalone and requires a support library to be linked with it.  This
+ support library is itself covered by the above license.
+
+License: BSD-3-clause-chromium-zlib
+ Copyright 2015 The Chromium Authors. All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ .
+    * Redistributions of source code must retain the above copyright
+ notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+ copyright notice, this list of conditions and the following disclaimer
+ in the documentation and/or other materials provided with the
+ distribution.
+    * Neither the name of Google Inc. nor the names of its
+ contributors may be used to endorse or promote products derived from
+ this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: BSD-3-clause-spencer-regex
+ Copyright (c) 1992, 1993, 1994 Henry Spencer.
+ Copyright (c) 1992, 1993, 1994
+         The Regents of the University of California.  All rights reserved.
+ .
+ This code is derived from software contributed to Berkeley by
+ Henry Spencer.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+ 1. Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+ 2. Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+ 3. Neither the name of the University nor the names of its contributors
+    may be used to endorse or promote products derived from this software
+    without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ SUCH DAMAGE.
+
+License: BSD-3-clause-MLAA
+ Copyright (C) 2010 Jorge Jimenez (jorge@iryoku.com)
+ Copyright (C) 2010 Belen Masia (bmasia@unizar.es)
+ Copyright (C) 2010 Jose I. Echevarria (joseignacioechevarria@gmail.com)
+ Copyright (C) 2010 Fernando Navarro (fernandn@microsoft.com)
+ Copyright (C) 2010 Diego Gutierrez (diegog@unizar.es)
+ Copyright (C) 2011 Lauri Kasanen (cand@gmx.com)
+ All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+    1. Redistributions of source code must retain the above copyright notice,
+       this list of conditions and the following disclaimer.
+ .
+    2. Redistributions in binary form must reproduce the following statement:
+ .
+       "Uses Jimenez's MLAA. Copyright (C) 2010 by Jorge Jimenez, Belen Masia,
+        Jose I. Echevarria, Fernando Navarro and Diego Gutierrez."
+ .
+       Only for use in the Mesa project, this point 2 is filled by naming the
+       technique Jimenez's MLAA in the Mesa config options.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS ``AS
+ IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL COPYRIGHT HOLDERS OR CONTRIBUTORS
+ BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ POSSIBILITY OF SUCH DAMAGE.
+ .
+ The views and conclusions contained in the software and documentation are
+ those of the authors and should not be interpreted as representing official
+ policies, either expressed or implied, of the copyright holders.
+
+License: BSD-3-clause-SoftFloat
+ License for Berkeley SoftFloat Release 3e
+ .
+ John R. Hauser
+ 2018 January 20
+ .
+ The following applies to the whole of SoftFloat Release 3e as well as to
+ each source file individually.
+ .
+ Copyright 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018 The Regents of the
+ University of California.  All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+  1. Redistributions of source code must retain the above copyright notice,
+     this list of conditions, and the following disclaimer.
+ .
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions, and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+ .
+  3. Neither the name of the University nor the names of its contributors
+     may be used to endorse or promote products derived from this software
+     without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS "AS IS", AND ANY
+ EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, ARE
+ DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE FOR ANY
+ DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: BSL-1.0
+ C11 <time.h> implementation
+ .
+ (C) Copyright yohhoy 2012.
+ Copyright 2022 Yonggang Luo
+ Distributed under the Boost Software License, Version 1.0.
+ .
+ Permission is hereby granted, free of charge, to any person or organization
+ obtaining a copy of the software and accompanying documentation covered by
+ this license (the "Software") to use, reproduce, display, distribute,
+ execute, and transmit the Software, and to prepare [[derivative work]]s of the
+ Software, and to permit third-parties to whom the Software is furnished to
+ do so, all subject to the following:
+ .
+ The copyright notices in the Software and this entire statement, including
+ the above license grant, this restriction and the following disclaimer,
+ must be included in all copies of the Software, in whole or in part, and
+ all derivative works of the Software, unless such copies or derivative
+ works are solely in the form of machine-executable object code generated by
+ a source language processor.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+ SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+ FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
+License: Expat
+ Copyright (c) 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper
+ Copyright (c) 2001-2025 Expat maintainers
+ .
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included
+ in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: MIT-Mesa
+ MIT License
+ .
+ Copyright (c) <year> <copyright holders>
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the "Software"),
+ to deal in the Software without restriction, including without limitation
+ the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ and/or sell copies of the Software, and to permit persons to whom the
+ Software is furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in
+ all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
+License: MIT-fmtlib
+ Copyright (c) 2012 - present, Victor Zverovich and {fmt} contributors
+ .
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ .
+ --- Optional exception to the license ---
+ .
+ As an exception, if, as a result of your compiling your source code, portions
+ of this Software are embedded into a machine-executable object form of such
+ source code, you may redistribute such embedded portions in such object form
+ without including the above copyright and permission notices.
+
+License: MIT-libdrm
+ Copyright 1999 Precision Insight, Inc., Cedar Park, Texas.
+ Copyright 2000 VA Linux Systems, Inc., Sunnyvale, California.
+ All Rights Reserved.
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the "Software"),
+ to deal in the Software without restriction, including without limitation
+ the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ and/or sell copies of the Software, and to permit persons to whom the
+ Software is furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice (including the next
+ paragraph) shall be included in all copies or substantial portions of the
+ Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ PRECISION INSIGHT AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
+License: MIT-libva
+ Copyright (c) 2007-2024 Intel Corporation. All Rights Reserved.
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sub license, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice (including the
+ next paragraph) shall be included in all copies or substantial portions
+ of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
+ IN NO EVENT SHALL PRECISION INSIGHT AND/OR ITS SUPPLIERS BE LIABLE FOR
+ ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: MIT-utf8-range
+ MIT License
+ .
+ Copyright (c) 2019 Yibo Cai
+ Copyright 2022 Google LLC
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
+License: Zlib
+ version 1.2.12, March 27th, 2022
+ .
+ Copyright (C) 1995-2022 Jean-loup Gailly and Mark Adler
+ .
+ This software is provided 'as-is', without any express or implied
+ warranty.  In no event will the authors be held liable for any damages
+ arising from the use of this software.
+ .
+ Permission is granted to anyone to use this software for any purpose,
+ including commercial applications, and to alter it and redistribute it
+ freely, subject to the following restrictions:
+ .
+ 1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+ 2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+ 3. This notice may not be removed or altered from any source distribution.
+
+License: libpng-2.0
+ COPYRIGHT NOTICE, DISCLAIMER, and LICENSE
+ =========================================
+ .
+ PNG Reference Library License version 2
+ ---------------------------------------
+ .
+  * Copyright (c) 1995-2025 The PNG Reference Library Authors.
+  * Copyright (c) 2018-2025 Cosmin Truta.
+  * Copyright (c) 2000-2002, 2004, 2006-2018 Glenn Randers-Pehrson.
+  * Copyright (c) 1996-1997 Andreas Dilger.
+  * Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.
+ .
+ The software is supplied "as is", without warranty of any kind,
+ express or implied, including, without limitation, the warranties
+ of merchantability, fitness for a particular purpose, title, and
+ non-infringement.  In no event shall the Copyright owners, or
+ anyone distributing the software, be liable for any damages or
+ other liability, whether in contract, tort or otherwise, arising
+ from, out of, or in connection with the software, or the use or
+ other dealings in the software, even if advised of the possibility
+ of such damage.
+ .
+ Permission is hereby granted to use, copy, modify, and distribute
+ this software, or portions hereof, for any purpose, without fee,
+ subject to the following restrictions:
+ .
+  1. The origin of this software must not be misrepresented; you
+     must not claim that you wrote the original software.  If you
+     use this software in a product, an acknowledgment in the product
+     documentation would be appreciated, but is not required.
+ .
+  2. Altered source versions must be plainly marked as such, and must
+     not be misrepresented as being the original software.
+ .
+  3. This Copyright notice may not be removed or altered from any
+     source or altered source distribution.
+ .
+ .
+ PNG Reference Library License version 1 (for libpng 0.5 through 1.6.35)
+ -----------------------------------------------------------------------
+ .
+ libpng versions 1.0.7, July 1, 2000, through 1.6.35, July 15, 2018 are
+ Copyright (c) 2000-2002, 2004, 2006-2018 Glenn Randers-Pehrson, are
+ derived from libpng-1.0.6, and are distributed according to the same
+ disclaimer and license as libpng-1.0.6 with the following individuals
+ added to the list of Contributing Authors:
+ .
+     Simon-Pierre Cadieux
+     Eric S. Raymond
+     Mans Rullgard
+     Cosmin Truta
+     Gilles Vollant
+     James Yu
+     Mandar Sahastrabuddhe
+     Google Inc.
+     Vadim Barkov
+ .
+ and with the following additions to the disclaimer:
+ .
+     There is no warranty against interference with your enjoyment of
+     the library or against infringement.  There is no warranty that our
+     efforts or the library will fulfill any of your particular purposes
+     or needs.  This library is provided with all faults, and the entire
+     risk of satisfactory quality, performance, accuracy, and effort is
+     with the user.
+ .
+ Some files in the "contrib" directory and some configure-generated
+ files that are distributed with libpng have other copyright owners, and
+ are released under other open source licenses.
+ .
+ libpng versions 0.97, January 1998, through 1.0.6, March 20, 2000, are
+ Copyright (c) 1998-2000 Glenn Randers-Pehrson, are derived from
+ libpng-0.96, and are distributed according to the same disclaimer and
+ license as libpng-0.96, with the following individuals added to the
+ list of Contributing Authors:
+ .
+     Tom Lane
+     Glenn Randers-Pehrson
+     Willem van Schaik
+ .
+ libpng versions 0.89, June 1996, through 0.96, May 1997, are
+ Copyright (c) 1996-1997 Andreas Dilger, are derived from libpng-0.88,
+ and are distributed according to the same disclaimer and license as
+ libpng-0.88, with the following individuals added to the list of
+ Contributing Authors:
+ .
+     John Bowler
+     Kevin Bracey
+     Sam Bushell
+     Magnus Holmgren
+     Greg Roelofs
+     Tom Tanner
+ .
+ Some files in the "scripts" directory have other copyright owners,
+ but are released under this license.
+ .
+ libpng versions 0.5, May 1995, through 0.88, January 1996, are
+ Copyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.
+ .
+ For the purposes of this copyright and license, "Contributing Authors"
+ is defined as the following set of individuals:
+ .
+     Andreas Dilger
+     Dave Martindale
+     Guy Eric Schalnat
+     Paul Schmidt
+     Tim Wegner
+ .
+ The PNG Reference Library is supplied "AS IS".  The Contributing
+ Authors and Group 42, Inc. disclaim all warranties, expressed or
+ implied, including, without limitation, the warranties of
+ merchantability and of fitness for any purpose.  The Contributing
+ Authors and Group 42, Inc. assume no liability for direct, indirect,
+ incidental, special, exemplary, or consequential damages, which may
+ result from the use of the PNG Reference Library, even if advised of
+ the possibility of such damage.
+ .
+ Permission is hereby granted to use, copy, modify, and distribute this
+ source code, or portions hereof, for any purpose, without fee, subject
+ to the following restrictions:
+ .
+  1. The origin of this source code must not be misrepresented.
+ .
+  2. Altered versions must be plainly marked as such and must not
+     be misrepresented as being the original source.
+ .
+  3. This Copyright notice may not be removed or altered from any
+     source or altered source distribution.
+ .
+ The Contributing Authors and Group 42, Inc. specifically permit,
+ without fee, and encourage the use of this source code as a component
+ to supporting the PNG file format in commercial products.  If you use
+ this source code in a product, acknowledgment is not required but would
+ be appreciated.
+
+License: MIT-libffi
+ libffi - Copyright (c) 1996-2024  Anthony Green, Red Hat, Inc and others.
+ See source files for details.
+ .
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ ``Software''), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED ``AS IS'', WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: public-domain-sha1
+ SHA-1 in C
+ By Steve Reid <steve@edmweb.com>
+ 100% Public Domain
+
+License: public-domain-md5
+ This software was written by Alexander Peslyak in 2001.  No copyright is
+ claimed, and the software is hereby placed in the public domain.
+ In case this attempt to disclaim copyright and place the software in the
+ public domain is deemed null and void, then the software is
+ Copyright (c) 2001 Alexander Peslyak and it is hereby released to the
+ general public under the following terms:
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted.
+ .
+ There's ABSOLUTELY NO WARRANTY, express or implied.
+
+License: public-domain-dlmalloc
+ This is a version (aka dlmalloc) of malloc/free/realloc written by
+ Doug Lea and released to the public domain, as explained at
+ http://creativecommons.org/licenses/publicdomain.
+
+License: public-domain-sepolicy
+ This configuration (sepolicy) is public domain, i.e. not copyrighted.
+ .
+ Warranty Exclusion
+ ------------------
+ You agree that this software is a
+ non-commercially developed program that may contain "bugs" (as that
+ term is used in the industry) and that it may not function as intended.
+ The software is licensed "as is". NSA makes no, and hereby expressly
+ disclaims all, warranties, express, implied, statutory, or otherwise
+ with respect to the software, including noninfringement and the implied
+ warranties of merchantability and fitness for a particular purpose.
+ .
+ Limitation of Liability
+ -----------------------
+ In no event will NSA be liable for any damages, including loss of data,
+ lost profits, cost of cover, or other special, incidental,
+ consequential, direct or indirect damages arising from the software or
+ the use thereof, however caused and on any theory of liability. This
+ limitation will apply even if NSA has been advised of the possibility
+ of such damage. You acknowledge that this is a reasonable allocation of
+ risk.
+
+License: ISC-strlcpy
+ Copyright (c) 1998 Todd C. Miller <Todd.Miller@courtesan.com>
+ .
+ Permission to use, copy, modify, and distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+License: ISC-ocb
+ Copyright (c) 2013 Ted Krovetz.
+ .
+ Permission to use, copy, modify, and/or distribute this software for any
+ purpose with or without fee is hereby granted, provided that the above
+ copyright notice and this permission notice appear in all copies.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+License: Unicode-DFS-2015
+ Copyright © 1991-2015 Unicode, Inc. All rights reserved.
+ Distributed under the Terms of Use in
+ http://www.unicode.org/copyright.html.
+ .
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of the Unicode data files and any associated documentation
+ (the "Data Files") or Unicode software and any associated documentation
+ (the "Software") to deal in the Data Files or Software
+ without restriction, including without limitation the rights to use,
+ copy, modify, merge, publish, distribute, and/or sell copies of
+ the Data Files or Software, and to permit persons to whom the Data Files
+ or Software are furnished to do so, provided that
+ (a) this copyright and permission notice appear with all copies
+ of the Data Files or Software,
+ (b) this copyright and permission notice appear in associated
+ documentation, and
+ (c) there is clear notice in each modified Data File or in the Software
+ as well as in the documentation associated with the Data File(s) or
+ Software that the data or software has been modified.
+ .
+ THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF
+ ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+ WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+ IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS
+ NOTICE BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL
+ DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+ DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+ PERFORMANCE OF THE DATA FILES OR SOFTWARE.
+ .
+ Except as contained in this notice, the name of a copyright holder
+ shall not be used in advertising or otherwise to promote the sale,
+ use or other dealings in these Data Files or Software without prior
+ written authorization of the copyright holder.
+
+License: MIT-wayland
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the "Software"),
+ to deal in the Software without restriction, including without limitation
+ the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ and/or sell copies of the Software, and to permit persons to whom the
+ Software is furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice (including the next
+ paragraph) shall be included in all copies or substantial portions of the
+ Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
+License: HPND-sell-variant
+ Permission to use, copy, modify, distribute, and sell this
+ software and its documentation for any purpose is hereby granted
+ without fee, provided that the above copyright notice appear in
+ all copies and that both that copyright notice and this permission
+ notice appear in supporting documentation, and that the name of
+ the copyright holders not be used in advertising or publicity
+ pertaining to distribution of the software without specific,
+ written prior permission.  The copyright holders make no
+ representations about the suitability of this software for any
+ purpose.  It is provided "as is" without express or implied
+ warranty.
+ .
+ THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
+ SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+ FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+ AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+ THIS SOFTWARE.
+
+License: CC-BY-3.0
+ Creative Commons Attribution 3.0 Unported
+ (https://creativecommons.org/licenses/by/3.0/). The full text is in
+ /usr/share/doc/rhizo/LICENSES/CC-BY-3.0.txt.
+ .
+ The Android robot is reproduced or modified from work created and shared
+ by Google and used according to terms described in the Creative Commons
+ 3.0 Attribution License.
+
+License: GPL-2.0-only
+ This program is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License version 2 as published by the
+ Free Software Foundation.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ .
+ The full GPL-2.0 text is in LICENSES/GPL-2.0-only.txt, and on Debian systems
+ in /usr/share/common-licenses/GPL-2.
+
+License: GPL-2.0-with-Linux-syscall-note
+    NOTE! This copyright does *not* cover user programs that use kernel
+  services by normal system calls - this is merely considered normal use
+  of the kernel, and does *not* fall under the heading of "derived work".
+  Also note that the GPL below is copyrighted by the Free Software
+  Foundation, but the instance of code that it refers to (the Linux
+  kernel) is copyrighted by me and others who actually wrote it.
+ .
+  Also note that the only valid version of the GPL as far as the kernel
+  is concerned is _this_ particular version of the license (ie v2, not
+  v2.2 or v3.x or whatever), unless explicitly otherwise stated.
+ .
+                         Linus Torvalds
+ .
+ The GPL-2.0 text is in LICENSES/GPL-2.0-only.txt, and on Debian systems in
+ /usr/share/common-licenses/GPL-2.

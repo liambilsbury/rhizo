@@ -1,0 +1,55 @@
+--- a/src/gallium/drivers/virgl/virgl_context.c
++++ b/src/gallium/drivers/virgl/virgl_context.c
+@@ -1158,8 +1158,16 @@
+                                enum pipe_flush_flags flags)
+ {
+    struct virgl_context *vctx = virgl_context(ctx);
++   struct pipe_fence_handle *new_fence = NULL;
+ 
+-   virgl_flush_eq(vctx, vctx, fence);
++   if (!fence) {
++      virgl_flush_eq(vctx, vctx, NULL);
++      return;
++   }
++
++   virgl_flush_eq(vctx, vctx, &new_fence);
++   ctx->screen->fence_reference(ctx->screen, fence, NULL);
++   *fence = new_fence;
+ }
+ 
+ static struct pipe_sampler_view *virgl_create_sampler_view(struct pipe_context *ctx,
+@@ -1652,6 +1664,9 @@
+       pipe_resource_reference(&vctx->atomic_buffers[i].buffer, NULL);
+    }
+ 
++   util_set_vertex_buffers_count(vctx->vertex_buffer, &vctx->num_vertex_buffers,
++                                 NULL, 0, false);
++
+    rs->vws->cmd_buf_destroy(vctx->cbuf);
+    if (vctx->uploader)
+       u_upload_destroy(vctx->uploader);
+--- a/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
++++ b/src/gallium/winsys/virgl/drm/virgl_drm_winsys.c
+@@ -1308,19 +1308,20 @@
+ {
+    struct virgl_screen *screen = virgl_screen(pscreen);
+    bool destroy;
++   int fd = -1;
+ 
+    simple_mtx_lock(&virgl_screen_mutex);
+    destroy = --screen->refcnt == 0;
+    if (destroy) {
+-      int fd = virgl_drm_winsys(screen->vws)->fd;
++      fd = virgl_drm_winsys(screen->vws)->fd;
+       _mesa_hash_table_remove_key(fd_tab, intptr_to_pointer(fd));
+-      close(fd);
+    }
+    simple_mtx_unlock(&virgl_screen_mutex);
+ 
+    if (destroy) {
+       pscreen->destroy = screen->winsys_priv;
+       pscreen->destroy(pscreen);
++      close(fd);
+    }
+ }
+ 

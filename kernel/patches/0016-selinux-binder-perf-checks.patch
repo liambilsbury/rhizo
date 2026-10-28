@@ -1,0 +1,427 @@
+diff --git a/security/selinux/avc.c b/security/selinux/avc.c
+index e93135d94..0344d6f5d 100644
+--- a/security/selinux/avc.c
++++ b/security/selinux/avc.c
+@@ -1252,6 +1252,27 @@ int avc_has_perm(struct selinux_state *state, u32 ssid, u32 tsid, u16 tclass,
+ 	return rc;
+ }
+ 
++/* return the permissions of @tclass every ancestor decides on any object */
++static u32 selinux_global_perms(u16 tclass)
++{
++	switch (tclass) {
++	case SECCLASS_PERF_EVENT:
++		return PERF_EVENT__OPEN | PERF_EVENT__CPU | PERF_EVENT__KERNEL |
++		       PERF_EVENT__TRACEPOINT;
++	default:
++		return 0;
++	}
++}
++
++/* return the part of @requested an ancestor of @subj decides on an object of @owner */
++static u32 ancestor_requested(const struct selinux_state *subj, u64 owner,
++			      u16 tclass, u32 requested)
++{
++	if (owner != subj->id)
++		return requested;
++	return requested & selinux_global_perms(tclass);
++}
++
+ static u32 task_sid_obj_for_state(const struct task_struct *p,
+ 				  const struct selinux_state *state)
+ {
+@@ -1387,6 +1408,7 @@ int task_obj_has_perm(const struct task_struct *s,
+  * cred_has_extended_perms - Check and audit extended permissions on a (cred, tsid) pair
+  * @cred: subject credentials
+  * @tsid: target security identifier
++ * @owner: id of the namespace that owns the object, or %SELINUX_OWNER_GLOBAL
+  * @tclass: target security class
+  * @requested: requested permissions, interpreted based on @tclass
+  * @driver: driver value
+@@ -1397,17 +1419,21 @@ int task_obj_has_perm(const struct task_struct *s,
+  * Check extended permissions between a cred @cred and a target
+  * security identifier @tsid for @cred's namespace and all ancestors
+  * to determine whether the @requested permissions are granted for the
+- * specified (@driver, @xperm) pair.
++ * specified (@driver, @xperm) pair. An ancestor decides only the global
++ * part of an access to an object @owner names as @cred's own namespace's.
+  * Audit the granting or denial of permissions in accordance with the policy.
+  * Return %0 if the @requested permissions are granted, -%EACCES if any
+  * permissions are denied, or another -errno upon other errors.
+  */
+-int cred_has_extended_perms(const struct cred *cred, u32 tsid, u16 tclass,
+-			    u32 requested, u8 driver, u8 base_perm, u8 xperm,
++int cred_has_extended_perms(const struct cred *cred, u32 tsid, u64 owner,
++			    u16 tclass, u32 requested, u8 driver,
++			    u8 base_perm, u8 xperm,
+ 			    struct common_audit_data *ad)
+ {
++	const struct selinux_state *subj = selinux_cred(cred)->state;
+ 	struct cred_security_struct *crsec;
+ 	struct selinux_state *state;
++	u32 perms = requested;
+ 	u32 ssid;
+ 	int rc;
+ 
+@@ -1417,13 +1443,14 @@ int cred_has_extended_perms(const struct cred *cred, u32 tsid, u16 tclass,
+ 		state = crsec->state;
+ 
+ 		rc = avc_has_extended_perms(state, ssid, tsid, tclass,
+-					    requested, driver, base_perm,
++					    perms, driver, base_perm,
+ 					    xperm, ad);
+ 		if (rc)
+ 			return rc;
+ 
+ 		cred = crsec->parent_cred;
+-	} while (cred);
++		perms = ancestor_requested(subj, owner, tclass, requested);
++	} while (cred && perms);
+ 
+ 	return 0;
+ }
+@@ -1523,8 +1550,33 @@ int cred_self_has_perm_noaudit(const struct cred *cred, u16 tclass,
+ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
+ 		       u32 requested, struct common_audit_data *ad)
+ {
++	return cred_tsid_owner_has_perm(cred, tsid, SELINUX_OWNER_GLOBAL,
++					tclass, requested, ad);
++}
++
++/**
++ * cred_tsid_owner_has_perm - Check and audit permissions on an owned object
++ * @cred: subject credentials
++ * @tsid: target security identifier
++ * @owner: id of the namespace that owns the object, or %SELINUX_OWNER_GLOBAL
++ * @tclass: target security class
++ * @requested: requested permissions, interpreted based on @tclass
++ * @ad: auxiliary audit data
++ *
++ * As cred_tsid_has_perm(), but an ancestor decides only the global part of
++ * an access to an object @owner names as @cred's own namespace's, and
++ * audits nothing for the rest.
++ * Return %0 if all @requested permissions are granted, -%EACCES if any
++ * permissions are denied, or another -errno upon other errors.
++ */
++int cred_tsid_owner_has_perm(const struct cred *cred, u32 tsid, u64 owner,
++			     u16 tclass, u32 requested,
++			     struct common_audit_data *ad)
++{
++	const struct selinux_state *subj = selinux_cred(cred)->state;
+ 	struct cred_security_struct *crsec;
+ 	struct selinux_state *state;
++	u32 perms = requested;
+ 	u32 ssid;
+ 	int rc;
+ 
+@@ -1532,12 +1584,13 @@ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
+ 		crsec = selinux_cred(cred);
+ 		ssid = crsec->sid;
+ 		state = crsec->state;
+-		rc = avc_has_perm(state, ssid, tsid, tclass, requested, ad);
++		rc = avc_has_perm(state, ssid, tsid, tclass, perms, ad);
+ 		if (rc)
+ 			return rc;
+ 
+ 		cred = crsec->parent_cred;
+-	} while (cred);
++		perms = ancestor_requested(subj, owner, tclass, requested);
++	} while (cred && perms);
+ 
+ 	return 0;
+ }
+@@ -1732,6 +1785,37 @@ static u32 cred_sid_for_state(const struct cred *cred,
+ 	return sid;
+ }
+ 
++/* check @cred's @requested on @other in each namespace of its chain */
++static int cred_other_owner_has_perm(const struct cred *cred,
++				     const struct cred *other, u64 owner,
++				     u16 tclass, u32 requested,
++				     struct common_audit_data *ad)
++{
++	const struct selinux_state *subj = selinux_cred(cred)->state;
++	struct cred_security_struct *crsec;
++	struct selinux_state *state;
++	u32 perms = requested;
++	u32 ssid;
++	u32 tsid;
++	int rc;
++
++	do {
++		crsec = selinux_cred(cred);
++		ssid = crsec->sid;
++		state = crsec->state;
++		tsid = cred_sid_for_state(other, state);
++
++		rc = avc_has_perm(state, ssid, tsid, tclass, perms, ad);
++		if (rc)
++			return rc;
++
++		cred = crsec->parent_cred;
++		perms = ancestor_requested(subj, owner, tclass, requested);
++	} while (cred && perms);
++
++	return 0;
++}
++
+ /**
+  * cred_other_has_perm - Check and audit permissions on a (cred, other-cred) pair
+  * @cred: subject credentials
+@@ -1751,26 +1835,31 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
+ 			u16 tclass, u32 requested,
+ 			struct common_audit_data *ad)
+ {
+-	struct cred_security_struct *crsec;
+-	struct selinux_state *state;
+-	u32 ssid;
+-	u32 tsid;
+-	int rc;
+-
+-	do {
+-		crsec = selinux_cred(cred);
+-		ssid = crsec->sid;
+-		state = crsec->state;
+-		tsid = cred_sid_for_state(other, state);
+-
+-		rc = avc_has_perm(state, ssid, tsid, tclass, requested, ad);
+-		if (rc)
+-			return rc;
+-
+-		cred = crsec->parent_cred;
+-	} while (cred);
++	return cred_other_owner_has_perm(cred, other, SELINUX_OWNER_GLOBAL,
++					 tclass, requested, ad);
++}
+ 
+-	return 0;
++/**
++ * cred_peer_has_perm - Check and audit permissions on a peer task's cred
++ * @cred: subject credentials
++ * @other: the peer's credentials, the object of the check
++ * @tclass: target security class
++ * @requested: requested permissions, interpreted based on @tclass
++ * @ad: auxiliary audit data
++ *
++ * As cred_other_has_perm(), but the peer's namespace owns the object, so an
++ * ancestor of a namespace decides only the global part of an access between
++ * two of its tasks, and audits nothing for the rest.
++ * Return %0 if all @requested permissions are granted, -%EACCES if any
++ * permissions are denied, or another -errno upon other errors.
++ */
++int cred_peer_has_perm(const struct cred *cred, const struct cred *other,
++		       u16 tclass, u32 requested,
++		       struct common_audit_data *ad)
++{
++	return cred_other_owner_has_perm(cred, other,
++					 selinux_cred(other)->state->id,
++					 tclass, requested, ad);
+ }
+ 
+ /**
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 718ab3a56..6c3e0e351 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -1988,6 +1988,18 @@ static inline void isec_set_label_ns(struct inode_security_struct *isec,
+ 	WRITE_ONCE(isec->label_ns, state->id);
+ }
+ 
++/* record the namespace that owns an anon inode */
++static inline void isec_set_owner(struct inode_security_struct *isec, u64 owner)
++{
++	WRITE_ONCE(isec->owner_ns, owner);
++}
++
++/* return the namespace that owns an anon inode, or SELINUX_OWNER_GLOBAL */
++static inline u64 isec_owner(const struct inode_security_struct *isec)
++{
++	return READ_ONCE(isec->owner_ns);
++}
++
+ /* mark @isec as a genfs label each namespace may read differently */
+ static inline void isec_set_genfs_view(struct inode_security_struct *isec,
+ 				       bool genfs)
+@@ -2068,6 +2080,15 @@ static inline void isec_set_label_ns(struct inode_security_struct *isec,
+ {
+ }
+ 
++static inline void isec_set_owner(struct inode_security_struct *isec, u64 owner)
++{
++}
++
++static inline u64 isec_owner(const struct inode_security_struct *isec)
++{
++	return SELINUX_OWNER_GLOBAL;
++}
++
+ static inline void isec_set_genfs_view(struct inode_security_struct *isec,
+ 				       bool genfs)
+ {
+@@ -2765,8 +2786,8 @@ static inline u32 file_to_av(const struct file *file)
+ 
+ static int selinux_binder_set_context_mgr(const struct cred *mgr)
+ {
+-	return cred_other_has_perm(current_cred(), mgr, SECCLASS_BINDER,
+-				   BINDER__SET_CONTEXT_MGR, NULL);
++	return cred_peer_has_perm(current_cred(), mgr, SECCLASS_BINDER,
++				  BINDER__SET_CONTEXT_MGR, NULL);
+ }
+ 
+ static int selinux_binder_transaction(const struct cred *from,
+@@ -2777,22 +2798,21 @@ static int selinux_binder_transaction(const struct cred *from,
+ 	int rc;
+ 
+ 	if (mysid != fromsid) {
+-		rc = cred_other_has_perm(current_cred(), from,
+-					 SECCLASS_BINDER,
+-					 BINDER__IMPERSONATE, NULL);
++		rc = cred_peer_has_perm(current_cred(), from, SECCLASS_BINDER,
++					BINDER__IMPERSONATE, NULL);
+ 		if (rc)
+ 			return rc;
+ 	}
+ 
+-	return cred_other_has_perm(from, to, SECCLASS_BINDER, BINDER__CALL,
+-				   NULL);
++	return cred_peer_has_perm(from, to, SECCLASS_BINDER, BINDER__CALL,
++				  NULL);
+ }
+ 
+ static int selinux_binder_transfer_binder(const struct cred *from,
+ 					  const struct cred *to)
+ {
+-	return cred_other_has_perm(from, to, SECCLASS_BINDER,
+-				   BINDER__TRANSFER, NULL);
++	return cred_peer_has_perm(from, to, SECCLASS_BINDER,
++				  BINDER__TRANSFER, NULL);
+ }
+ 
+ static int selinux_binder_transfer_file(const struct cred *from,
+@@ -3859,6 +3879,7 @@ static int selinux_inode_init_security_anon(struct inode *inode,
+ 
+ 		isec->sclass = context_isec->sclass;
+ 		isec->sid = context_isec->sid;
++		isec_set_owner(isec, isec_owner(context_isec));
+ 	} else {
+ 		struct level_trans_arg arg = { .name = name };
+ 
+@@ -3876,6 +3897,8 @@ static int selinux_inode_init_security_anon(struct inode *inode,
+ 		isec->sid = sid_with_levels(selinux_cred(current_cred()),
+ 					    isec->sid, level_transition_sid,
+ 					    &arg);
++		if (!is_memfd)
++			isec_set_owner(isec, current_selinux_state->id);
+ 	}
+ 
+ 	isec->initialized = LABEL_INITIALIZED;
+@@ -4910,9 +4933,11 @@ static int ioctl_has_perm(const struct cred *cred, struct file *file,
+ 		return 0;
+ 
+ 	isec = inode_security(inode);
+-	rc = cred_has_extended_perms(cred, isec->sid, isec->sclass,
+-				     requested, driver, AVC_EXT_IOCTL,
+-				     xperm, &ad);
++	rc = cred_has_extended_perms(cred, isec->sid,
++				     isec->sclass == SECCLASS_ANON_INODE ?
++				     isec_owner(isec) : SELINUX_OWNER_GLOBAL,
++				     isec->sclass, requested, driver,
++				     AVC_EXT_IOCTL, xperm, &ad);
+ out:
+ 	return rc;
+ }
+@@ -8660,6 +8685,10 @@ static int selinux_perf_event_alloc(struct perf_event *event)
+ 
+ 	perfsec = selinux_perf_event(event->security);
+ 	perfsec->sid = current_obj_sid();
++	/* an inherited event belongs to its parent's opener */
++	perfsec->owner = event->parent ?
++		selinux_perf_event(event->parent->security)->owner :
++		current_selinux_state->id;
+ 
+ 	return 0;
+ }
+@@ -8668,16 +8697,18 @@ static int selinux_perf_event_read(struct perf_event *event)
+ {
+ 	struct perf_event_security_struct *perfsec = event->security;
+ 
+-	return cred_tsid_has_perm(current_cred(), perfsec->sid,
+-				  SECCLASS_PERF_EVENT, PERF_EVENT__READ, NULL);
++	return cred_tsid_owner_has_perm(current_cred(), perfsec->sid,
++					perfsec->owner, SECCLASS_PERF_EVENT,
++					PERF_EVENT__READ, NULL);
+ }
+ 
+ static int selinux_perf_event_write(struct perf_event *event)
+ {
+ 	struct perf_event_security_struct *perfsec = event->security;
+ 
+-	return cred_tsid_has_perm(current_cred(), perfsec->sid,
+-				  SECCLASS_PERF_EVENT, PERF_EVENT__WRITE, NULL);
++	return cred_tsid_owner_has_perm(current_cred(), perfsec->sid,
++					perfsec->owner, SECCLASS_PERF_EVENT,
++					PERF_EVENT__WRITE, NULL);
+ }
+ #endif
+ 
+diff --git a/security/selinux/include/avc.h b/security/selinux/include/avc.h
+index 887cb10ce..d693d48fb 100644
+--- a/security/selinux/include/avc.h
++++ b/security/selinux/include/avc.h
+@@ -153,8 +153,12 @@ int avc_has_extended_perms(struct selinux_state *state, u32 ssid, u32 tsid,
+ int cred_task_has_perm(const struct cred *cred, const struct task_struct *p,
+ 		       u16 tclass, u32 requested, struct common_audit_data *ad);
+ 
+-int cred_has_extended_perms(const struct cred *cred, u32 tsid, u16 tclass,
+-			    u32 requested, u8 driver, u8 base_perm, u8 xperm,
++/* the owner of an object every namespace decides, whoever made it */
++#define SELINUX_OWNER_GLOBAL 0
++
++int cred_has_extended_perms(const struct cred *cred, u32 tsid, u64 owner,
++			    u16 tclass, u32 requested, u8 driver,
++			    u8 base_perm, u8 xperm,
+ 			    struct common_audit_data *ad);
+ 
+ int cred_self_has_perm(const struct cred *cred, u16 tclass, u32 requested,
+@@ -166,6 +170,10 @@ int cred_self_has_perm_noaudit(const struct cred *cred, u16 tclass,
+ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
+ 		       u32 requested, struct common_audit_data *ad);
+ 
++int cred_tsid_owner_has_perm(const struct cred *cred, u32 tsid, u64 owner,
++			     u16 tclass, u32 requested,
++			     struct common_audit_data *ad);
++
+ int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
+ 			       u32 requested, struct av_decision *avd,
+ 			       struct common_audit_data *ad,
+@@ -181,6 +189,10 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
+ 			u16 tclass, u32 requested,
+ 			struct common_audit_data *ad);
+ 
++int cred_peer_has_perm(const struct cred *cred, const struct cred *other,
++		       u16 tclass, u32 requested,
++		       struct common_audit_data *ad);
++
+ int task_obj_has_perm(const struct task_struct *s, const struct task_struct *t,
+ 		      u16 tclass, u32 requested, struct common_audit_data *ad);
+ 
+diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
+index 3e89f0ffa..ecf2b8f5e 100644
+--- a/security/selinux/include/objsec.h
++++ b/security/selinux/include/objsec.h
+@@ -83,6 +83,7 @@ struct inode_security_struct {
+ 	u32 view_sid; /* label last checked for view_ns */
+ 	u64 view_ns; /* namespace whose cred chain last got its views of view_sid */
+ 	u64 label_ns; /* namespace that set sid */
++	u64 owner_ns; /* namespace that made an anon inode, else 0 */
+ #endif
+ 	spinlock_t lock;
+ #ifdef CONFIG_SECURITY_SELINUX_NS
+@@ -195,6 +196,7 @@ struct bpf_security_struct {
+ 
+ struct perf_event_security_struct {
+ 	u32 sid; /* SID of perf_event obj creator */
++	u64 owner; /* id of the namespace that opened the event */
+ };
+ 
+ extern struct lsm_blob_sizes selinux_blob_sizes;

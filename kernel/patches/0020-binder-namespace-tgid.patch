@@ -1,0 +1,21 @@
+diff --git a/drivers/android/binder.c b/drivers/android/binder.c
+index 9e619422459..295a1917049 100644
+--- a/drivers/android/binder.c
++++ b/drivers/android/binder.c
+@@ -59,6 +59,7 @@
+ #include <linux/seq_file.h>
+ #include <linux/string.h>
+ #include <linux/uaccess.h>
++#include <linux/pid.h>
+ #include <linux/pid_namespace.h>
+ #include <linux/security.h>
+ #include <linux/spinlock.h>
+@@ -6068,7 +6069,7 @@ static int binder_open(struct inode *nodp, struct file *filp)
+ 	spin_lock_init(&proc->inner_lock);
+ 	spin_lock_init(&proc->outer_lock);
+ 	proc->tsk = get_task_struct(current->group_leader);
+-	proc->pid = current->tgid;
++	proc->pid = task_tgid_vnr(current);
+ 	proc->cred = get_cred(filp->f_cred);
+ 	INIT_LIST_HEAD(&proc->todo);
+ 	init_waitqueue_head(&proc->freeze_wait);

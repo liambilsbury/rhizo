@@ -1,0 +1,25 @@
+--- a/src/gallium/drivers/virgl/virgl_video.c
++++ b/src/gallium/drivers/virgl/virgl_video.c
+@@ -255,6 +255,11 @@
+     ITEM_SET(vh264, h264, quant_i_frames);
+     ITEM_SET(vh264, h264, quant_p_frames);
+     ITEM_SET(vh264, h264, quant_b_frames);
++    /* virglrenderer encodes every picture at quant_i_frames */
++    if (h264->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_P)
++        vh264->quant_i_frames = h264->quant_p_frames;
++    else if (h264->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_B)
++        vh264->quant_i_frames = h264->quant_b_frames;
+ 
+     ITEM_SET(vh264, h264, picture_type);
+     ITEM_SET(vh264, h264, frame_num);
+@@ -473,6 +480,10 @@
+     vh265->rc.quant_i_frames = h265->rc[0].quant_i_frames;
+     vh265->rc.quant_p_frames = h265->rc[0].quant_p_frames;
+     vh265->rc.quant_b_frames = h265->rc[0].quant_b_frames;
++    if (h265->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_P)
++        vh265->rc.quant_i_frames = h265->rc[0].quant_p_frames;
++    else if (h265->picture_type == PIPE_H2645_ENC_PICTURE_TYPE_B)
++        vh265->rc.quant_i_frames = h265->rc[0].quant_b_frames;
+     vh265->rc.vbv_buffer_size = h265->rc[0].vbv_buffer_size;
+     vh265->rc.vbv_buf_lv = h265->rc[0].vbv_buf_lv;
+     vh265->rc.fill_data_enable = h265->rc[0].fill_data_enable;

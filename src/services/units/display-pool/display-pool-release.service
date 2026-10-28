@@ -1,0 +1,14 @@
+[Unit]
+Description=Rhizo spare display release
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dash /root/rhizo-release-idle-display.sh
+Restart=always
+RestartSec=2
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

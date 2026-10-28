@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.rhizo.home"
+    android:versionCode="1"
+    android:versionName="1">
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <application android:label="Rhizo"
+                 android:hasCode="true"
+                 android:allowBackup="false">
+        <activity android:name=".HomeActivity"
+                  android:exported="true"
+                  android:launchMode="singleTask"
+                  android:stateNotNeeded="true"
+                  android:excludeFromRecents="true"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+                  android:configChanges="orientation|screenSize|screenLayout|density|uiMode|keyboard|keyboardHidden|navigation|locale|layoutDirection|smallestScreenSize|fontScale|colorMode">
+            <intent-filter android:priority="1">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <provider android:name=".IconProvider"
+                  android:authorities="com.rhizo.home.icons"
+                  android:exported="true" />
+    </application>
+</manifest>

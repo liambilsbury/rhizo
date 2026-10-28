@@ -1,0 +1,31 @@
+[Unit]
+Description=Rhizo desktop bridge
+After=androidd.service
+ConditionPathExists=/run/rhizo-desktop/session.env
+PartOf=androidd.service
+Wants=rhizo-desk-token.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=2
+User=ubuntu
+EnvironmentFile=/run/rhizo-desktop/session.env
+Environment=PYTHONPATH=/usr/lib/rhizo
+RuntimeDirectory=rhizo-desk
+RuntimeDirectoryMode=0750
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh --any desktop.clipboard desktop.notifications desktop.drag desktop.open_uri
+ExecStartPre=/usr/bin/python3 /usr/lib/rhizo/install/bootstrap/rundir-root.py /run/rhizo-desk
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/deskbridge/deskd.py \
+    --port 47100 --bind 192.168.100.1 \
+    --token-file /run/rhizo-desk/token \
+    --bridge /usr/lib/rhizo/deskbridge/rhizo-wlbridge \
+    --notify-socket /run/rhizo-desk-notify/notify.sock
+ExecStopPost=/usr/bin/rm -f /run/rhizo-desk-notify/notify.sock
+StandardOutput=append:/var/log/rhizo/rhizo-deskd.log
+StandardError=append:/var/log/rhizo/rhizo-deskd.log
+IPAddressDeny=any
+IPAddressAllow=192.168.100.0/24
+NoNewPrivileges=yes

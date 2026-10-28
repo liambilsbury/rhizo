@@ -1,0 +1,10 @@
+on early-init
+    restorecon_recursive /dev/socket/rhizo_wayland
+    restorecon_recursive /dev/socket/rhizo_audio
+    restorecon_recursive /dev/socket/rhizo_stream
+    restorecon_recursive /dev/dri
+    restorecon_recursive /dev/input
+    restorecon /system_ext/overlay
+    restorecon /system_ext/overlay/RhizoLockIconOverlay.apk
+    restorecon_recursive /vendor/lib64/hw
+    restorecon_recursive /vendor/lib/hw

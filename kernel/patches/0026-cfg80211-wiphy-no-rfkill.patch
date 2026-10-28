@@ -1,0 +1,43 @@
+diff --git a/include/net/cfg80211.h b/include/net/cfg80211.h
+index 9d3639ff9c2..b4dc32b3c4f 100644
+--- a/include/net/cfg80211.h
++++ b/include/net/cfg80211.h
+@@ -5522,6 +5522,7 @@ struct cfg80211_ops {
+  * @WIPHY_FLAG_SUPPORTS_NSTR_NONPRIMARY: support connection to non-primary link
+  *	of an NSTR mobile AP MLD.
+  * @WIPHY_FLAG_DISABLE_WEXT: disable wireless extensions for this device
++ * @WIPHY_FLAG_NO_RFKILL: register no rfkill switch for this device
+  */
+ enum wiphy_flags {
+ 	WIPHY_FLAG_SUPPORTS_EXT_KEK_KCK		= BIT(0),
+@@ -5550,6 +5554,7 @@ enum wiphy_flags {
+ 	WIPHY_FLAG_HAS_CHANNEL_SWITCH		= BIT(23),
+ 	WIPHY_FLAG_NOTIFY_REGDOM_BY_DRIVER	= BIT(24),
+ 	WIPHY_FLAG_CHANNEL_CHANGE_ON_BEACON     = BIT(25),
++	WIPHY_FLAG_NO_RFKILL			= BIT(26),
+ };
+ 
+ /**
+diff --git a/net/wireless/core.c b/net/wireless/core.c
+index 6783e0672dc..ab6e7ae7714 100644
+--- a/net/wireless/core.c
++++ b/net/wireless/core.c
+@@ -1183,6 +1183,9 @@ int wiphy_register(struct wiphy *wiphy)
+ 	rdev->wiphy.registered = true;
+ 	rtnl_unlock();
+ 
++	if (wiphy->flags & WIPHY_FLAG_NO_RFKILL)
++		return 0;
++
+ 	res = rfkill_register(rdev->wiphy.rfkill);
+ 	if (res) {
+ 		rfkill_destroy(rdev->wiphy.rfkill);
+@@ -1248,7 +1251,7 @@ void wiphy_unregister(struct wiphy *wiphy)
+ 		wiphy_unlock(&rdev->wiphy);
+ 		__count == 0; }));
+ 
+-	if (rdev->wiphy.rfkill)
++	if (rdev->wiphy.rfkill && !(wiphy->flags & WIPHY_FLAG_NO_RFKILL))
+ 		rfkill_unregister(rdev->wiphy.rfkill);
+ 
+ 	rtnl_lock();

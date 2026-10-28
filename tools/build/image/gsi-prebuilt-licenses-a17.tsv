@@ -1,0 +1,8 @@
+# prebuilt GSI content
+prebuilts/vndk/v31	not-gpl	VNDK snapshot of AOSP libraries: Apache-2.0, BSD, MIT, OpenSSL, public domain; libcap is BSD-3-Clause or GPL-2.0 at the recipient's choice
+prebuilts/vndk/v32	not-gpl	VNDK snapshot of AOSP libraries: Apache-2.0, BSD, MIT, OpenSSL, public domain; libcap is BSD-3-Clause or GPL-2.0 at the recipient's choice
+prebuilts/vndk/v33	not-gpl	VNDK snapshot of AOSP libraries: Apache-2.0, BSD, MIT, OpenSSL, public domain; libcap is BSD-3-Clause or GPL-2.0 at the recipient's choice
+prebuilts/vndk/v34	not-gpl	VNDK snapshot of AOSP libraries: Apache-2.0, BSD, MIT, OpenSSL, public domain; libcap is BSD-3-Clause or GPL-2.0 at the recipient's choice
+prebuilts/rust-toolchain/linux-x86	not-gpl	Rust standard library: MIT or Apache-2.0
+apex:com.android.virt.apex/etc/fs/microdroid_kernel	gpl	Linux 6.6.118-android15-8-gde6599b44559-ab14720466 (packages/modules/Virtualization/guest/kernel/android15-6.6); source: https://android.googlesource.com/kernel/common at de6599b44559
+apex:com.android.virt.apex/etc/u-boot.rom	gpl	U-Boot 2024.04-g3fe964757589-ab15108624 (device/google/cuttlefish_prebuilts/bootloader/crosvm_x86_64); source: https://android.googlesource.com/platform/external/u-boot at 3fe964757589

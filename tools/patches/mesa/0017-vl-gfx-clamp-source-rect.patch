@@ -1,0 +1,200 @@
+--- a/src/gallium/auxiliary/vl/vl_compositor.h
++++ b/src/gallium/auxiliary/vl/vl_compositor.h
+@@ -115,6 +115,8 @@
+    struct vertex4f colors[4];
+    enum vl_compositor_rotation rotate;
+    enum vl_compositor_mirror mirror;
++
++   float plane_clamp[2][4];
+ };
+ 
+ struct vl_compositor_state
+--- a/src/gallium/auxiliary/vl/vl_compositor.c
++++ b/src/gallium/auxiliary/vl/vl_compositor.c
+@@ -325,6 +325,43 @@
+    layer->zw.y = size.y;
+ }
+ 
++/* set each plane's clamp half a texel inside the source */
++static void
++calc_plane_clamp(struct vl_compositor_layer *layer)
++{
++   for (unsigned p = 0; p < 2; ++p) {
++      struct pipe_sampler_view *view = layer->sampler_views[p];
++      float hx = 0.0f, hy = 0.0f;
++      float x0, y0, x1, y1;
++
++      if (view && view->texture->width0 && view->texture->height0) {
++         hx = 0.5f / view->texture->width0;
++         hy = 0.5f / view->texture->height0;
++      }
++      x0 = layer->src.tl.x + hx;
++      x1 = layer->src.br.x - hx;
++      y0 = layer->src.tl.y + hy;
++      y1 = layer->src.br.y - hy;
++      if (x0 > x1)
++         x0 = x1 = (layer->src.tl.x + layer->src.br.x) * 0.5f;
++      if (y0 > y1)
++         y0 = y1 = (layer->src.tl.y + layer->src.br.y) * 0.5f;
++      layer->plane_clamp[p][0] = x0;
++      layer->plane_clamp[p][1] = y0;
++      layer->plane_clamp[p][2] = x1;
++      layer->plane_clamp[p][3] = y1;
++   }
++}
++
++static void
++clear_plane_clamp(struct vl_compositor_layer *layer)
++{
++   for (unsigned p = 0; p < 2; ++p) {
++      layer->plane_clamp[p][0] = layer->plane_clamp[p][1] = 0.0f;
++      layer->plane_clamp[p][2] = layer->plane_clamp[p][3] = 1.0f;
++   }
++}
++
+ static void
+ set_yuv_layer(struct vl_compositor_state *s, struct vl_compositor *c,
+               unsigned layer, struct pipe_video_buffer *buffer,
+@@ -399,6 +444,8 @@
+           s->layers[layer].cs = (y) ? c->cs_yuv.weave.y : c->cs_yuv.weave.uv;
+       break;
+    }
++
++   calc_plane_clamp(&s->layers[layer]);
+ }
+ 
+ static void
+@@ -495,6 +542,7 @@
+          s->layers[i].sampler_views[j] = NULL;
+       for ( j = 0; j < 4; ++j)
+          s->layers[i].colors[j] = v_one;
++      clear_plane_clamp(&s->layers[i]);
+    }
+ }
+ 
+@@ -635,6 +683,8 @@
+       else if (c->pipe_gfx_supported)
+          s->layers[layer].fs = c->fs_video_buffer;
+    }
++
++   calc_plane_clamp(&s->layers[layer]);
+ }
+ 
+ void
+--- a/src/gallium/auxiliary/vl/vl_compositor_gfx.c
++++ b/src/gallium/auxiliary/vl/vl_compositor_gfx.c
+@@ -42,6 +42,8 @@
+ 
+ #include "vl_compositor_gfx.h"
+ 
++#define VL_COMPOSITOR_GFX_CLAMP_SLOT 4
++
+ enum VS_OUTPUT
+ {
+    VS_O_VPOS = 0,
+@@ -242,6 +246,8 @@
+ {
+    struct ureg_src tc;
+    struct ureg_src sampler[3];
++   struct ureg_src clamp[2];
++   struct ureg_dst ctc[2];
+    unsigned i;
+ 
+    tc = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, VS_O_VTEX, TGSI_INTERPOLATE_LINEAR);
+@@ -255,10 +261,27 @@
+    }
+ 
+    /*
+-    * texel.xyz = tex(tc, sampler[i])
++    * ctc[p].xy = min(max(tc.xy, clamp[p].xy), clamp[p].zw)
++    * ctc[p].zw = tc.zw
++    */
++   for (i = 0; i < 2; ++i) {
++      clamp[i] = ureg_DECL_constant(shader, VL_COMPOSITOR_GFX_CLAMP_SLOT + i);
++      ctc[i] = ureg_DECL_temporary(shader);
++      ureg_MOV(shader, ureg_writemask(ctc[i], TGSI_WRITEMASK_ZW), tc);
++      ureg_MAX(shader, ureg_writemask(ctc[i], TGSI_WRITEMASK_XY), tc, clamp[i]);
++      ureg_MIN(shader, ureg_writemask(ctc[i], TGSI_WRITEMASK_XY), ureg_src(ctc[i]),
++               ureg_swizzle(clamp[i], TGSI_SWIZZLE_Z, TGSI_SWIZZLE_W, TGSI_SWIZZLE_Z, TGSI_SWIZZLE_W));
++   }
++
++   /*
++    * texel.xyz = tex(ctc[i ? 1 : 0], sampler[i])
+     */
+    for (i = 0; i < 3; ++i)
+-      ureg_TEX(shader, ureg_writemask(texel, TGSI_WRITEMASK_X << i), TGSI_TEXTURE_2D_ARRAY, tc, sampler[i]);
++      ureg_TEX(shader, ureg_writemask(texel, TGSI_WRITEMASK_X << i), TGSI_TEXTURE_2D_ARRAY,
++               ureg_src(ctc[i ? 1 : 0]), sampler[i]);
++
++   for (i = 0; i < 2; ++i)
++      ureg_release_temporary(shader, ctc[i]);
+ }
+ 
+ void *
+@@ -645,8 +671,17 @@
+    u_upload_unmap(c->pipe->stream_uploader);
+ }
+ 
++static struct vl_compositor_layer *
++first_used_layer(struct vl_compositor_state *s)
++{
++   for (unsigned i = 0; i < VL_COMPOSITOR_MAX_LAYERS; ++i)
++      if (s->used_layers & (1 << i))
++         return &s->layers[i];
++   return NULL;
++}
++
+ static void
+-set_csc_matrix(struct vl_compositor_state *s)
++set_csc_matrix(struct vl_compositor_state *s, const struct vl_compositor_layer *first)
+ {
+    struct pipe_transfer *buf_transfer;
+ 
+@@ -663,11 +699,16 @@
+    *ptr++ = s->luma_min;
+    *ptr++ = s->luma_max;
+ 
++   ptr += 2;
++   if (first)
++      memcpy(ptr, first->plane_clamp, sizeof(first->plane_clamp));
++
+    pipe_buffer_unmap(s->pipe, buf_transfer);
+ }
+ 
+ static void
+-draw_layers(struct vl_compositor *c, struct vl_compositor_state *s, struct u_rect *dirty)
++draw_layers(struct vl_compositor *c, struct vl_compositor_state *s, struct u_rect *dirty,
++            const struct vl_compositor_layer *written)
+ {
+    unsigned vb_index, i;
+ 
+@@ -680,6 +723,13 @@
+          unsigned num_sampler_views = !samplers[1] ? 1 : !samplers[2] ? 2 : 3;
+          void *blend = layer->blend ? layer->blend : i ? c->blend_add : c->blend_clear;
+ 
++         if (written && memcmp(written->plane_clamp, layer->plane_clamp, sizeof(layer->plane_clamp))) {
++            pipe_buffer_write(c->pipe, s->shader_params,
++                              VL_COMPOSITOR_GFX_CLAMP_SLOT * 4 * sizeof(float),
++                              sizeof(layer->plane_clamp), layer->plane_clamp);
++            written = layer;
++         }
++
+          c->pipe->bind_blend_state(c->pipe, blend);
+          c->pipe->set_viewport_states(c->pipe, 0, 1, &layer->viewport);
+          c->pipe->bind_fs_state(c->pipe, layer->fs);
+@@ -725,7 +775,7 @@
+    c->pipe->set_scissor_states(c->pipe, 0, 1, &s->scissor);
+ 
+    gen_vertex_data(c, s, dirty_area);
+-   set_csc_matrix(s);
++   set_csc_matrix(s, first_used_layer(s));
+ 
+    if (clear_dirty && dirty_area &&
+        (dirty_area->x0 < dirty_area->x1 || dirty_area->y0 < dirty_area->y1)) {
+@@ -743,5 +793,5 @@
+    pipe_set_constant_buffer(c->pipe, PIPE_SHADER_FRAGMENT, 0, s->shader_params);
+    c->pipe->bind_rasterizer_state(c->pipe, c->rast);
+ 
+-   draw_layers(c, s, dirty_area);
++   draw_layers(c, s, dirty_area, first_used_layer(s));
+ }

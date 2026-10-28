@@ -1,0 +1,13 @@
+[Unit]
+Description=Rhizo stream export daemon
+Requires=rhizo-streamd.socket
+After=rhizo-streamd.socket
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'set -- $$(/usr/bin/bash /usr/lib/rhizo/detect-gpu-driver.sh --node --env-file /etc/rhizo/androidd.env); [ -n "$$1" ] || exit 1; exec /usr/lib/rhizo/streamd/rhizo-streamd --port 8555 --render-node "$$1"'
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal

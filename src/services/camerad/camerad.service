@@ -1,0 +1,22 @@
+[Unit]
+Description=Rhizo camera host
+After=androidd.service
+ConditionPathExists=/run/rhizo-desktop/session.env
+PartOf=androidd.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=rhizo
+EnvironmentFile=/run/rhizo-desktop/session.env
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh devices.camera
+ExecStartPre=+/bin/sh -c '\
+  owner=$(cat /etc/rhizo/desktop-user 2>/dev/null || echo ubuntu); \
+  install -d -o "$owner" -g rhizo -m 0755 /run/rhizo-camera'
+ExecStart=/usr/lib/rhizo/camerad/rhizo-camerad --socket /run/rhizo-camera/camerad
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:/var/log/rhizo/rhizo-camerad.log
+StandardError=append:/var/log/rhizo/rhizo-camerad.log
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX

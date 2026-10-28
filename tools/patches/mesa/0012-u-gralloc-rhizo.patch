@@ -1,0 +1,316 @@
+--- a/src/util/u_gralloc/meson.build
++++ b/src/util/u_gralloc/meson.build
+@@ -15,6 +15,7 @@
+   'u_gralloc_cros_api.c',
+   'u_gralloc_libdrm.c',
+   'u_gralloc_qcom.c',
++  'u_gralloc_rhizo.c',
+ )
+ 
+ if dep_android_ui.found()
+--- a/src/util/u_gralloc/u_gralloc.c
++++ b/src/util/u_gralloc/u_gralloc.c
+@@ -30,6 +30,7 @@
+ #endif /* USE_IMAPPER4_METADATA_API */
+    {.type = U_GRALLOC_TYPE_LIBDRM, .create = u_gralloc_libdrm_create},
+    {.type = U_GRALLOC_TYPE_QCOM, .create = u_gralloc_qcom_create},
++   {.type = U_GRALLOC_TYPE_RHIZO, .create = u_gralloc_rhizo_create},
+    {.type = U_GRALLOC_TYPE_FALLBACK, .create = u_gralloc_fallback_create},
+ };
+ 
+--- a/src/util/u_gralloc/u_gralloc.h
++++ b/src/util/u_gralloc/u_gralloc.h
+@@ -53,6 +53,7 @@
+    U_GRALLOC_TYPE_CROS,
+    U_GRALLOC_TYPE_LIBDRM,
+    U_GRALLOC_TYPE_QCOM,
++   U_GRALLOC_TYPE_RHIZO,
+    U_GRALLOC_TYPE_FALLBACK,
+    U_GRALLOC_TYPE_COUNT,
+ };
+--- a/src/util/u_gralloc/u_gralloc_internal.h
++++ b/src/util/u_gralloc/u_gralloc_internal.h
+@@ -37,6 +37,7 @@
+ #endif
+ extern struct u_gralloc *u_gralloc_qcom_create(void);
+ extern struct u_gralloc *u_gralloc_libdrm_create(void);
++extern struct u_gralloc *u_gralloc_rhizo_create(void);
+ extern struct u_gralloc *u_gralloc_fallback_create(void);
+ 
+ /* Helpers for legacy grallocs */
+--- /dev/null
++++ b/src/util/u_gralloc/u_gralloc_rhizo.c
+@@ -0,0 +1,273 @@
++/* read the buffer handles of rhizo/buffer_metadata.h */
++
++#include "u_gralloc_internal.h"
++
++#include <errno.h>
++#include <hardware/gralloc.h>
++#include <unistd.h>
++
++#include "drm-uapi/drm_fourcc.h"
++#include "util/log.h"
++#include "util/u_atomic.h"
++#include "util/u_memory.h"
++
++#define RHIZO_HANDLE_MAGIC 0x5248495A
++#define RHIZO_HANDLE_VERSION 3
++
++#define RHIZO_SLOT_MAGIC 0
++#define RHIZO_SLOT_VERSION 1
++#define RHIZO_SLOT_WIDTH 2
++#define RHIZO_SLOT_HEIGHT 3
++#define RHIZO_SLOT_PIXEL_FORMAT 4
++#define RHIZO_SLOT_DRM_FOURCC 5
++#define RHIZO_SLOT_MODIFIER_HI 9
++#define RHIZO_SLOT_MODIFIER_LO 10
++#define RHIZO_SLOT_NUM_PLANES 16
++#define RHIZO_SLOT_PLANE_TABLE 17
++#define RHIZO_PLANE_INTS 3 /* fd index, offset, stride */
++#define RHIZO_MAX_PLANES 3
++#define RHIZO_SLOT_META_FD 26 /* the shared-metadata fd, the handle's last, or -1 */
++#define RHIZO_NUM_INTS 27
++#define RHIZO_MAX_FDS (RHIZO_MAX_PLANES + 1)
++
++#define RHIZO_METADATA_MAGIC 0x444D5A52
++#define RHIZO_METADATA_VERSION 1
++
++#define RHIZO_DS_STANDARD(ds) (((ds) >> 16) & 0x3f)
++#define RHIZO_DS_RANGE(ds) (((ds) >> 27) & 0x7)
++#define RHIZO_DS_STANDARD_BT709 1
++#define RHIZO_DS_STANDARD_BT601_625 2
++#define RHIZO_DS_STANDARD_BT601_525_UNADJUSTED 5
++#define RHIZO_DS_STANDARD_BT2020 6
++#define RHIZO_DS_STANDARD_BT2020_CONSTANT_LUMINANCE 7
++#define RHIZO_DS_RANGE_FULL 1
++#define RHIZO_DS_RANGE_LIMITED 2
++#define RHIZO_DS_RANGE_EXTENDED 3
++#define RHIZO_DS_JFIF 0x101
++#define RHIZO_DS_BT601_625 0x102
++#define RHIZO_DS_BT601_525 0x103
++#define RHIZO_DS_BT709 0x104
++
++struct rhizo_gralloc {
++   struct u_gralloc base;
++   struct u_gralloc *fallback;
++};
++
++/* return a Rhizo handle's int slots */
++static const int *
++rhizo_slots(const native_handle_t *h)
++{
++   if (!h || h->numFds < 1 || h->numFds > RHIZO_MAX_FDS ||
++       h->numInts < RHIZO_NUM_INTS)
++      return NULL;
++
++   const int *ints = h->data + h->numFds;
++   if (ints[RHIZO_SLOT_MAGIC] != RHIZO_HANDLE_MAGIC ||
++       ints[RHIZO_SLOT_VERSION] != RHIZO_HANDLE_VERSION)
++      return NULL;
++
++   return ints;
++}
++
++/* count the fds holding a Rhizo handle's planes */
++static int
++rhizo_plane_fds(const native_handle_t *h, const int *ints)
++{
++   return ints[RHIZO_SLOT_META_FD] >= 0 ? h->numFds - 1 : h->numFds;
++}
++
++/* fill out from a Rhizo handle's plane table */
++static bool
++rhizo_fill_planes(const native_handle_t *h, const int *ints, uint32_t fourcc,
++                  uint64_t modifier, int want_planes,
++                  struct u_gralloc_buffer_basic_info *out)
++{
++   int num_planes = ints[RHIZO_SLOT_NUM_PLANES];
++   int plane_fds = rhizo_plane_fds(h, ints);
++
++   if (num_planes != want_planes || plane_fds < 1)
++      return false;
++
++   out->drm_fourcc = fourcc;
++   out->modifier = modifier;
++   out->num_planes = num_planes;
++   for (int p = 0; p < num_planes; p++) {
++      const int *slot = ints + RHIZO_SLOT_PLANE_TABLE + p * RHIZO_PLANE_INTS;
++      int fd_index = slot[0], offset = slot[1], stride = slot[2];
++
++      if (fd_index < 0 || fd_index >= plane_fds || offset < 0 || stride <= 0)
++         return false;
++
++      out->fds[p] = h->data[fd_index];
++      out->offsets[p] = offset;
++      out->strides[p] = stride;
++   }
++
++   return true;
++}
++
++static int
++rhizo_get_buffer_info(struct u_gralloc *gralloc,
++                      struct u_gralloc_buffer_handle *hnd,
++                      struct u_gralloc_buffer_basic_info *out)
++{
++   struct rhizo_gralloc *gr = (struct rhizo_gralloc *)gralloc;
++   const int *ints = rhizo_slots(hnd->handle);
++   static int logged_yuv;
++
++   if (ints) {
++      uint32_t fourcc = (uint32_t)ints[RHIZO_SLOT_DRM_FOURCC];
++      uint64_t modifier =
++         ((uint64_t)(uint32_t)ints[RHIZO_SLOT_MODIFIER_HI] << 32) |
++         (uint32_t)ints[RHIZO_SLOT_MODIFIER_LO];
++
++      if (fourcc == DRM_FORMAT_YVU420) {
++         if (!rhizo_fill_planes(hnd->handle, ints, fourcc, modifier, 3, out)) {
++            mesa_logw("rhizo gralloc: a YVU420 handle with an unusable plane table");
++            return -EINVAL;
++         }
++         if (p_atomic_cmpxchg(&logged_yuv, 0, 1) == 0)
++            mesa_logi("rhizo gralloc: YVU420 %dx%d in %d dma-buf(s), strides %d/%d/%d",
++                      ints[RHIZO_SLOT_WIDTH], ints[RHIZO_SLOT_HEIGHT],
++                      rhizo_plane_fds(hnd->handle, ints), out->strides[0],
++                      out->strides[1], out->strides[2]);
++         return 0;
++      }
++
++      if (hnd->hal_format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED &&
++          fourcc == DRM_FORMAT_XBGR8888) {
++         if (!rhizo_fill_planes(hnd->handle, ints, fourcc,
++                                DRM_FORMAT_MOD_INVALID, 1, out))
++            return -EINVAL;
++         return 0;
++      }
++   }
++
++   return gr->fallback->ops.get_buffer_basic_info(gr->fallback, hnd, out);
++}
++
++/* set the YUV-to-RGB matrix and range a Dataspace names */
++static void
++rhizo_color_from_dataspace(int ds, struct u_gralloc_buffer_color_info *out)
++{
++   out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC601;
++   out->sample_range = __DRI_YUV_NARROW_RANGE;
++   out->horizontal_siting = __DRI_YUV_CHROMA_SITING_0_5;
++   out->vertical_siting = __DRI_YUV_CHROMA_SITING_0_5;
++
++   switch (ds) {
++   case RHIZO_DS_JFIF:
++      out->sample_range = __DRI_YUV_FULL_RANGE;
++      return;
++   case RHIZO_DS_BT601_625:
++   case RHIZO_DS_BT601_525:
++      return;
++   case RHIZO_DS_BT709:
++      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC709;
++      return;
++   default:
++      break;
++   }
++
++   switch (RHIZO_DS_STANDARD(ds)) {
++   case RHIZO_DS_STANDARD_BT709:
++      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC709;
++      break;
++   case RHIZO_DS_STANDARD_BT2020:
++   case RHIZO_DS_STANDARD_BT2020_CONSTANT_LUMINANCE:
++      out->yuv_color_space = __DRI_YUV_COLOR_SPACE_ITU_REC2020;
++      break;
++   default: /* BT601_625 .. BT601_525_UNADJUSTED, or none */
++      break;
++   }
++
++   switch (RHIZO_DS_RANGE(ds)) {
++   case RHIZO_DS_RANGE_FULL:
++   case RHIZO_DS_RANGE_EXTENDED:
++      out->sample_range = __DRI_YUV_FULL_RANGE;
++      break;
++   default: /* LIMITED, or unspecified: video's limited */
++      break;
++   }
++}
++
++/* read the Dataspace from a Rhizo handle's shared-metadata page */
++static int
++rhizo_dataspace(const native_handle_t *h, const int *ints)
++{
++   int meta = ints[RHIZO_SLOT_META_FD];
++   uint32_t page[3];
++
++   if (meta < 0 || meta != h->numFds - 1)
++      return 0;
++   if (pread(h->data[meta], page, sizeof(page), 0) != (ssize_t)sizeof(page) ||
++       page[0] != RHIZO_METADATA_MAGIC || page[1] != RHIZO_METADATA_VERSION)
++      return 0;
++
++   return (int)page[2];
++}
++
++static int
++rhizo_get_color_info(struct u_gralloc *gralloc,
++                     struct u_gralloc_buffer_handle *hnd,
++                     struct u_gralloc_buffer_color_info *out)
++{
++   struct rhizo_gralloc *gr = (struct rhizo_gralloc *)gralloc;
++   const int *ints = rhizo_slots(hnd->handle);
++   static int logged;
++
++   if (!ints) {
++      if (gr->fallback->ops.get_buffer_color_info)
++         return gr->fallback->ops.get_buffer_color_info(gr->fallback, hnd, out);
++      rhizo_color_from_dataspace(0, out);
++      return 0;
++   }
++
++   int ds = rhizo_dataspace(hnd->handle, ints);
++   rhizo_color_from_dataspace(ds, out);
++   if (ints[RHIZO_SLOT_META_FD] >= 0 && p_atomic_cmpxchg(&logged, 0, 1) == 0)
++      mesa_logi("rhizo gralloc: dataspace 0x%x: %s, %s range", (unsigned)ds,
++                out->yuv_color_space == __DRI_YUV_COLOR_SPACE_ITU_REC709    ? "BT.709"
++                : out->yuv_color_space == __DRI_YUV_COLOR_SPACE_ITU_REC2020 ? "BT.2020"
++                                                                            : "BT.601",
++                out->sample_range == __DRI_YUV_FULL_RANGE ? "full" : "limited");
++
++   return 0;
++}
++
++static int
++rhizo_destroy(struct u_gralloc *gralloc)
++{
++   struct rhizo_gralloc *gr = (struct rhizo_gralloc *)gralloc;
++
++   if (gr->fallback)
++      gr->fallback->ops.destroy(gr->fallback);
++
++   FREE(gr);
++
++   return 0;
++}
++
++struct u_gralloc *
++u_gralloc_rhizo_create()
++{
++   struct rhizo_gralloc *gr = CALLOC_STRUCT(rhizo_gralloc);
++
++   if (!gr)
++      return NULL;
++
++   gr->fallback = u_gralloc_fallback_create();
++   if (!gr->fallback) {
++      FREE(gr);
++      return NULL;
++   }
++
++   gr->base.ops.get_buffer_basic_info = rhizo_get_buffer_info;
++   gr->base.ops.get_buffer_color_info = rhizo_get_color_info;
++   gr->base.ops.destroy = rhizo_destroy;
++
++   mesa_logi("Using the Rhizo gralloc handle reader (YUV and IMPLEMENTATION_DEFINED), "
++             "the fallback for every other buffer");
++
++   return &gr->base;
++}

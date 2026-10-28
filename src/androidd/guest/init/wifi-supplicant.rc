@@ -1,0 +1,11 @@
+# @RHIZO_SUBST early_init_restorecon
+
+service wpa_supplicant /vendor/bin/hw/rhizo-wifi-supplicant
+    interface aidl android.hardware.wifi.supplicant.ISupplicant/default
+    class main
+    user wifi
+    group wifi inet
+    capabilities NET_ADMIN
+    disabled
+    oneshot
+    stdio_to_kmsg

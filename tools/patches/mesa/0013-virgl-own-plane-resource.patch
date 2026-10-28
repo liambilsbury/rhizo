@@ -1,0 +1,12 @@
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -742,6 +742,9 @@
+ 
+    /* do not use winsys returns for guest storage info of classic resource */
+    if (!res->blob_mem) {
++      /* the host reads a single-plane texture's plane index as a layer */
++      if (plane_offset == 0)
++         plane = 0;
+       winsys_stride = 0;
+       plane_offset = 0;
+       modifier = 0;

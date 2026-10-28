@@ -1,0 +1,232 @@
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 6b3db40b546..03b84dd3fe8 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -279,6 +279,7 @@ static inline u32 task_sid_obj(const struct task_struct *task)
+ }
+ 
+ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dentry);
++static void sb_init_deferred(struct super_block *sb, bool may_wait);
+ 
+ /*
+  * Try reloading inode security labels that have been marked as invalid.  The
+@@ -304,6 +305,7 @@ static int __inode_security_revalidate(struct inode *inode,
+ 	 * @dentry is NULL and no dentry for this inode can be found; in that
+ 	 * case, continue using the old label.
+ 	 */
++	sb_init_deferred(inode->i_sb, true);
+ 	inode_doinit_with_dentry(inode, dentry);
+ 	return 0;
+ }
+@@ -633,10 +635,11 @@ static int bad_option(struct superblock_security_struct *sbsec, char flag,
+  * Allow filesystems with binary mount data to explicitly set mount point
+  * labeling information.
+  */
+-static int selinux_set_mnt_opts(struct super_block *sb,
+-				void *mnt_opts,
+-				unsigned long kern_flags,
+-				unsigned long *set_kern_flags)
++static int __selinux_set_mnt_opts(struct super_block *sb,
++				  void *mnt_opts,
++				  unsigned long kern_flags,
++				  unsigned long *set_kern_flags,
++				  u32 creator_sid)
+ {
+ 	const struct cred *cred = current_cred();
+ 	struct superblock_security_struct *sbsec = selinux_superblock(sb);
+@@ -654,8 +657,6 @@ static int selinux_set_mnt_opts(struct super_block *sb,
+ 	if (kern_flags && !set_kern_flags)
+ 		return -EINVAL;
+ 
+-	mutex_lock(&sbsec->lock);
+-
+ 	if (!selinux_initialized(current_selinux_state)) {
+ 		if (!opts) {
+ 			/* Defer initialization until selinux_complete_init,
+@@ -665,6 +666,8 @@ static int selinux_set_mnt_opts(struct super_block *sb,
+ 				sbsec->flags |= SE_SBNATIVE;
+ 				*set_kern_flags |= SECURITY_LSM_NATIVE_LABELS;
+ 			}
++			if (current_selinux_state == init_selinux_state)
++				sbsec->flags |= SE_SBINITNSDEFER;
+ 			goto out;
+ 		}
+ 		rc = -EINVAL;
+@@ -734,7 +737,7 @@ static int selinux_set_mnt_opts(struct super_block *sb,
+ 		goto out;
+ 	}
+ 
+-	sbsec->creator_sid = current_sid();
++	sbsec->creator_sid = creator_sid;
+ 
+ 	if (strcmp(sb->s_type->name, "proc") == 0)
+ 		sbsec->flags |= SE_SBPROC | SE_SBGENFS;
+@@ -786,8 +789,8 @@ static int selinux_set_mnt_opts(struct super_block *sb,
+ 		if (sbsec->behavior == SECURITY_FS_USE_XATTR) {
+ 			sbsec->behavior = SECURITY_FS_USE_MNTPOINT;
+ 			rc = security_transition_sid(current_selinux_state,
+-						     current_sid(),
+-						     current_sid(),
++						     creator_sid,
++						     creator_sid,
+ 						     SECCLASS_FILE, NULL,
+ 						     &sbsec->mntpoint_sid);
+ 			if (rc)
+@@ -877,7 +880,6 @@ static int selinux_set_mnt_opts(struct super_block *sb,
+ out_set_opts:
+ 	rc = sb_finish_set_opts(sb);
+ out:
+-	mutex_unlock(&sbsec->lock);
+ 	return rc;
+ out_double_mount:
+ 	rc = -EINVAL;
+@@ -887,6 +889,65 @@ static int selinux_set_mnt_opts(struct super_block *sb,
+ 	goto out;
+ }
+ 
++/* take sbsec->lock and set the superblock options */
++static int selinux_set_mnt_opts(struct super_block *sb,
++				void *mnt_opts,
++				unsigned long kern_flags,
++				unsigned long *set_kern_flags)
++{
++	struct superblock_security_struct *sbsec = selinux_superblock(sb);
++	int rc;
++
++	mutex_lock(&sbsec->lock);
++	rc = __selinux_set_mnt_opts(sb, mnt_opts, kern_flags, set_kern_flags,
++				    current_sid());
++	mutex_unlock(&sbsec->lock);
++	return rc;
++}
++
++/* label a deferred init-namespace superblock */
++static void sb_init_deferred(struct super_block *sb, bool may_wait)
++{
++	struct superblock_security_struct *sbsec = selinux_superblock(sb);
++	unsigned short flags, behavior;
++	u32 sid;
++
++	/* read the flags without sbsec->lock */
++	flags = data_race(sbsec->flags);
++	if (likely((flags & (SE_SBINITNSDEFER | SE_SBINITIALIZED |
++			     SE_SBINITFAIL)) != SE_SBINITNSDEFER) ||
++	    current_selinux_state == init_selinux_state ||
++	    !selinux_initialized(current_selinux_state))
++		return;
++
++	/* skip xattr-labelled superblocks */
++	if (!may_wait &&
++	    ((flags & SE_SBNATIVE) ||
++	     security_fs_use(current_selinux_state, sb->s_type->name,
++			     &behavior, &sid) ||
++	     behavior == SECURITY_FS_USE_XATTR))
++		return;
++
++	if (!down_read_trylock(&sb->s_umount))
++		return;
++	if (!(sb->s_flags & SB_BORN) || (sb->s_flags & SB_DYING))
++		goto out;
++	/* nest under the sbsec->lock of an overlay mount */
++	if (may_wait)
++		mutex_lock_nested(&sbsec->lock, SINGLE_DEPTH_NESTING);
++	else if (!mutex_trylock(&sbsec->lock))
++		goto out;
++	if (!(sbsec->flags & SE_SBINITIALIZED)) {
++		/* set the kernel as the superblock creator */
++		__selinux_set_mnt_opts(sb, NULL, 0, NULL, SECINITSID_KERNEL);
++		if (!(sbsec->flags & SE_SBINITIALIZED))
++			sbsec->flags |= SE_SBINITFAIL;
++	}
++	mutex_unlock(&sbsec->lock);
++out:
++	up_read(&sb->s_umount);
++}
++
+ static int selinux_cmp_sb_context(const struct super_block *oldsb,
+ 				    const struct super_block *newsb)
+ {
+@@ -951,6 +1012,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
+ 			newsbsec->flags |= SE_SBNATIVE;
+ 			*set_kern_flags |= SECURITY_LSM_NATIVE_LABELS;
+ 		}
++		if (current_selinux_state == init_selinux_state)
++			newsbsec->flags |= SE_SBINITNSDEFER;
+ 		goto out;
+ 	}
+ 
+@@ -2186,6 +2249,7 @@ static int selinux_quotactl(int cmds, int type, int id, const struct super_block
+ 	if (!sb)
+ 		return 0;
+ 
++	sb_init_deferred((struct super_block *)sb, true);
+ 	switch (cmds) {
+ 	case Q_SYNC:
+ 	case Q_QUOTAON:
+@@ -2859,6 +2923,8 @@ static int selinux_sb_statfs(struct dentry *dentry)
+ 	const struct cred *cred = current_cred();
+ 	struct common_audit_data ad;
+ 
++	/* label the superblock without blocking */
++	sb_init_deferred(dentry->d_sb, false);
+ 	ad.type = LSM_AUDIT_DATA_DENTRY;
+ 	ad.u.dentry = dentry->d_sb->s_root;
+ 	return superblock_has_perm(cred, dentry->d_sb, FILESYSTEM__GETATTR, &ad);
+@@ -2872,11 +2938,12 @@ static int selinux_mount(const char *dev_name,
+ {
+ 	const struct cred *cred = current_cred();
+ 
+-	if (flags & MS_REMOUNT)
++	if (flags & MS_REMOUNT) {
++		sb_init_deferred(path->dentry->d_sb, true);
+ 		return superblock_has_perm(cred, path->dentry->d_sb,
+ 					   FILESYSTEM__REMOUNT, NULL);
+-	else
+-		return path_has_perm(cred, path, FILE__MOUNTON);
++	}
++	return path_has_perm(cred, path, FILE__MOUNTON);
+ }
+ 
+ static int selinux_move_mount(const struct path *from_path,
+@@ -2891,6 +2958,7 @@ static int selinux_umount(struct vfsmount *mnt, int flags)
+ {
+ 	const struct cred *cred = current_cred();
+ 
++	sb_init_deferred(mnt->mnt_sb, true);
+ 	return superblock_has_perm(cred, mnt->mnt_sb,
+ 				   FILESYSTEM__UNMOUNT, NULL);
+ }
+@@ -3694,6 +3762,7 @@ static int selinux_path_notify(const struct path *path, u64 mask,
+ 		break;
+ 	case FSNOTIFY_OBJ_TYPE_SB:
+ 		perm = FILE__WATCH_SB;
++		sb_init_deferred(path->dentry->d_sb, true);
+ 		ret = superblock_has_perm(current_cred(), path->dentry->d_sb,
+ 						FILESYSTEM__WATCH, &ad);
+ 		if (ret)
+@@ -4393,7 +4462,12 @@ static int selinux_file_send_sigiotask(struct task_struct *tsk,
+ static int selinux_file_receive(struct file *file)
+ {
+ 	const struct cred *cred = current_cred();
++	struct dentry *dentry = file->f_path.dentry;
+ 
++	/* revalidate the inode label */
++	if (current_selinux_state != init_selinux_state &&
++	    !IS_PRIVATE(d_backing_inode(dentry)))
++		backing_inode_security(dentry);
+ 	return file_has_perm(cred, file, file_to_av(file));
+ }
+ 
+diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
+index b870b4bd66f..5f43e950aa4 100644
+--- a/security/selinux/include/security.h
++++ b/security/selinux/include/security.h
+@@ -68,6 +68,8 @@
+ #define SE_SBPROC	 0x0200
+ #define SE_SBGENFS	 0x0400
+ #define SE_SBNATIVE	 0x1000
++#define SE_SBINITNSDEFER 0x2000	/* deferred in the init namespace */
++#define SE_SBINITFAIL	 0x4000	/* lazy initialization failed */
+ 
+ #define CONTEXT_STR	"context"
+ #define FSCONTEXT_STR	"fscontext"

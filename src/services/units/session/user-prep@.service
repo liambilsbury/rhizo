@@ -1,0 +1,11 @@
+[Unit]
+Description=Rhizo user manager setup for UID %i
+After=user-runtime-dir@%i.service
+
+[Service]
+Type=oneshot
+User=%i
+ExecStart=-+/usr/lib/rhizo/install/bootstrap/user-cgroup-reset.sh %i
+ExecStart=-/usr/lib/rhizo/install/bootstrap/skel-fill.sh
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/install/bootstrap/rundir-root.py --own-runtime-dir
+ExecStart=/usr/bin/python3 /usr/lib/rhizo/install/bootstrap/rundir-root.py --own-portal-doc

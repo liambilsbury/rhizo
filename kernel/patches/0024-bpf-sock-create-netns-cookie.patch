@@ -1,0 +1,37 @@
+diff --git a/net/core/filter.c b/net/core/filter.c
+index 80a3b702a2d..716df27ddbe 100644
+--- a/net/core/filter.c
++++ b/net/core/filter.c
+@@ -5227,6 +5227,23 @@ static const struct bpf_func_proto bpf_get_netns_cookie_sock_proto = {
+ 	.arg1_type	= ARG_PTR_TO_CTX_OR_NULL,
+ };
+ 
++/* A NULL ctx selects the socket-creating task's network namespace. */
++BPF_CALL_1(bpf_get_netns_cookie_sock_create, struct sock *, ctx)
++{
++	if (ctx)
++		return __bpf_get_netns_cookie(ctx);
++	if (current->nsproxy)
++		return current->nsproxy->net_ns->net_cookie;
++	return init_net.net_cookie;
++}
++
++static const struct bpf_func_proto bpf_get_netns_cookie_sock_create_proto = {
++	.func		= bpf_get_netns_cookie_sock_create,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_CTX_OR_NULL,
++};
++
+ BPF_CALL_1(bpf_get_netns_cookie_sock_addr, struct bpf_sock_addr_kern *, ctx)
+ {
+ 	return __bpf_get_netns_cookie(ctx ? ctx->sk : NULL);
+@@ -8143,6 +8160,8 @@ sock_filter_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+ 	case BPF_FUNC_get_socket_cookie:
+ 		return &bpf_get_socket_cookie_sock_proto;
+ 	case BPF_FUNC_get_netns_cookie:
++		if (prog->expected_attach_type == BPF_CGROUP_INET_SOCK_CREATE)
++			return &bpf_get_netns_cookie_sock_create_proto;
+ 		return &bpf_get_netns_cookie_sock_proto;
+ 	case BPF_FUNC_perf_event_output:
+ 		return &bpf_event_output_data_proto;

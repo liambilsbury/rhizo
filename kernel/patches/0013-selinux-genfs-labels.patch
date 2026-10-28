@@ -1,0 +1,654 @@
+diff --git a/fs/kernfs/mount.c b/fs/kernfs/mount.c
+index 6e3217b6e..1855abefb 100644
+--- a/fs/kernfs/mount.c
++++ b/fs/kernfs/mount.c
+@@ -187,6 +187,35 @@ struct kernfs_root *kernfs_root_from_sb(struct super_block *sb)
+ 	return NULL;
+ }
+ 
++/**
++ * kernfs_walk_supers - call a function on each super_block of a hierarchy
++ * @kn: a node of the hierarchy
++ * @fn: the function to call with each super_block of @kn's hierarchy
++ * @arg: the argument to pass to @fn
++ *
++ * @fn runs with the hierarchy's super_block list read-locked and must not
++ * add or remove nodes.  The walk stops at the first nonzero return.
++ *
++ * Return: the first nonzero return of @fn, or 0.
++ */
++int kernfs_walk_supers(struct kernfs_node *kn,
++		       int (*fn)(struct super_block *sb, void *arg),
++		       void *arg)
++{
++	struct kernfs_root *root = kernfs_root(kn);
++	struct kernfs_super_info *info;
++	int rc = 0;
++
++	down_read(&root->kernfs_supers_rwsem);
++	list_for_each_entry(info, &root->supers, node) {
++		rc = fn(info->sb, arg);
++		if (rc)
++			break;
++	}
++	up_read(&root->kernfs_supers_rwsem);
++	return rc;
++}
++
+ /*
+  * find the next ancestor in the path down to @child, where @parent was the
+  * ancestor whose descendant we want to find.
+diff --git a/include/linux/kernfs.h b/include/linux/kernfs.h
+index e21b2f7f4..d4a8aaa96 100644
+--- a/include/linux/kernfs.h
++++ b/include/linux/kernfs.h
+@@ -415,6 +415,9 @@ void kernfs_put(struct kernfs_node *kn);
+ 
+ struct kernfs_node *kernfs_node_from_dentry(struct dentry *dentry);
+ struct kernfs_root *kernfs_root_from_sb(struct super_block *sb);
++int kernfs_walk_supers(struct kernfs_node *kn,
++		       int (*fn)(struct super_block *sb, void *arg),
++		       void *arg);
+ struct inode *kernfs_get_inode(struct super_block *sb, struct kernfs_node *kn);
+ 
+ struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
+@@ -513,6 +516,11 @@ static inline struct kernfs_node *kernfs_node_from_dentry(struct dentry *dentry)
+ static inline struct kernfs_root *kernfs_root_from_sb(struct super_block *sb)
+ { return NULL; }
+ 
++static inline int
++kernfs_walk_supers(struct kernfs_node *kn,
++		   int (*fn)(struct super_block *sb, void *arg), void *arg)
++{ return 0; }
++
+ static inline struct inode *
+ kernfs_get_inode(struct super_block *sb, struct kernfs_node *kn)
+ { return NULL; }
+diff --git a/include/linux/lsm_audit.h b/include/linux/lsm_audit.h
+index 584db296e..32c773073 100644
+--- a/include/linux/lsm_audit.h
++++ b/include/linux/lsm_audit.h
+@@ -78,6 +78,7 @@ struct common_audit_data {
+ #define LSM_AUDIT_DATA_NOTIFICATION 16
+ #define LSM_AUDIT_DATA_ANONINODE	17
+ #define LSM_AUDIT_DATA_NLMSGTYPE	18
++#define LSM_AUDIT_DATA_KERNFS	19
+ 	union 	{
+ 		struct path path;
+ 		struct dentry *dentry;
+@@ -99,6 +100,7 @@ struct common_audit_data {
+ 		struct lsm_ibendport_audit *ibendport;
+ 		int reason;
+ 		const char *anonclass;
++		const char *kernfs_name;
+ 		u16 nlmsg_type;
+ 	} u;
+ 	/* this union contains LSM specific data */
+diff --git a/security/lsm_audit.c b/security/lsm_audit.c
+index 737f5a263..722d8d17c 100644
+--- a/security/lsm_audit.c
++++ b/security/lsm_audit.c
+@@ -400,6 +400,10 @@ void audit_log_lsm_data(struct audit_buffer *ab,
+ 	case LSM_AUDIT_DATA_ANONINODE:
+ 		audit_log_format(ab, " anonclass=%s", a->u.anonclass);
+ 		break;
++	case LSM_AUDIT_DATA_KERNFS:
++		audit_log_format(ab, " name=");
++		audit_log_untrustedstring(ab, a->u.kernfs_name);
++		break;
+ 	case LSM_AUDIT_DATA_NLMSGTYPE:
+ 		audit_log_format(ab, " nl-msgtype=%hu", a->u.nlmsg_type);
+ 		break;
+diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
+index be97f81bf..01a1b3e15 100644
+--- a/security/selinux/global_sidtab.c
++++ b/security/selinux/global_sidtab.c
+@@ -1060,3 +1060,39 @@ int security_sid_with_records_of(u32 sid, u32 from, u32 *out_sid)
+ 	rcu_read_unlock();
+ 	return security_sid_with_records(sid, ids, sids, n, out_sid);
+ }
++
++/* return in @out_sid @sid with its record for the namespace @id set to @rec */
++int security_sid_add_record(u32 sid, u64 id, u32 rec, u32 *out_sid)
++{
++	u64 ids[SELINUX_RECORDS_MAX + 1];
++	u32 sids[SELINUX_RECORDS_MAX + 1];
++	struct sidtab_entry *entry;
++	int n = 0;
++
++	rcu_read_lock();
++	entry = sidtab_search_entry_force(&global_sidtab, sid);
++	if (sid > SECINITSID_NUM && entry &&
++	    context_has_records(&entry->context))
++		n = context_records(&entry->context, id, ids, sids,
++				    SELINUX_RECORDS_MAX);
++	rcu_read_unlock();
++	ids[n] = id;
++	sids[n++] = rec;
++	return security_sid_with_records(sid, ids, sids, n, out_sid);
++}
++
++/* return whether @sid holds a record for the namespace with @id */
++bool security_sid_has_record(u32 sid, u64 id)
++{
++	struct sidtab_entry *entry;
++	bool found = false;
++
++	if (sid <= SECINITSID_NUM)
++		return false;
++	rcu_read_lock();
++	entry = sidtab_search_entry_force(&global_sidtab, sid);
++	if (entry && context_has_records(&entry->context))
++		found = context_record(&entry->context, id) != 0;
++	rcu_read_unlock();
++	return found;
++}
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index 64814fc7c..bf0a2e634 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -279,8 +279,27 @@ static inline u32 task_sid_obj(const struct task_struct *task)
+ }
+ 
+ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dentry);
++static int inode_add_genfs_views(struct inode *inode, struct dentry *dentry,
++				 bool may_sleep);
+ static void sb_init_deferred(struct super_block *sb, bool may_wait);
+ 
++/* return @isec once each namespace of the current cred has its own view of a genfs inode */
++static inline struct inode_security_struct *
++isec_viewed(struct inode *inode, struct inode_security_struct *isec,
++	    struct dentry *dentry, bool may_sleep)
++{
++#ifdef CONFIG_SECURITY_SELINUX_NS
++	int rc;
++
++	if (likely(!READ_ONCE(isec->genfs_view)))
++		return isec;
++	rc = inode_add_genfs_views(inode, dentry, may_sleep);
++	return rc ? ERR_PTR(rc) : isec;
++#else
++	return isec;
++#endif
++}
++
+ /*
+  * Try reloading inode security labels that have been marked as invalid.  The
+  * @may_sleep parameter indicates when sleeping and thus reloading labels is
+@@ -307,6 +326,7 @@ static int __inode_security_revalidate(struct inode *inode,
+ 	 */
+ 	sb_init_deferred(inode->i_sb, true);
+ 	inode_doinit_with_dentry(inode, dentry);
++	isec_viewed(inode, selinux_inode(inode), dentry, true);
+ 	return 0;
+ }
+ 
+@@ -323,7 +343,7 @@ static inline struct inode_security_struct *inode_security_rcu(struct inode *ino
+ 
+ 	/* check below is racy, but revalidate will recheck with lock held */
+ 	if (data_race(likely(isec->initialized == LABEL_INITIALIZED)))
+-		return isec;
++		return isec_viewed(inode, isec, NULL, !rcu);
+ 	rc = __inode_security_revalidate(inode, NULL, !rcu);
+ 	if (rc)
+ 		return ERR_PTR(rc);
+@@ -339,7 +359,7 @@ static inline struct inode_security_struct *inode_security(struct inode *inode)
+ 
+ 	/* check below is racy, but revalidate will recheck with lock held */
+ 	if (data_race(likely(isec->initialized == LABEL_INITIALIZED)))
+-		return isec;
++		return isec_viewed(inode, isec, NULL, true);
+ 	__inode_security_revalidate(inode, NULL, true);
+ 	return isec;
+ }
+@@ -359,7 +379,7 @@ static inline struct inode_security_struct *backing_inode_security(struct dentry
+ 
+ 	/* check below is racy, but revalidate will recheck with lock held */
+ 	if (data_race(likely(isec->initialized == LABEL_INITIALIZED)))
+-		return isec;
++		return isec_viewed(inode, isec, dentry, true);
+ 	__inode_security_revalidate(inode, dentry, true);
+ 	return isec;
+ }
+@@ -1831,6 +1851,185 @@ static int inode_doinit_use_xattr(struct selinux_state *state,
+ 	return 0;
+ }
+ 
++/* return whether @sb's inodes take their labels from kernfs nodes that every mount shares */
++static bool sb_kernfs_shared(const struct super_block *sb)
++{
++	return !strcmp(sb->s_type->name, "sysfs") ||
++	       !strcmp(sb->s_type->name, "cgroup") ||
++	       !strcmp(sb->s_type->name, "cgroup2");
++}
++
++/* return whether @sb's inode labels come from genfs rules that can differ per namespace */
++static bool sb_genfs_views(const struct super_block *sb)
++{
++	const struct superblock_security_struct *sbsec = selinux_superblock(sb);
++
++	return ((sbsec->flags & SE_SBGENFS) ||
++		sbsec->behavior == SECURITY_FS_USE_GENFS) &&
++	       !(sbsec->flags & SE_SBPROC);
++}
++
++/* return whether @state reads kernfs labels on @sb from their stored xattr */
++static bool kernfs_xattr_read(const struct selinux_state *state,
++			      const struct super_block *sb)
++{
++	return !strcmp(sb->s_type->name, "sysfs") ||
++	       READ_ONCE(state->policycap[POLICYDB_CAP_CGROUPSECLABEL]);
++}
++
++/* replace @sid by a kernfs inode's stored label when @state defines it, or reads it as stock */
++static int kernfs_xattr_view(struct selinux_state *state, struct inode *inode,
++			     struct dentry *dentry, bool stock, u32 *sid)
++{
++	u32 xsid = *sid;
++	int rc;
++
++	if (!(inode->i_opflags & IOP_XATTR) ||
++	    !kernfs_xattr_read(state, inode->i_sb))
++		return 0;
++	rc = inode_doinit_use_xattr(state, inode, dentry, *sid, &xsid);
++	if (!rc && (stock || security_sid_defined(state, xsid)))
++		*sid = xsid;
++	return rc;
++}
++
++/* compute @state's label of a genfs inode at @dentry: path rule, or a kernfs label it defines */
++static int genfs_view_sid(struct selinux_state *state, struct inode *inode,
++			  struct dentry *dentry, u16 sclass, u32 *sid)
++{
++	u32 flags = selinux_superblock(inode->i_sb)->flags;
++	int rc;
++
++	*sid = sb_sid_for_state(state, inode->i_sb);
++	/* a superblock without path rules labels every inode alike */
++	if (!(flags & SE_SBGENFS) ||
++	    (S_ISLNK(inode->i_mode) &&
++	     !selinux_policycap_genfs_seclabel_symlinks(state)))
++		return 0;
++	rc = selinux_genfs_get_sid(state, dentry, sclass, flags, sid);
++	if (!rc && sb_kernfs_shared(inode->i_sb) && d_really_is_positive(dentry))
++		rc = kernfs_xattr_view(state, inode, dentry, false, sid);
++	return rc;
++}
++
++#ifdef CONFIG_SECURITY_SELINUX_NS
++/* record the namespace that set @isec's label */
++static inline void isec_set_label_ns(struct inode_security_struct *isec,
++				     const struct selinux_state *state)
++{
++	WRITE_ONCE(isec->label_ns, state->id);
++}
++
++/* mark @isec as a genfs label each namespace may read differently */
++static inline void isec_set_genfs_view(struct inode_security_struct *isec,
++				       bool genfs)
++{
++	WRITE_ONCE(isec->genfs_view, genfs);
++}
++
++/* give each namespace of the current cred its own label of a genfs inode another one labelled */
++static int inode_add_genfs_views(struct inode *inode, struct dentry *dentry,
++				 bool may_sleep)
++{
++	struct inode_security_struct *isec = selinux_inode(inode);
++	const struct cred_security_struct *top = selinux_cred(current_cred());
++	const struct cred_security_struct *crsec;
++	u64 label_ns = READ_ONCE(isec->label_ns);
++	u32 gen = avc_reset_generation();
++	struct dentry *found = NULL;
++	bool complete = true, any = false;
++	u32 sid, view, newsid;
++
++	sid = READ_ONCE(isec->sid);
++	if (!label_ns || (READ_ONCE(isec->view_ns) == top->state->id &&
++			  READ_ONCE(isec->view_sid) == sid &&
++			  READ_ONCE(isec->view_gen) == gen))
++		return 0;
++	/* nothing to add unless a namespace other than the labeller has a policy */
++	for (crsec = top; crsec && !any; crsec = crsec->parent_cred ?
++			selinux_cred(crsec->parent_cred) : NULL)
++		any = crsec->state->id != label_ns &&
++		      selinux_initialized(crsec->state);
++	if (!any)
++		return 0;
++	if (!may_sleep)
++		return -ECHILD;
++
++	for (crsec = top; crsec; crsec = crsec->parent_cred ?
++			selinux_cred(crsec->parent_cred) : NULL) {
++		struct selinux_state *state = crsec->state;
++
++		/* a namespace without a policy yet gets its view at its load's reset */
++		if (state->id == label_ns || !selinux_initialized(state) ||
++		    security_sid_has_record(sid, state->id))
++			continue;
++		if (!dentry) {
++			found = d_find_alias(inode);
++			dentry = found;
++		}
++		if (!dentry ||
++		    genfs_view_sid(state, inode, dentry, isec->sclass, &view) ||
++		    security_sid_add_record(sid, state->id, view, &newsid)) {
++			complete = false;
++			continue;
++		}
++		spin_lock(&isec->lock);
++		if (isec->sid == sid)
++			isec->sid = newsid;
++		else
++			complete = false;
++		sid = isec->sid;
++		spin_unlock(&isec->lock);
++	}
++	dput(found);
++
++	if (!complete)
++		return 0;
++	spin_lock(&isec->lock);
++	if (isec->sid == sid) {
++		isec->view_sid = sid;
++		isec->view_ns = top->state->id;
++		isec->view_gen = gen;
++	}
++	spin_unlock(&isec->lock);
++	return 0;
++}
++#else
++static inline void isec_set_label_ns(struct inode_security_struct *isec,
++				     const struct selinux_state *state)
++{
++}
++
++static inline void isec_set_genfs_view(struct inode_security_struct *isec,
++				       bool genfs)
++{
++}
++
++static inline int inode_add_genfs_views(struct inode *inode,
++					struct dentry *dentry, bool may_sleep)
++{
++	return 0;
++}
++#endif
++
++/* return @sid with each ancestor's genfs view of @dentry */
++static u32 sid_with_genfs_views(const struct cred_security_struct *crsec,
++				struct inode *dir, struct dentry *dentry,
++				u16 tclass, u32 sid)
++{
++	u32 view, out;
++
++	while (crsec->parent_cred) {
++		crsec = selinux_cred(crsec->parent_cred);
++		if (!selinux_initialized(crsec->state) ||
++		    genfs_view_sid(crsec->state, dir, dentry, tclass, &view) ||
++		    security_sid_add_record(sid, crsec->state->id, view, &out))
++			continue;
++		sid = out;
++	}
++	return sid;
++}
++
+ /* The inode's security attributes must be initialized before first use. */
+ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dentry)
+ {
+@@ -1841,6 +2040,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+ 	u32 task_sid, sid = 0;
+ 	u16 sclass;
+ 	struct dentry *dentry;
++	bool genfs = false;
+ 	int rc = 0;
+ 
+ 	/* check below is racy, but we will recheck with lock held */
+@@ -1948,6 +2148,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+ 	default:
+ 		/* Default to the fs superblock SID. */
+ 		sid = sb_sid_for_state(state, sb);
++		genfs = sb_genfs_views(sb);
+ 
+ 		if ((sbsec->flags & SE_SBGENFS) &&
+ 		     (!S_ISLNK(inode->i_mode) ||
+@@ -1980,31 +2181,14 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+ 				goto out_invalid;
+ 			rc = selinux_genfs_get_sid(state, dentry, sclass,
+ 						   sbsec->flags, &sid);
+-			if (rc) {
+-				dput(dentry);
+-				goto out;
+-			}
+-
+-			if ((inode->i_opflags & IOP_XATTR) &&
+-			    (!strcmp(sb->s_type->name, "sysfs") ||
+-			     (selinux_policycap_cgroupseclabel() &&
+-			      (!strcmp(sb->s_type->name, "cgroup") ||
+-			       !strcmp(sb->s_type->name, "cgroup2"))))) {
+-				u32 xsid = sid;
+-
+-				rc = inode_doinit_use_xattr(state, inode,
+-							    dentry, sid,
+-							    &xsid);
+-				if (rc) {
+-					dput(dentry);
+-					goto out;
+-				}
+-				/* below init, keep genfs over an undefined kernfs label */
+-				if (state == init_selinux_state ||
+-				    security_sid_defined(state, xsid))
+-					sid = xsid;
+-			}
++			/* below the init namespace, keep genfs over an undefined kernfs label */
++			if (!rc && sb_kernfs_shared(sb))
++				rc = kernfs_xattr_view(state, inode, dentry,
++						       state == init_selinux_state,
++						       &sid);
+ 			dput(dentry);
++			if (rc)
++				goto out;
+ 		}
+ 		break;
+ 	}
+@@ -2016,6 +2200,8 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+ 			isec->initialized = LABEL_INVALID;
+ 			goto out_unlock;
+ 		}
++		isec_set_label_ns(isec, state);
++		isec_set_genfs_view(isec, genfs);
+ 		isec->initialized = LABEL_INITIALIZED;
+ 		isec->sid = sid;
+ 	}
+@@ -2131,6 +2317,8 @@ static inline int dentry_has_perm(const struct cred *cred,
+ 	/* check below is racy, but revalidate will recheck with lock held */
+ 	if (data_race(unlikely(isec->initialized != LABEL_INITIALIZED)))
+ 		__inode_security_revalidate(inode, dentry, true);
++	else
++		isec_viewed(inode, isec, dentry, true);
+ 	return inode_has_perm(cred, inode, av, &ad);
+ }
+ 
+@@ -2150,6 +2338,8 @@ static inline int path_has_perm(const struct cred *cred,
+ 	/* check below is racy, but revalidate will recheck with lock held */
+ 	if (data_race(unlikely(isec->initialized != LABEL_INITIALIZED)))
+ 		__inode_security_revalidate(inode, path->dentry, true);
++	else
++		isec_viewed(inode, isec, path->dentry, true);
+ 	return inode_has_perm(cred, inode, av, &ad);
+ }
+ 
+@@ -2326,6 +2516,9 @@ static int may_create(struct inode *dir,
+ 					   &newsid);
+ 	if (rc)
+ 		return rc;
++	/* each ancestor checks a genfs node as it will read it */
++	if (sb_genfs_views(dir->i_sb))
++		newsid = sid_with_genfs_views(crsec, dir, dentry, tclass, newsid);
+ 
+ 	rc = cred_tsid_has_perm(cred, newsid, tclass, FILE__CREATE, &ad);
+ 	if (rc)
+@@ -4122,6 +4315,7 @@ static void selinux_inode_post_setxattr(struct dentry *dentry, const char *name,
+ 	spin_lock(&isec->lock);
+ 	isec->sclass = inode_mode_to_security_class(inode->i_mode);
+ 	isec->sid = newsid;
++	isec_set_label_ns(isec, current_selinux_state);
+ 	isec->initialized = LABEL_INITIALIZED;
+ 	spin_unlock(&isec->lock);
+ }
+@@ -4321,6 +4515,7 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
+ 	spin_lock(&isec->lock);
+ 	isec->sclass = inode_mode_to_security_class(inode->i_mode);
+ 	isec->sid = newsid;
++	isec_set_label_ns(isec, current_selinux_state);
+ 	isec->initialized = LABEL_INITIALIZED;
+ 	spin_unlock(&isec->lock);
+ 	return 0;
+@@ -4384,10 +4579,64 @@ static int selinux_inode_copy_up_xattr(struct dentry *dentry, const char *name)
+ 
+ /* kernfs node operations */
+ 
++struct kernfs_store {
++	const struct cred_security_struct *crsec;
++	struct common_audit_data ad;
++	u32 sid;
++	u16 sclass;
++	bool checked;
++};
++
++/* return whether an ancestor of @crsec with a policy defines @sid */
++static bool kernfs_ancestor_defines(const struct cred_security_struct *crsec,
++				    u32 sid)
++{
++	while (crsec->parent_cred) {
++		crsec = selinux_cred(crsec->parent_cred);
++		if (selinux_initialized(crsec->state) &&
++		    security_sid_defined(crsec->state, sid))
++			return true;
++	}
++	return false;
++}
++
++/* check each ancestor that reads a stored kernfs label on @sb may create it there */
++static int kernfs_ancestors_may_store(struct super_block *sb, void *arg)
++{
++	const struct superblock_security_struct *sbsec = selinux_superblock(sb);
++	struct kernfs_store *st = arg;
++	const struct cred_security_struct *crsec = st->crsec;
++	int rc;
++
++	/* a superblock not set up, or a context mount, reads no stored label */
++	if (!sb_kernfs_shared(sb) || !(sbsec->flags & SE_SBINITIALIZED) ||
++	    (sbsec->flags & CONTEXT_MNT))
++		return 0;
++	st->checked = true;
++	while (crsec->parent_cred) {
++		crsec = selinux_cred(crsec->parent_cred);
++		if (!selinux_initialized(crsec->state) ||
++		    !kernfs_xattr_read(crsec->state, sb) ||
++		    !security_sid_defined(crsec->state, st->sid))
++			continue;
++		rc = avc_has_perm(crsec->state, crsec->sid, st->sid,
++				  st->sclass, FILE__CREATE, &st->ad);
++		if (!rc)
++			rc = avc_has_perm(crsec->state, st->sid,
++					  sb_sid_for_state(crsec->state, sb),
++					  SECCLASS_FILESYSTEM,
++					  FILESYSTEM__ASSOCIATE, &st->ad);
++		if (rc)
++			return rc;
++	}
++	return 0;
++}
++
+ static int selinux_kernfs_init_security(struct kernfs_node *kn_dir,
+ 					struct kernfs_node *kn)
+ {
+ 	const struct cred_security_struct *crsec = selinux_cred(current_cred());
++	u16 secclass = inode_mode_to_security_class(kn->mode);
+ 	u32 parent_sid, newsid, clen;
+ 	int rc;
+ 	char *context;
+@@ -4428,7 +4677,6 @@ static int selinux_kernfs_init_security(struct kernfs_node *kn_dir,
+ 	if (crsec->create_sid) {
+ 		newsid = crsec->create_sid;
+ 	} else {
+-		u16 secclass = inode_mode_to_security_class(kn->mode);
+ 		const char *kn_name;
+ 		struct qstr q;
+ 
+@@ -4444,6 +4692,21 @@ static int selinux_kernfs_init_security(struct kernfs_node *kn_dir,
+ 			return rc;
+ 	}
+ 
++	/* store no label an ancestor would read unchecked */
++	if (kernfs_ancestor_defines(crsec, newsid)) {
++		struct kernfs_store st = {
++			.crsec = crsec,
++			.ad.type = LSM_AUDIT_DATA_KERNFS,
++			.ad.u.kernfs_name = rcu_dereference_check(kn->name, true),
++			.sid = newsid,
++			.sclass = secclass,
++		};
++
++		if (kernfs_walk_supers(kn_dir, kernfs_ancestors_may_store,
++				       &st) || !st.checked)
++			return 0;
++	}
++
+ 	rcu_read_lock();
+ 	rc = security_sid_to_context_force(current_selinux_state, newsid,
+ 					   &context2, &clen);
+diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
+index dcc783069..06653b8e1 100644
+--- a/security/selinux/include/objsec.h
++++ b/security/selinux/include/objsec.h
+@@ -78,7 +78,16 @@ struct inode_security_struct {
+ 	u32 sid; /* SID of this object */
+ 	u16 sclass; /* security class of this object */
+ 	unsigned char initialized; /* initialization flag */
++#ifdef CONFIG_SECURITY_SELINUX_NS
++	unsigned char genfs_view; /* genfs label, which each namespace may read differently */
++	u32 view_sid; /* label last checked for view_ns */
++	u64 view_ns; /* namespace whose cred chain last got its views of view_sid */
++	u64 label_ns; /* namespace that set sid */
++#endif
+ 	spinlock_t lock;
++#ifdef CONFIG_SECURITY_SELINUX_NS
++	u32 view_gen; /* AVC reset generation of that check */
++#endif
+ };
+ 
+ struct file_security_struct {
+diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
+index 304516732..baa0e346a 100644
+--- a/security/selinux/include/security.h
++++ b/security/selinux/include/security.h
+@@ -387,6 +387,8 @@ bool security_sid_defined(struct selinux_state *state, u32 sid);
+ int security_sid_with_records(u32 sid, const u64 *ids, const u32 *sids,
+ 			      int n, u32 *out_sid);
+ int security_sid_with_records_of(u32 sid, u32 from, u32 *out_sid);
++int security_sid_add_record(u32 sid, u64 id, u32 rec, u32 *out_sid);
++bool security_sid_has_record(u32 sid, u64 id);
+ int security_sid_to_context_inval(struct selinux_state *state, u32 sid,
+ 				  const char **scontext, u32 *scontext_len);
+ 
+@@ -483,6 +485,18 @@ static inline int security_sid_with_records_of(u32 sid, u32 from,
+ 	return 0;
+ }
+ 
++static inline int security_sid_add_record(u32 sid, u64 id, u32 rec,
++					  u32 *out_sid)
++{
++	*out_sid = sid;
++	return 0;
++}
++
++static inline bool security_sid_has_record(u32 sid, u64 id)
++{
++	return false;
++}
++
+ static inline int security_transition_sid(struct selinux_state *state, u32 ssid,
+ 					  u32 tsid, u16 tclass,
+ 					  const struct qstr *qstr, u32 *out_sid)

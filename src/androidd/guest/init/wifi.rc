@@ -1,0 +1,9 @@
+# @RHIZO_SUBST early_init_restorecon
+
+service vendor.rhizo-wifi /vendor/bin/hw/rhizo-wifi-service
+    interface aidl android.hardware.wifi.IWifi/default
+    class hal
+    user wifi
+    group wifi
+    capabilities NET_ADMIN
+    stdio_to_kmsg

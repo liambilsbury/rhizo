@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Rhizo
+Comment=Android app window
+Icon=rhizo
+Exec=rhizo
+NoDisplay=true

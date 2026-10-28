@@ -1,0 +1,21 @@
+[Unit]
+Description=Rhizo audio host
+After=androidd.service
+ConditionPathExists=/run/rhizo-desktop/session.env
+PartOf=androidd.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=rhizo
+EnvironmentFile=/run/rhizo-desktop/session.env
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh --any audio.out audio.in
+ExecStartPre=+/bin/sh -c '\
+  owner=$(cat /etc/rhizo/desktop-user 2>/dev/null || echo ubuntu); \
+  install -d -o "$owner" -g rhizo -m 0755 /run/rhizo-audio; \
+  install -o "$owner" -g rhizo -m 0644 /dev/null /run/rhizo-audio-map'
+ExecStart=/bin/sh -c 'allowed=/usr/lib/rhizo/tools/capability-allowed.sh; set -- --map /run/rhizo-audio-map; if "$allowed" audio.out; then set -- "$@" --socket /run/rhizo-audio/audiod; else set -- "$@" --no-socket; fi; if "$allowed" audio.in; then set -- "$@" --mic-socket /run/rhizo-audio/mic; fi; exec /usr/lib/rhizo/audiod/rhizo-audiod "$@"'
+StandardOutput=append:/var/log/rhizo/rhizo-audiod.log
+StandardError=append:/var/log/rhizo/rhizo-audiod.log
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX

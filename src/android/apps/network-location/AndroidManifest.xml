@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.rhizo.networklocation">
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <application android:label="Rhizo Network Location"
+                 android:allowBackup="false"
+                 android:directBootAware="true">
+        <service android:name=".NetworkLocationService"
+                 android:exported="false"
+                 android:directBootAware="true">
+            <intent-filter>
+                <action android:name="com.android.location.service.v3.NetworkLocationProvider"/>
+            </intent-filter>
+            <meta-data android:name="serviceVersion" android:value="1"/>
+        </service>
+    </application>
+</manifest>

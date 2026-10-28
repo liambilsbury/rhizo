@@ -1,0 +1,19 @@
+--- a/src/gallium/drivers/virgl/virgl_resource.c
++++ b/src/gallium/drivers/virgl/virgl_resource.c
+@@ -978,9 +978,13 @@
+    if (res->b.target == PIPE_BUFFER)
+       return false;
+ 
+-   return vs->vws->resource_get_handle(vs->vws, res->hw_res,
+-                                       res->metadata.stride[0],
+-                                       whandle);
++   if (!vs->vws->resource_get_handle(vs->vws, res->hw_res,
++                                     res->metadata.stride[0],
++                                     whandle))
++      return false;
++
++   res->clean_mask = 0;
++   return true;
+ }
+ 
+ void virgl_resource_dirty(struct virgl_resource *res, uint32_t level)

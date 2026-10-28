@@ -1,0 +1,28 @@
+[Unit]
+Description=Rhizo uinput supervisor, instance %i
+PartOf=androidd@%i.service
+Wants=rhizo-selinux-mode.service
+After=rhizo-selinux-mode.service rhizo-host-labels.service systemd-udevd.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecCondition=/usr/lib/rhizo/tools/capability-allowed.sh devices.uinput
+ExecStartPre=+/usr/sbin/modprobe -a cuse uhid
+Environment=RHIZO_SANDBOX_ID=%i
+Group=rhizo-uhid
+RuntimeDirectory=rhizo-input-%i
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+FileDescriptorStoreMax=4
+FileDescriptorStorePreserve=restart
+ExecStart=/usr/lib/rhizo/rhizo-inputd supervise --instance %i --socket /run/rhizo-input-%i/supervisor.sock --fence /run/rhizo-input-%i/fence.sock --state /run/rhizo-input-%i/owned --owned-socket /run/udev/rhizo-input-%i.sock
+Restart=on-failure
+RestartSec=1
+RestartPreventExitStatus=78
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_SYS_PTRACE
+AmbientCapabilities=
+StandardOutput=journal
+StandardError=journal

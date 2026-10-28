@@ -1,0 +1,4 @@
+config.disable_systemtextclassifier=true
+config.disable_networktime=true
+config.disable_cameraservice=true
+config.disable_renderscript=true

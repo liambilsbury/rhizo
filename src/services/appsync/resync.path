@@ -1,0 +1,10 @@
+[Unit]
+Description=Rhizo app install watcher
+StartLimitIntervalSec=0
+
+[Path]
+PathModified=/run/rhizo-app-events/trigger
+Unit=rhizo-resync.service
+
+[Install]
+WantedBy=multi-user.target

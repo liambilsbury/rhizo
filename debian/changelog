@@ -1,0 +1,22 @@
+rhizo (0.1.5) noble; urgency=medium
+
+  * Android 17: Rhizo's own gsi_x86_64 build of android17-release
+    (CP2A.260605.016), beside Android 16. 'rhizo gsi update --release a17'
+    switches to it.
+  * Android 15, for app testing only, on Google's GSI.
+  * Ubuntu 24.04 + GNOME runs Android 16.
+  * Home minimizes every app window, as Android's desktop mode does.
+  * screencap no longer crashes the gralloc mapper at exit.
+  * Android shuts down while the composer still serves SurfaceFlinger.
+  * Host mode: the desktop's Wayland socket is removed when a session ends,
+    and glibc 2.42's TCGETS2 pipe probes are allowed.
+  * Requires the Rhizo kernel at revision 44, which adds the netd BPF
+    helpers Android 17 needs.
+
+ -- Liam Bilsbury <liam.bilsbury@proton.me>  Sat, 24 Oct 2026 08:43:58 -0400
+
+rhizo (0.1.4) noble; urgency=medium
+
+  * Initial release.
+
+ -- Liam Bilsbury <liam.bilsbury@proton.me>  Wed, 21 Oct 2026 19:30:07 -0400

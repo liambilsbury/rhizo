@@ -1,0 +1,29 @@
+--- a/system/keymaster/contexts/pure_soft_keymaster_context.cpp
++++ b/system/keymaster/contexts/pure_soft_keymaster_context.cpp
+@@ -490,7 +490,7 @@
+ 
+ keymaster_error_t PureSoftKeymasterContext::UnwrapKey(
+     const KeymasterKeyBlob& wrapped_key_blob, const KeymasterKeyBlob& wrapping_key_blob,
+-    const AuthorizationSet& /* wrapping_key_params */, const KeymasterKeyBlob& masking_key,
++    const AuthorizationSet& caller_wrapping_key_params, const KeymasterKeyBlob& masking_key,
+     AuthorizationSet* wrapped_key_params, keymaster_key_format_t* wrapped_key_format,
+     KeymasterKeyBlob* wrapped_key_material) const {
+     keymaster_error_t error = KM_ERROR_OK;
+@@ -508,10 +508,15 @@
+     if (error != KM_ERROR_OK) return error;
+ 
+     UniquePtr<Key> key;
++    // take the digest and padding from the caller's unwrapping params
++    keymaster_digest_t unwrap_digest = KM_DIGEST_SHA_2_256;
++    caller_wrapping_key_params.GetTagValue(TAG_DIGEST, &unwrap_digest);
++    keymaster_padding_t unwrap_padding = KM_PAD_RSA_OAEP;
++    caller_wrapping_key_params.GetTagValue(TAG_PADDING, &unwrap_padding);
+     auto wrapping_key_params = AuthorizationSetBuilder()
+                                    .RsaEncryptionKey(2048, 65537)
+-                                   .Digest(KM_DIGEST_SHA_2_256)
+-                                   .Padding(KM_PAD_RSA_OAEP)
++                                   .Digest(unwrap_digest)
++                                   .Padding(unwrap_padding)
+                                    .Authorization(TAG_PURPOSE, KM_PURPOSE_WRAP)
+                                    .build();
+     error = ParseKeyBlob(wrapping_key_blob, wrapping_key_params, &key);

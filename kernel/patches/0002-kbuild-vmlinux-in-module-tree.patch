@@ -1,0 +1,16 @@
+diff --git a/scripts/package/install-extmod-build b/scripts/package/install-extmod-build
+index f12e1ffe409..c7ecbfa1918 100755
+--- a/scripts/package/install-extmod-build
++++ b/scripts/package/install-extmod-build
+@@ -48,6 +48,11 @@ mkdir -p "${destdir}"
+ 	fi
+ } | tar -c -f - -T - | tar -xf - -C "${destdir}"
+ 
++# Modules that read struct layouts from the kernel's BTF need vmlinux, kept without its debug info.
++if [ -f vmlinux ]; then
++	"${STRIP:-strip}" --strip-debug -o "${destdir}/vmlinux" vmlinux
++fi
++
+ # When ${CC} and ${HOSTCC} differ, rebuild host programs using ${CC}.
+ #
+ # This caters to host programs that participate in Kbuild. objtool and

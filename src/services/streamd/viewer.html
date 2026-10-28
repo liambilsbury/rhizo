@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Rhizo stream viewer</title>
+<style>
+  html, body { margin: 0; background: #111; height: 100%; }
+  canvas { display: block; margin: 0 auto; touch-action: none; }
+  #status { position: fixed; top: 4px; left: 8px; color: #8f8; font: 12px monospace; }
+</style>
+</head>
+<body>
+<div id="status">connecting...</div>
+<canvas id="c"></canvas>
+<script>
+// rhizo-streamd sends a JSON hello with codec and geometry, then a VP9 keyframe per binary frame
+const statusEl = document.getElementById("status");
+const canvas = document.getElementById("c");
+const ctx2d = canvas.getContext("2d");
+
+window.__rhizoStats = { frames: 0 };
+
+// set the status line's text
+function statLine(s) { statusEl.textContent = s; }
+
+// return the mean RGB of the canvas's left and right halves
+function sampleHalves(width, height) {
+  const half = width >> 1;
+  const left = ctx2d.getImageData(0, 0, half, height).data;
+  const right = ctx2d.getImageData(half, 0, width - half, height).data;
+  const mean = (data) => {
+    let r = 0, g = 0, b = 0;
+    const n = data.length / 4;
+    for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2]; }
+    return { r: r / n, g: g / n, b: b / n };
+  };
+  return { left: mean(left), right: mean(right) };
+}
+
+let decoder = null;
+let width = 0, height = 0;
+let ws = null;
+
+// open the stream socket and draw each VP9 keyframe it sends, counting frames in __rhizoStats
+function connect() {
+  ws = new WebSocket("ws://" + location.host + "/stream");
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => statLine("connected, awaiting hello");
+
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      const hello = JSON.parse(ev.data);
+      width = hello.width;
+      height = hello.height;
+      canvas.width = width;
+      canvas.height = height;
+      decoder = new VideoDecoder({
+        output: (frame) => {
+          ctx2d.drawImage(frame, 0, 0, width, height);
+          frame.close();
+          const halves = sampleHalves(width, height);
+          window.__rhizoStats = { frames: window.__rhizoStats.frames + 1, ...halves };
+          statLine("codec=" + hello.codec + " " + width + "x" + height +
+                   " frames=" + window.__rhizoStats.frames);
+        },
+        error: (e) => statLine("decoder error: " + e.message),
+      });
+      decoder.configure({ codec: "vp09.00.10.08", codedWidth: width, codedHeight: height });
+      return;
+    }
+    if (!decoder) return;
+    decoder.decode(new EncodedVideoChunk({
+      type: "key",
+      timestamp: performance.now() * 1000,
+      data: ev.data,
+    }));
+  };
+
+  ws.onclose = () => statLine("disconnected");
+  ws.onerror = () => statLine("socket error");
+}
+
+// send a pointer event's kind and position, scaled to the stream's geometry, as JSON
+function sendInput(kind, ev) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !width) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.round((ev.clientX - rect.left) * (width / rect.width));
+  const y = Math.round((ev.clientY - rect.top) * (height / rect.height));
+  ws.send(JSON.stringify({ kind, x, y }));
+}
+canvas.addEventListener("pointerdown", (e) => sendInput("down", e));
+canvas.addEventListener("pointermove", (e) => { if (e.pressure > 0) sendInput("move", e); });
+canvas.addEventListener("pointerup", (e) => sendInput("up", e));
+
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+[Unit]
+Description=Rhizo notification socket watcher
+ConditionUser=1000
+
+[Path]
+PathExists=/run/rhizo-desk-notify/notify.sock
+
+[Install]
+WantedBy=default.target

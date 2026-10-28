@@ -1,0 +1,20 @@
+on early-init
+# @RHIZO_SUBST init_loglevel_line
+# @RHIZO_SUBST use_memfd_line
+# @RHIZO_SUBST hwui_hint_manager_line
+# @RHIZO_SUBST sf_adpf_hint_line
+    setprop sys.init.perf_lsm_hooks 1
+    setprop ro.opengles.version 196610
+# @RHIZO_SUBST avoid_gfx_accel_line
+# @RHIZO_SUBST density_line
+    setprop dalvik.vm.heapstartsize 5m
+    setprop dalvik.vm.heapgrowthlimit 192m
+    setprop dalvik.vm.heapsize 512m
+    setprop dalvik.vm.heaptargetutilization 0.75
+    setprop dalvik.vm.heapminfree 512k
+    setprop dalvik.vm.heapmaxfree 2m
+    setprop dalvik.vm.usap_pool_enabled true
+    setprop dalvik.vm.usap_pool_refill_delay_ms 250
+    setprop dalvik.vm.usap_pool_size_min 2
+# @RHIZO_SUBST gl_preload_line
+# @RHIZO_SUBST sf_acquired_buffers

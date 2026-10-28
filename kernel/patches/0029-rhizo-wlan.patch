@@ -1,0 +1,1151 @@
+diff --git a/drivers/net/wireless/Kconfig b/drivers/net/wireless/Kconfig
+index c6599594dc9..13dc2f8d6e0 100644
+--- a/drivers/net/wireless/Kconfig
++++ b/drivers/net/wireless/Kconfig
+@@ -38,5 +38,6 @@ source "drivers/net/wireless/zydas/Kconfig"
+ source "drivers/net/wireless/quantenna/Kconfig"
+ 
+ source "drivers/net/wireless/virtual/Kconfig"
++source "drivers/net/wireless/rhizo/Kconfig"
+ 
+ endif # WLAN
+diff --git a/drivers/net/wireless/Makefile b/drivers/net/wireless/Makefile
+index e1c4141c600..60468ec66af 100644
+--- a/drivers/net/wireless/Makefile
++++ b/drivers/net/wireless/Makefile
+@@ -23,3 +23,4 @@ obj-$(CONFIG_WLAN_VENDOR_TI) += ti/
+ obj-$(CONFIG_WLAN_VENDOR_ZYDAS) += zydas/
+ 
+ obj-$(CONFIG_WLAN) += virtual/
++obj-$(CONFIG_RHIZO_WLAN) += rhizo/
+diff --git a/drivers/net/wireless/rhizo/Kconfig b/drivers/net/wireless/rhizo/Kconfig
+new file mode 100644
+index 00000000000..701013f3f30
+--- /dev/null
++++ b/drivers/net/wireless/rhizo/Kconfig
+@@ -0,0 +1,6 @@
++# SPDX-License-Identifier: GPL-2.0-only
++config RHIZO_WLAN
++	tristate "Rhizo paired wireless link"
++	depends on CFG80211
++	help
++	  A cfg80211 station paired with an ethernet device.
+diff --git a/drivers/net/wireless/rhizo/Makefile b/drivers/net/wireless/rhizo/Makefile
+new file mode 100644
+index 00000000000..ef8b0ea3ca1
+--- /dev/null
++++ b/drivers/net/wireless/rhizo/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_RHIZO_WLAN) += rhizo_wlan.o
+diff --git a/drivers/net/wireless/rhizo/rhizo_wlan.c b/drivers/net/wireless/rhizo/rhizo_wlan.c
+new file mode 100644
+index 00000000000..2263dc7da01
+--- /dev/null
++++ b/drivers/net/wireless/rhizo/rhizo_wlan.c
+@@ -0,0 +1,1055 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* a cfg80211 station paired with a plain ethernet device */
++
++#include <linux/cred.h>
++#include <linux/etherdevice.h>
++#include <linux/ethtool.h>
++#include <linux/fs.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/netdevice.h>
++#include <linux/rtnetlink.h>
++#include <net/cfg80211.h>
++#include <net/genetlink.h>
++#include <net/net_namespace.h>
++#include <net/sock.h>
++#include <uapi/linux/rhizo_wlan.h>
++
++#define RHIZO_WLAN_CHANNEL		6
++#define RHIZO_WLAN_FREQ			2437
++#define RHIZO_WLAN_SCAN_DWELL_MS	30
++#define RHIZO_WLAN_BEACON_INTERVAL	100
++#define RHIZO_WLAN_BITRATE		540	/* 54 Mbit/s in 100 kbit/s */
++#define RHIZO_WLAN_MAX_SCAN_SSIDS	4
++#define RHIZO_WLAN_MAX_SCAN_IE_LEN	512
++#define RHIZO_WLAN_FEATURES	(NETIF_F_SG | NETIF_F_HW_CSUM | \
++				 NETIF_F_RXCSUM | NETIF_F_HIGHDMA | \
++				 NETIF_F_GSO_SOFTWARE)
++
++static const struct ieee80211_rate rhizo_wlan_rates[] = {
++	{ .bitrate = 10 },
++	{ .bitrate = 20, .flags = IEEE80211_RATE_SHORT_PREAMBLE },
++	{ .bitrate = 55, .flags = IEEE80211_RATE_SHORT_PREAMBLE },
++	{ .bitrate = 110, .flags = IEEE80211_RATE_SHORT_PREAMBLE },
++	{ .bitrate = 60 },
++	{ .bitrate = 90 },
++	{ .bitrate = 120 },
++	{ .bitrate = 180 },
++	{ .bitrate = 240 },
++	{ .bitrate = 360 },
++	{ .bitrate = 480 },
++	{ .bitrate = 540 },
++};
++
++static const u8 rhizo_wlan_supp_rates[] = {
++	0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24,
++};
++
++static const u8 rhizo_wlan_ext_rates[] = { 0x30, 0x48, 0x60, 0x6c };
++
++struct rhizo_wlan_ap {
++	bool present;
++	u8 ssid_len;
++	u8 ssid[IEEE80211_MAX_SSID_LEN];
++	u8 bssid[ETH_ALEN];
++	s32 signal_mbm;
++};
++
++/* a station and its ethernet end */
++struct rhizo_wlan_pair {
++	struct list_head list;		/* under rhizo_wlan_lock */
++	struct wiphy *wiphy;
++	struct net_device *wlan;	/* the station, in the target namespace */
++	struct net_device *host;	/* the ethernet end */
++	kuid_t owner;
++
++	struct ieee80211_channel channel;
++	struct ieee80211_rate rates[ARRAY_SIZE(rhizo_wlan_rates)];
++	struct ieee80211_supported_band band;
++
++	struct rhizo_wlan_ap ap;
++
++	struct cfg80211_scan_request *scan_req;
++	struct wiphy_delayed_work scan_work;
++
++	bool connecting;
++	u8 want_ssid_len;
++	u8 want_ssid[IEEE80211_MAX_SSID_LEN];
++	bool want_bssid_set;
++	u8 want_bssid[ETH_ALEN];
++	struct wiphy_work connect_work;
++
++	bool connected;
++	time64_t connected_at;
++};
++
++/* the start of both ends' netdev private areas */
++struct rhizo_wlan_end {
++	struct net_device __rcu *peer;
++	struct rhizo_wlan_pair *pair;
++};
++
++struct rhizo_wlan_vif {
++	struct rhizo_wlan_end end;
++	struct wireless_dev wdev;
++};
++
++static DEFINE_MUTEX(rhizo_wlan_lock);
++static LIST_HEAD(rhizo_wlan_pairs);
++
++static struct genl_family rhizo_wlan_family;
++
++/* hand a frame to the other end while connected */
++static netdev_tx_t rhizo_wlan_xmit(struct sk_buff *skb, struct net_device *dev)
++{
++	struct rhizo_wlan_end *end = netdev_priv(dev);
++	unsigned int len = skb->len;
++	struct net_device *peer;
++
++	rcu_read_lock();
++	peer = rcu_dereference(end->peer);
++	if (unlikely(!peer || !netif_carrier_ok(dev) ||
++		     !netif_carrier_ok(peer))) {
++		dev_core_stats_tx_dropped_inc(dev);
++		kfree_skb(skb);
++		goto out;
++	}
++
++	skb_tx_timestamp(skb);
++	if (likely(dev_forward_skb(peer, skb) == NET_RX_SUCCESS)) {
++		dev_sw_netstats_tx_add(dev, 1, len);
++		dev_sw_netstats_rx_add(peer, len);
++	} else {
++		dev_core_stats_tx_dropped_inc(dev);
++	}
++out:
++	rcu_read_unlock();
++	return NETDEV_TX_OK;
++}
++
++static void rhizo_wlan_scan_abort(struct rhizo_wlan_pair *pair)
++{
++	struct cfg80211_scan_info info = { .aborted = true };
++
++	lockdep_assert_wiphy(pair->wiphy);
++
++	if (!pair->scan_req)
++		return;
++	wiphy_delayed_work_cancel(pair->wiphy, &pair->scan_work);
++	cfg80211_scan_done(pair->scan_req, &info);
++	pair->scan_req = NULL;
++}
++
++/* abort the station's scan and drop its carrier */
++static int rhizo_wlan_vif_stop(struct net_device *dev)
++{
++	struct rhizo_wlan_end *end = netdev_priv(dev);
++	struct wiphy *wiphy = end->pair->wiphy;
++
++	wiphy_lock(wiphy);
++	rhizo_wlan_scan_abort(end->pair);
++	netif_carrier_off(dev);
++	wiphy_unlock(wiphy);
++	return 0;
++}
++
++static const struct net_device_ops rhizo_wlan_vif_ops = {
++	.ndo_stop		= rhizo_wlan_vif_stop,
++	.ndo_start_xmit		= rhizo_wlan_xmit,
++	.ndo_get_stats64	= dev_get_tstats64,
++	.ndo_set_mac_address	= eth_mac_addr,
++	.ndo_validate_addr	= eth_validate_addr,
++};
++
++static const struct net_device_ops rhizo_wlan_host_ops = {
++	.ndo_start_xmit		= rhizo_wlan_xmit,
++	.ndo_get_stats64	= dev_get_tstats64,
++	.ndo_set_mac_address	= eth_mac_addr,
++	.ndo_validate_addr	= eth_validate_addr,
++};
++
++static void rhizo_wlan_get_drvinfo(struct net_device *dev,
++				   struct ethtool_drvinfo *info)
++{
++	strscpy(info->driver, KBUILD_MODNAME, sizeof(info->driver));
++}
++
++static const struct ethtool_ops rhizo_wlan_ethtool_ops = {
++	.get_drvinfo	= rhizo_wlan_get_drvinfo,
++	.get_link	= ethtool_op_get_link,
++};
++
++static void rhizo_wlan_setup(struct net_device *dev)
++{
++	ether_setup(dev);
++	dev->priv_flags |= IFF_NO_QUEUE;
++	dev->priv_flags &= ~IFF_TX_SKB_SHARING;
++	dev->lltx = true;
++	dev->netns_immutable = true;
++	dev->features |= RHIZO_WLAN_FEATURES;
++	dev->hw_features |= RHIZO_WLAN_FEATURES;
++	dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
++	dev->ethtool_ops = &rhizo_wlan_ethtool_ops;
++}
++
++static void rhizo_wlan_vif_setup(struct net_device *dev)
++{
++	rhizo_wlan_setup(dev);
++	dev->netdev_ops = &rhizo_wlan_vif_ops;
++}
++
++static void rhizo_wlan_host_setup(struct net_device *dev)
++{
++	rhizo_wlan_setup(dev);
++	dev->netdev_ops = &rhizo_wlan_host_ops;
++}
++
++/* inform the access point's BSS and return a reference */
++static struct cfg80211_bss *rhizo_wlan_inform_bss(struct rhizo_wlan_pair *pair)
++{
++	struct cfg80211_inform_bss data = {
++		.chan = &pair->channel,
++		.signal = pair->ap.signal_mbm,
++		.boottime_ns = ktime_get_boottime_ns(),
++	};
++	u8 ies[2 + IEEE80211_MAX_SSID_LEN + 2 + sizeof(rhizo_wlan_supp_rates) +
++	       3 + 2 + sizeof(rhizo_wlan_ext_rates)];
++	u8 *p = ies;
++
++	lockdep_assert_wiphy(pair->wiphy);
++
++	*p++ = WLAN_EID_SSID;
++	*p++ = pair->ap.ssid_len;
++	memcpy(p, pair->ap.ssid, pair->ap.ssid_len);
++	p += pair->ap.ssid_len;
++	*p++ = WLAN_EID_SUPP_RATES;
++	*p++ = sizeof(rhizo_wlan_supp_rates);
++	memcpy(p, rhizo_wlan_supp_rates, sizeof(rhizo_wlan_supp_rates));
++	p += sizeof(rhizo_wlan_supp_rates);
++	*p++ = WLAN_EID_DS_PARAMS;
++	*p++ = 1;
++	*p++ = RHIZO_WLAN_CHANNEL;
++	*p++ = WLAN_EID_EXT_SUPP_RATES;
++	*p++ = sizeof(rhizo_wlan_ext_rates);
++	memcpy(p, rhizo_wlan_ext_rates, sizeof(rhizo_wlan_ext_rates));
++	p += sizeof(rhizo_wlan_ext_rates);
++
++	return cfg80211_inform_bss_data(pair->wiphy, &data,
++					CFG80211_BSS_FTYPE_PRESP,
++					pair->ap.bssid,
++					div_u64(data.boottime_ns, NSEC_PER_USEC),
++					WLAN_CAPABILITY_ESS |
++					WLAN_CAPABILITY_SHORT_SLOT_TIME,
++					RHIZO_WLAN_BEACON_INTERVAL, ies, p - ies,
++					GFP_KERNEL);
++}
++
++/* drop the access point's BSS entry */
++static void rhizo_wlan_unlink_bss(struct rhizo_wlan_pair *pair)
++{
++	struct cfg80211_bss *bss;
++
++	if (!pair->ap.present)
++		return;
++	bss = cfg80211_get_bss(pair->wiphy, &pair->channel, pair->ap.bssid,
++			       pair->ap.ssid, pair->ap.ssid_len,
++			       IEEE80211_BSS_TYPE_ESS, IEEE80211_PRIVACY_ANY);
++	if (!bss)
++		return;
++	cfg80211_unlink_bss(pair->wiphy, bss);
++	cfg80211_put_bss(pair->wiphy, bss);
++}
++
++/* end the station's association */
++static void rhizo_wlan_link_lost(struct rhizo_wlan_pair *pair, u16 reason,
++				 bool locally_generated)
++{
++	pair->connected = false;
++	netif_carrier_off(pair->wlan);
++	cfg80211_disconnected(pair->wlan, reason, NULL, 0, locally_generated,
++			      GFP_KERNEL);
++}
++
++static void rhizo_wlan_scan_work(struct wiphy *wiphy, struct wiphy_work *work)
++{
++	struct rhizo_wlan_pair *pair =
++		container_of(work, struct rhizo_wlan_pair, scan_work.work);
++	struct cfg80211_scan_request *req = pair->scan_req;
++	struct cfg80211_scan_info info = {};
++	u32 i;
++
++	if (!req)
++		return;
++	for (i = 0; pair->ap.present && i < req->n_channels; i++) {
++		if (req->channels[i] == &pair->channel) {
++			cfg80211_put_bss(wiphy, rhizo_wlan_inform_bss(pair));
++			break;
++		}
++	}
++	cfg80211_scan_done(req, &info);
++	pair->scan_req = NULL;
++}
++
++/* queue the scan's result after a dwell */
++static int rhizo_wlan_scan(struct wiphy *wiphy,
++			   struct cfg80211_scan_request *req)
++{
++	struct rhizo_wlan_pair *pair = wiphy_priv(wiphy);
++
++	if (pair->scan_req)
++		return -EBUSY;
++	pair->scan_req = req;
++	wiphy_delayed_work_queue(wiphy, &pair->scan_work,
++				 msecs_to_jiffies(RHIZO_WLAN_SCAN_DWELL_MS));
++	return 0;
++}
++
++static void rhizo_wlan_abort_scan(struct wiphy *wiphy,
++				  struct wireless_dev *wdev)
++{
++	rhizo_wlan_scan_abort(wiphy_priv(wiphy));
++}
++
++static bool rhizo_wlan_wanted(const struct rhizo_wlan_pair *pair)
++{
++	const struct rhizo_wlan_ap *ap = &pair->ap;
++
++	return ap->present && ap->ssid_len == pair->want_ssid_len &&
++	       !memcmp(ap->ssid, pair->want_ssid, ap->ssid_len) &&
++	       (!pair->want_bssid_set ||
++		ether_addr_equal(ap->bssid, pair->want_bssid));
++}
++
++static void rhizo_wlan_connect_work(struct wiphy *wiphy,
++				    struct wiphy_work *work)
++{
++	struct rhizo_wlan_pair *pair =
++		container_of(work, struct rhizo_wlan_pair, connect_work);
++	struct cfg80211_bss *bss = NULL;
++
++	if (!pair->connecting)
++		return;
++	pair->connecting = false;
++
++	if (rhizo_wlan_wanted(pair))
++		bss = rhizo_wlan_inform_bss(pair);
++	if (!bss) {
++		cfg80211_connect_timeout(pair->wlan, NULL, NULL, 0, GFP_KERNEL,
++					 NL80211_TIMEOUT_SCAN);
++		return;
++	}
++
++	pair->connected = true;
++	pair->connected_at = ktime_get_boottime_seconds();
++	netif_carrier_on(pair->wlan);
++	cfg80211_connect_bss(pair->wlan, pair->ap.bssid, bss, NULL, 0, NULL, 0,
++			     WLAN_STATUS_SUCCESS, GFP_KERNEL,
++			     NL80211_TIMEOUT_UNSPECIFIED);
++}
++
++static int rhizo_wlan_connect(struct wiphy *wiphy, struct net_device *dev,
++			      struct cfg80211_connect_params *sme)
++{
++	struct rhizo_wlan_pair *pair = wiphy_priv(wiphy);
++
++	if (sme->privacy || sme->key_len || sme->crypto.wpa_versions ||
++	    sme->crypto.n_akm_suites || sme->crypto.n_ciphers_pairwise ||
++	    sme->crypto.cipher_group)
++		return -EOPNOTSUPP;
++	if (pair->connecting || pair->connected)
++		return -EALREADY;
++
++	pair->want_ssid_len = sme->ssid_len;
++	memcpy(pair->want_ssid, sme->ssid, sme->ssid_len);
++	pair->want_bssid_set = !!sme->bssid;
++	if (sme->bssid)
++		ether_addr_copy(pair->want_bssid, sme->bssid);
++	pair->connecting = true;
++	wiphy_work_queue(wiphy, &pair->connect_work);
++	return 0;
++}
++
++static int rhizo_wlan_disconnect(struct wiphy *wiphy, struct net_device *dev,
++				 u16 reason)
++{
++	struct rhizo_wlan_pair *pair = wiphy_priv(wiphy);
++
++	if (pair->connecting) {
++		wiphy_work_cancel(wiphy, &pair->connect_work);
++		pair->connecting = false;
++		cfg80211_connect_timeout(dev, NULL, NULL, 0, GFP_KERNEL,
++					 NL80211_TIMEOUT_UNSPECIFIED);
++	}
++	if (pair->connected)
++		rhizo_wlan_link_lost(pair, reason, true);
++	return 0;
++}
++
++static void rhizo_wlan_fill_station(struct rhizo_wlan_pair *pair,
++				    struct station_info *sinfo)
++{
++	struct rtnl_link_stats64 stats = {};
++
++	dev_fetch_sw_netstats(&stats, pair->wlan->tstats);
++	sinfo->filled = BIT_ULL(NL80211_STA_INFO_CONNECTED_TIME) |
++			BIT_ULL(NL80211_STA_INFO_SIGNAL) |
++			BIT_ULL(NL80211_STA_INFO_RX_BYTES64) |
++			BIT_ULL(NL80211_STA_INFO_TX_BYTES64) |
++			BIT_ULL(NL80211_STA_INFO_RX_PACKETS) |
++			BIT_ULL(NL80211_STA_INFO_TX_PACKETS) |
++			BIT_ULL(NL80211_STA_INFO_TX_FAILED) |
++			BIT_ULL(NL80211_STA_INFO_TX_BITRATE) |
++			BIT_ULL(NL80211_STA_INFO_RX_BITRATE);
++	sinfo->connected_time = ktime_get_boottime_seconds() -
++				pair->connected_at;
++	sinfo->signal = clamp(DIV_ROUND_CLOSEST(pair->ap.signal_mbm, 100),
++			      S8_MIN, 0);
++	sinfo->rx_bytes = stats.rx_bytes;
++	sinfo->tx_bytes = stats.tx_bytes;
++	sinfo->rx_packets = stats.rx_packets;
++	sinfo->tx_packets = stats.tx_packets;
++	sinfo->tx_failed = 0;
++	sinfo->txrate.legacy = RHIZO_WLAN_BITRATE;
++	sinfo->rxrate.legacy = RHIZO_WLAN_BITRATE;
++}
++
++static int rhizo_wlan_get_station(struct wiphy *wiphy,
++				  struct wireless_dev *wdev, const u8 *mac,
++				  struct station_info *sinfo)
++{
++	struct rhizo_wlan_pair *pair = wiphy_priv(wiphy);
++
++	if (!pair->connected || !ether_addr_equal(mac, pair->ap.bssid))
++		return -ENOENT;
++	rhizo_wlan_fill_station(pair, sinfo);
++	return 0;
++}
++
++static int rhizo_wlan_dump_station(struct wiphy *wiphy,
++				   struct wireless_dev *wdev, int idx, u8 *mac,
++				   struct station_info *sinfo)
++{
++	struct rhizo_wlan_pair *pair = wiphy_priv(wiphy);
++
++	if (idx || !pair->connected)
++		return -ENOENT;
++	ether_addr_copy(mac, pair->ap.bssid);
++	rhizo_wlan_fill_station(pair, sinfo);
++	return 0;
++}
++
++static int rhizo_wlan_change_virtual_intf(struct wiphy *wiphy,
++					  struct net_device *dev,
++					  enum nl80211_iftype type,
++					  struct vif_params *params)
++{
++	return type == NL80211_IFTYPE_STATION ? 0 : -EOPNOTSUPP;
++}
++
++/* accept any power-save state */
++static int rhizo_wlan_set_power_mgmt(struct wiphy *wiphy,
++				     struct net_device *dev, bool enabled,
++				     int timeout)
++{
++	return 0;
++}
++
++static int rhizo_wlan_get_channel(struct wiphy *wiphy,
++				  struct wireless_dev *wdev,
++				  unsigned int link_id,
++				  struct cfg80211_chan_def *chandef)
++{
++	struct rhizo_wlan_pair *pair = wiphy_priv(wiphy);
++
++	if (!pair->connected)
++		return -ENODATA;
++	cfg80211_chandef_create(chandef, &pair->channel, NL80211_CHAN_NO_HT);
++	return 0;
++}
++
++static const struct cfg80211_ops rhizo_wlan_cfg80211_ops = {
++	.change_virtual_intf	= rhizo_wlan_change_virtual_intf,
++	.get_station		= rhizo_wlan_get_station,
++	.dump_station		= rhizo_wlan_dump_station,
++	.scan			= rhizo_wlan_scan,
++	.abort_scan		= rhizo_wlan_abort_scan,
++	.connect		= rhizo_wlan_connect,
++	.disconnect		= rhizo_wlan_disconnect,
++	.set_power_mgmt		= rhizo_wlan_set_power_mgmt,
++	.get_channel		= rhizo_wlan_get_channel,
++};
++
++/* make @ap the access point */
++static void rhizo_wlan_set_ap(struct rhizo_wlan_pair *pair,
++			      const struct rhizo_wlan_ap *ap)
++{
++	struct rhizo_wlan_ap *cur = &pair->ap;
++	bool same = cur->present && ap->present &&
++		    cur->ssid_len == ap->ssid_len &&
++		    !memcmp(cur->ssid, ap->ssid, ap->ssid_len) &&
++		    ether_addr_equal(cur->bssid, ap->bssid);
++
++	lockdep_assert_wiphy(pair->wiphy);
++
++	if (!same) {
++		if (pair->connected)
++			rhizo_wlan_link_lost(pair, WLAN_REASON_DEAUTH_LEAVING,
++					     false);
++		rhizo_wlan_unlink_bss(pair);
++	}
++	*cur = *ap;
++	if (same && pair->connected)
++		cfg80211_put_bss(pair->wiphy, rhizo_wlan_inform_bss(pair));
++}
++
++static int rhizo_wlan_set_regd(struct wiphy *wiphy, const char *alpha2)
++{
++	struct ieee80211_regdomain *rd;
++	int err;
++
++	rd = kzalloc_flex(*rd, reg_rules, 1);
++	if (!rd)
++		return -ENOMEM;
++	rd->n_reg_rules = 1;
++	rd->alpha2[0] = alpha2[0];
++	rd->alpha2[1] = alpha2[1];
++	rd->reg_rules[0] = (struct ieee80211_reg_rule)
++		REG_RULE(2402, 2482, 40, 0, 20, 0);
++
++	rtnl_lock();
++	wiphy_lock(wiphy);
++	err = regulatory_set_wiphy_regd_sync(wiphy, rd);
++	wiphy_unlock(wiphy);
++	rtnl_unlock();
++	kfree(rd);
++	return err;
++}
++
++static void rhizo_wlan_init_wiphy(struct rhizo_wlan_pair *pair,
++				  const u8 *mac)
++{
++	struct wiphy *wiphy = pair->wiphy;
++
++	pair->channel = (struct ieee80211_channel) {
++		.band = NL80211_BAND_2GHZ,
++		.center_freq = RHIZO_WLAN_FREQ,
++		.hw_value = RHIZO_WLAN_CHANNEL,
++		.max_power = 20,
++	};
++	memcpy(pair->rates, rhizo_wlan_rates, sizeof(pair->rates));
++	pair->band = (struct ieee80211_supported_band) {
++		.band = NL80211_BAND_2GHZ,
++		.channels = &pair->channel,
++		.n_channels = 1,
++		.bitrates = pair->rates,
++		.n_bitrates = ARRAY_SIZE(pair->rates),
++	};
++	wiphy_delayed_work_init(&pair->scan_work, rhizo_wlan_scan_work);
++	wiphy_work_init(&pair->connect_work, rhizo_wlan_connect_work);
++
++	wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
++	wiphy->bands[NL80211_BAND_2GHZ] = &pair->band;
++	wiphy->signal_type = CFG80211_SIGNAL_TYPE_MBM;
++	wiphy->max_scan_ssids = RHIZO_WLAN_MAX_SCAN_SSIDS;
++	wiphy->max_scan_ie_len = RHIZO_WLAN_MAX_SCAN_IE_LEN;
++	wiphy->features |= NL80211_FEATURE_SCAN_RANDOM_MAC_ADDR;
++	wiphy->regulatory_flags = REGULATORY_WIPHY_SELF_MANAGED;
++	wiphy->flags |= WIPHY_FLAG_NO_RFKILL;
++	ether_addr_copy(wiphy->perm_addr, mac);
++}
++
++struct rhizo_wlan_config {
++	const char *host_name;
++	const char *wlan_name;
++	const u8 *wlan_mac;
++	const u8 *host_mac;		/* NULL: random */
++	struct net *host_net;
++	struct net *wlan_net;
++	kuid_t owner;
++	char alpha2[2];
++};
++
++static int rhizo_wlan_create(const struct rhizo_wlan_config *cfg)
++{
++	struct net_device *wlan = NULL, *host = NULL;
++	struct rhizo_wlan_end *host_end;
++	struct rhizo_wlan_pair *pair;
++	struct rhizo_wlan_vif *vif;
++	struct wiphy *wiphy;
++	int err;
++
++	lockdep_assert_held(&rhizo_wlan_lock);
++
++	wiphy = wiphy_new(&rhizo_wlan_cfg80211_ops, sizeof(*pair));
++	if (!wiphy)
++		return -ENOMEM;
++	pair = wiphy_priv(wiphy);
++	pair->wiphy = wiphy;
++	pair->owner = cfg->owner;
++	rhizo_wlan_init_wiphy(pair, cfg->wlan_mac);
++	wiphy_net_set(wiphy, cfg->wlan_net);
++
++	err = -ENOMEM;
++	wlan = alloc_netdev(sizeof(*vif), cfg->wlan_name, NET_NAME_USER,
++			    rhizo_wlan_vif_setup);
++	host = alloc_netdev(sizeof(*host_end), cfg->host_name, NET_NAME_USER,
++			    rhizo_wlan_host_setup);
++	if (!wlan || !host)
++		goto free;
++
++	vif = netdev_priv(wlan);
++	vif->end.pair = pair;
++	RCU_INIT_POINTER(vif->end.peer, host);
++	vif->wdev.wiphy = wiphy;
++	vif->wdev.iftype = NL80211_IFTYPE_STATION;
++	wlan->ieee80211_ptr = &vif->wdev;
++	eth_hw_addr_set(wlan, cfg->wlan_mac);
++	netif_carrier_off(wlan);
++	dev_net_set(wlan, cfg->wlan_net);
++
++	host_end = netdev_priv(host);
++	host_end->pair = pair;
++	RCU_INIT_POINTER(host_end->peer, wlan);
++	if (cfg->host_mac)
++		eth_hw_addr_set(host, cfg->host_mac);
++	else
++		eth_hw_addr_random(host);
++	dev_net_set(host, cfg->host_net);
++
++	pair->wlan = wlan;
++	pair->host = host;
++
++	err = wiphy_register(wiphy);
++	if (err)
++		goto free;
++	err = rhizo_wlan_set_regd(wiphy, cfg->alpha2);
++	if (err)
++		goto unregister_wiphy;
++
++	rtnl_lock();
++	err = register_netdevice(wlan);
++	if (err)
++		goto unlock;
++	err = register_netdevice(host);
++	if (err)
++		unregister_netdevice(wlan);
++unlock:
++	rtnl_unlock();
++	if (err)
++		goto unregister_wiphy;
++
++	list_add(&pair->list, &rhizo_wlan_pairs);
++	return 0;
++
++unregister_wiphy:
++	wiphy_unregister(wiphy);
++free:
++	if (wlan)
++		free_netdev(wlan);
++	if (host)
++		free_netdev(host);
++	wiphy_free(wiphy);
++	return err;
++}
++
++static void rhizo_wlan_destroy(struct rhizo_wlan_pair *pair)
++{
++	struct rhizo_wlan_end *wlan_end = netdev_priv(pair->wlan);
++	struct rhizo_wlan_end *host_end = netdev_priv(pair->host);
++	struct wiphy *wiphy = pair->wiphy;
++	LIST_HEAD(dead);
++
++	lockdep_assert_held(&rhizo_wlan_lock);
++	list_del(&pair->list);
++
++	rtnl_lock();
++	RCU_INIT_POINTER(wlan_end->peer, NULL);
++	RCU_INIT_POINTER(host_end->peer, NULL);
++	unregister_netdevice_queue(pair->wlan, &dead);
++	unregister_netdevice_queue(pair->host, &dead);
++	unregister_netdevice_many(&dead);
++	rtnl_unlock();
++
++	wiphy_lock(wiphy);
++	wiphy_delayed_work_cancel(wiphy, &pair->scan_work);
++	wiphy_work_cancel(wiphy, &pair->connect_work);
++	wiphy_unlock(wiphy);
++
++	free_netdev(pair->wlan);
++	free_netdev(pair->host);
++	wiphy_unregister(wiphy);
++	wiphy_free(wiphy);
++}
++
++/* find a pair by ethernet end in the sender's namespace */
++static struct rhizo_wlan_pair *rhizo_wlan_find(struct genl_info *info)
++{
++	const char *name = nla_data(info->attrs[RHIZO_WLAN_ATTR_HOST_IFNAME]);
++	struct rhizo_wlan_pair *pair, *found = NULL;
++	struct net_device *dev;
++
++	lockdep_assert_held(&rhizo_wlan_lock);
++
++	rcu_read_lock();
++	dev = dev_get_by_name_rcu(genl_info_net(info), name);
++	list_for_each_entry(pair, &rhizo_wlan_pairs, list) {
++		if (dev && pair->host == dev) {
++			found = pair;
++			break;
++		}
++	}
++	rcu_read_unlock();
++	return found;
++}
++
++/* return whether sender and socket opener are both the owner */
++static bool rhizo_wlan_is_owner(const struct sk_buff *skb, kuid_t owner)
++{
++	const struct sock *sk = NETLINK_CB(skb).sk;
++	const struct file *file;
++
++	if (!uid_eq(current_euid(), owner) || !sk || !sk->sk_socket)
++		return false;
++	file = sk->sk_socket->file;
++	return file && uid_eq(file->f_cred->euid, owner);
++}
++
++/* look up the named pair and check the sender's access */
++static int rhizo_wlan_lookup(struct sk_buff *skb, struct genl_info *info,
++			     struct rhizo_wlan_pair **pairp)
++{
++	struct rhizo_wlan_pair *pair;
++
++	if (GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_HOST_IFNAME))
++		return -EINVAL;
++	pair = rhizo_wlan_find(info);
++	if (!pair) {
++		NL_SET_ERR_MSG_ATTR(info->extack,
++				    info->attrs[RHIZO_WLAN_ATTR_HOST_IFNAME],
++				    "no such pair in this network namespace");
++		return -ENODEV;
++	}
++	if (!rhizo_wlan_is_owner(skb, pair->owner) &&
++	    !netlink_capable(skb, CAP_NET_ADMIN))
++		return -EPERM;
++	*pairp = pair;
++	return 0;
++}
++
++static bool rhizo_wlan_valid_name(const char *name)
++{
++	return dev_valid_name(name) && !strchr(name, '%');
++}
++
++static bool rhizo_wlan_valid_alpha2(const char *a)
++{
++	if (a[0] == '0' && a[1] == '0')
++		return true;
++	return a[0] >= 'A' && a[0] <= 'Z' && a[1] >= 'A' && a[1] <= 'Z';
++}
++
++/* return why a CREATE's values are unusable and set @bad */
++static const char *rhizo_wlan_check_config(const struct rhizo_wlan_config *cfg,
++					   struct nlattr **attrs,
++					   struct nlattr **bad)
++{
++	*bad = attrs[RHIZO_WLAN_ATTR_HOST_IFNAME];
++	if (!rhizo_wlan_valid_name(cfg->host_name))
++		return "not a literal interface name";
++	*bad = attrs[RHIZO_WLAN_ATTR_WLAN_IFNAME];
++	if (!rhizo_wlan_valid_name(cfg->wlan_name))
++		return "not a literal interface name";
++	*bad = attrs[RHIZO_WLAN_ATTR_WLAN_MAC];
++	if (!is_valid_ether_addr(cfg->wlan_mac))
++		return "not a unicast address";
++	*bad = attrs[RHIZO_WLAN_ATTR_HOST_MAC];
++	if (cfg->host_mac && !is_valid_ether_addr(cfg->host_mac))
++		return "not a unicast address";
++	*bad = attrs[RHIZO_WLAN_ATTR_ALPHA2];
++	if (!rhizo_wlan_valid_alpha2(cfg->alpha2))
++		return "not two upper-case letters or 00";
++	*bad = attrs[RHIZO_WLAN_ATTR_OWNER_UID];
++	if (!uid_valid(cfg->owner))
++		return "not a uid in the sender's user namespace";
++	*bad = NULL;
++	return NULL;
++}
++
++static int rhizo_wlan_nl_create(struct sk_buff *skb, struct genl_info *info)
++{
++	struct rhizo_wlan_config cfg = { .alpha2 = { '0', '0' } };
++	struct nlattr **attrs = info->attrs;
++	struct nlattr *bad = NULL;
++	const char *why;
++	int err;
++
++	if (!net_eq(genl_info_net(info), &init_net))
++		return -EPERM;
++	if (GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_HOST_IFNAME) ||
++	    GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_WLAN_IFNAME) ||
++	    GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_WLAN_MAC) ||
++	    GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_OWNER_UID))
++		return -EINVAL;
++	if (!attrs[RHIZO_WLAN_ATTR_NETNS_PID] ==
++	    !attrs[RHIZO_WLAN_ATTR_NETNS_FD]) {
++		NL_SET_ERR_MSG(info->extack,
++			       "name the station's namespace by pid or by fd");
++		return -EINVAL;
++	}
++
++	cfg.host_name = nla_data(attrs[RHIZO_WLAN_ATTR_HOST_IFNAME]);
++	cfg.wlan_name = nla_data(attrs[RHIZO_WLAN_ATTR_WLAN_IFNAME]);
++	cfg.wlan_mac = nla_data(attrs[RHIZO_WLAN_ATTR_WLAN_MAC]);
++	if (attrs[RHIZO_WLAN_ATTR_HOST_MAC])
++		cfg.host_mac = nla_data(attrs[RHIZO_WLAN_ATTR_HOST_MAC]);
++	if (attrs[RHIZO_WLAN_ATTR_ALPHA2])
++		memcpy(cfg.alpha2, nla_data(attrs[RHIZO_WLAN_ATTR_ALPHA2]), 2);
++	cfg.owner = make_kuid(current_user_ns(),
++			      nla_get_u32(attrs[RHIZO_WLAN_ATTR_OWNER_UID]));
++
++	why = rhizo_wlan_check_config(&cfg, attrs, &bad);
++	if (why) {
++		NL_SET_ERR_MSG_ATTR_FMT(info->extack, bad, "%s", why);
++		return -EINVAL;
++	}
++
++	if (attrs[RHIZO_WLAN_ATTR_NETNS_PID])
++		cfg.wlan_net = get_net_ns_by_pid(nla_get_u32(attrs[RHIZO_WLAN_ATTR_NETNS_PID]));
++	else
++		cfg.wlan_net = get_net_ns_by_fd(nla_get_u32(attrs[RHIZO_WLAN_ATTR_NETNS_FD]));
++	if (IS_ERR(cfg.wlan_net))
++		return PTR_ERR(cfg.wlan_net);
++	cfg.host_net = genl_info_net(info);
++
++	if (net_eq(cfg.wlan_net, cfg.host_net)) {
++		NL_SET_ERR_MSG(info->extack,
++			       "the station needs a separate network namespace");
++		err = -EINVAL;
++	} else {
++		mutex_lock(&rhizo_wlan_lock);
++		err = rhizo_wlan_create(&cfg);
++		mutex_unlock(&rhizo_wlan_lock);
++	}
++	put_net(cfg.wlan_net);
++	return err;
++}
++
++static int rhizo_wlan_nl_destroy(struct sk_buff *skb, struct genl_info *info)
++{
++	struct rhizo_wlan_pair *pair;
++	int err;
++
++	if (!net_eq(genl_info_net(info), &init_net))
++		return -EPERM;
++	mutex_lock(&rhizo_wlan_lock);
++	err = rhizo_wlan_lookup(skb, info, &pair);
++	if (!err)
++		rhizo_wlan_destroy(pair);
++	mutex_unlock(&rhizo_wlan_lock);
++	return err;
++}
++
++static int rhizo_wlan_nl_set_state(struct sk_buff *skb, struct genl_info *info)
++{
++	struct nlattr **attrs = info->attrs;
++	struct rhizo_wlan_ap ap = {};
++	struct rhizo_wlan_pair *pair;
++	int err;
++
++	if (GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_PRESENT))
++		return -EINVAL;
++	ap.present = nla_get_u8(attrs[RHIZO_WLAN_ATTR_PRESENT]);
++	if (ap.present) {
++		if (GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_SSID) ||
++		    GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_BSSID) ||
++		    GENL_REQ_ATTR_CHECK(info, RHIZO_WLAN_ATTR_SIGNAL_MBM))
++			return -EINVAL;
++		ap.ssid_len = nla_len(attrs[RHIZO_WLAN_ATTR_SSID]);
++		memcpy(ap.ssid, nla_data(attrs[RHIZO_WLAN_ATTR_SSID]),
++		       ap.ssid_len);
++		memcpy(ap.bssid, nla_data(attrs[RHIZO_WLAN_ATTR_BSSID]),
++		       ETH_ALEN);
++		ap.signal_mbm = nla_get_s32(attrs[RHIZO_WLAN_ATTR_SIGNAL_MBM]);
++		if (!is_valid_ether_addr(ap.bssid)) {
++			NL_SET_ERR_MSG_ATTR(info->extack,
++					    attrs[RHIZO_WLAN_ATTR_BSSID],
++					    "not a unicast address");
++			return -EINVAL;
++		}
++	}
++
++	mutex_lock(&rhizo_wlan_lock);
++	err = rhizo_wlan_lookup(skb, info, &pair);
++	if (!err) {
++		wiphy_lock(pair->wiphy);
++		rhizo_wlan_set_ap(pair, &ap);
++		wiphy_unlock(pair->wiphy);
++	}
++	mutex_unlock(&rhizo_wlan_lock);
++	return err;
++}
++
++static int rhizo_wlan_fill_state(struct sk_buff *msg,
++				 struct rhizo_wlan_pair *pair)
++{
++	const struct rhizo_wlan_ap *ap = &pair->ap;
++
++	ASSERT_RTNL();
++	lockdep_assert_wiphy(pair->wiphy);
++
++	if (nla_put_string(msg, RHIZO_WLAN_ATTR_HOST_IFNAME, pair->host->name) ||
++	    nla_put_string(msg, RHIZO_WLAN_ATTR_WLAN_IFNAME, pair->wlan->name) ||
++	    nla_put_u32(msg, RHIZO_WLAN_ATTR_HOST_IFINDEX, pair->host->ifindex) ||
++	    nla_put_u32(msg, RHIZO_WLAN_ATTR_WLAN_IFINDEX, pair->wlan->ifindex) ||
++	    nla_put_string(msg, RHIZO_WLAN_ATTR_WIPHY_NAME,
++			   wiphy_name(pair->wiphy)) ||
++	    nla_put_u32(msg, RHIZO_WLAN_ATTR_OWNER_UID,
++			from_kuid_munged(current_user_ns(), pair->owner)) ||
++	    nla_put_u8(msg, RHIZO_WLAN_ATTR_PRESENT, ap->present) ||
++	    nla_put_u8(msg, RHIZO_WLAN_ATTR_CONNECTED, pair->connected))
++		return -EMSGSIZE;
++	if (ap->present &&
++	    (nla_put(msg, RHIZO_WLAN_ATTR_SSID, ap->ssid_len, ap->ssid) ||
++	     nla_put(msg, RHIZO_WLAN_ATTR_BSSID, ETH_ALEN, ap->bssid) ||
++	     nla_put_s32(msg, RHIZO_WLAN_ATTR_SIGNAL_MBM, ap->signal_mbm)))
++		return -EMSGSIZE;
++	return 0;
++}
++
++static int rhizo_wlan_nl_get_state(struct sk_buff *skb, struct genl_info *info)
++{
++	struct rhizo_wlan_pair *pair;
++	struct sk_buff *msg;
++	void *hdr;
++	int err;
++
++	msg = genlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
++	if (!msg)
++		return -ENOMEM;
++	hdr = genlmsg_put_reply(msg, info, &rhizo_wlan_family, 0,
++				RHIZO_WLAN_CMD_GET_STATE);
++	if (!hdr) {
++		nlmsg_free(msg);
++		return -EMSGSIZE;
++	}
++
++	mutex_lock(&rhizo_wlan_lock);
++	err = rhizo_wlan_lookup(skb, info, &pair);
++	if (!err) {
++		rtnl_lock();
++		wiphy_lock(pair->wiphy);
++		err = rhizo_wlan_fill_state(msg, pair);
++		wiphy_unlock(pair->wiphy);
++		rtnl_unlock();
++	}
++	mutex_unlock(&rhizo_wlan_lock);
++	if (err) {
++		nlmsg_free(msg);
++		return err;
++	}
++	genlmsg_end(msg, hdr);
++	return genlmsg_reply(msg, info);
++}
++
++static const struct nla_policy rhizo_wlan_policy[RHIZO_WLAN_ATTR_MAX + 1] = {
++	[RHIZO_WLAN_ATTR_HOST_IFNAME] = { .type = NLA_NUL_STRING,
++					  .len = IFNAMSIZ - 1 },
++	[RHIZO_WLAN_ATTR_WLAN_IFNAME] = { .type = NLA_NUL_STRING,
++					  .len = IFNAMSIZ - 1 },
++	[RHIZO_WLAN_ATTR_WLAN_MAC] = NLA_POLICY_ETH_ADDR,
++	[RHIZO_WLAN_ATTR_HOST_MAC] = NLA_POLICY_ETH_ADDR,
++	[RHIZO_WLAN_ATTR_NETNS_PID] = { .type = NLA_U32 },
++	[RHIZO_WLAN_ATTR_NETNS_FD] = { .type = NLA_U32 },
++	[RHIZO_WLAN_ATTR_OWNER_UID] = { .type = NLA_U32 },
++	[RHIZO_WLAN_ATTR_ALPHA2] = NLA_POLICY_EXACT_LEN(2),
++	[RHIZO_WLAN_ATTR_PRESENT] = NLA_POLICY_MAX(NLA_U8, 1),
++	[RHIZO_WLAN_ATTR_SSID] = NLA_POLICY_RANGE(NLA_BINARY, 1,
++						  IEEE80211_MAX_SSID_LEN),
++	[RHIZO_WLAN_ATTR_BSSID] = NLA_POLICY_ETH_ADDR,
++	[RHIZO_WLAN_ATTR_SIGNAL_MBM] = NLA_POLICY_RANGE(NLA_S32, -12800, 0),
++	[RHIZO_WLAN_ATTR_CONNECTED] = { .type = NLA_REJECT },
++	[RHIZO_WLAN_ATTR_WIPHY_NAME] = { .type = NLA_REJECT },
++	[RHIZO_WLAN_ATTR_WLAN_IFINDEX] = { .type = NLA_REJECT },
++	[RHIZO_WLAN_ATTR_HOST_IFINDEX] = { .type = NLA_REJECT },
++};
++
++static const struct genl_small_ops rhizo_wlan_ops[] = {
++	{
++		.cmd = RHIZO_WLAN_CMD_CREATE,
++		.doit = rhizo_wlan_nl_create,
++		.flags = GENL_ADMIN_PERM,
++	},
++	{
++		.cmd = RHIZO_WLAN_CMD_DESTROY,
++		.doit = rhizo_wlan_nl_destroy,
++		.flags = GENL_ADMIN_PERM,
++	},
++	{
++		.cmd = RHIZO_WLAN_CMD_SET_STATE,
++		.doit = rhizo_wlan_nl_set_state,
++	},
++	{
++		.cmd = RHIZO_WLAN_CMD_GET_STATE,
++		.doit = rhizo_wlan_nl_get_state,
++	},
++};
++
++static struct genl_family rhizo_wlan_family __ro_after_init = {
++	.name		= RHIZO_WLAN_GENL_NAME,
++	.version	= RHIZO_WLAN_GENL_VERSION,
++	.maxattr	= RHIZO_WLAN_ATTR_MAX,
++	.policy		= rhizo_wlan_policy,
++	.parallel_ops	= true,
++	.module		= THIS_MODULE,
++	.small_ops	= rhizo_wlan_ops,
++	.n_small_ops	= ARRAY_SIZE(rhizo_wlan_ops),
++};
++
++/* destroy a dying namespace's pairs ahead of cfg80211's exit */
++static void __net_exit rhizo_wlan_net_exit(struct net *net)
++{
++	struct rhizo_wlan_pair *pair, *tmp;
++
++	mutex_lock(&rhizo_wlan_lock);
++	list_for_each_entry_safe(pair, tmp, &rhizo_wlan_pairs, list) {
++		if (net_eq(dev_net(pair->wlan), net) ||
++		    net_eq(dev_net(pair->host), net))
++			rhizo_wlan_destroy(pair);
++	}
++	mutex_unlock(&rhizo_wlan_lock);
++}
++
++static struct pernet_operations rhizo_wlan_net_ops = {
++	.exit = rhizo_wlan_net_exit,
++};
++
++static int __init rhizo_wlan_init(void)
++{
++	int err;
++
++	err = register_pernet_device(&rhizo_wlan_net_ops);
++	if (err)
++		return err;
++	err = genl_register_family(&rhizo_wlan_family);
++	if (err)
++		unregister_pernet_device(&rhizo_wlan_net_ops);
++	return err;
++}
++
++static void __exit rhizo_wlan_exit(void)
++{
++	struct rhizo_wlan_pair *pair, *tmp;
++
++	genl_unregister_family(&rhizo_wlan_family);
++	mutex_lock(&rhizo_wlan_lock);
++	list_for_each_entry_safe(pair, tmp, &rhizo_wlan_pairs, list)
++		rhizo_wlan_destroy(pair);
++	mutex_unlock(&rhizo_wlan_lock);
++	unregister_pernet_device(&rhizo_wlan_net_ops);
++}
++
++module_init(rhizo_wlan_init);
++module_exit(rhizo_wlan_exit);
++
++MODULE_DESCRIPTION("Rhizo paired wireless link");
++MODULE_LICENSE("GPL");
+diff --git a/include/uapi/linux/rhizo_wlan.h b/include/uapi/linux/rhizo_wlan.h
+new file mode 100644
+index 00000000000..44597772e36
+--- /dev/null
++++ b/include/uapi/linux/rhizo_wlan.h
+@@ -0,0 +1,44 @@
++/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
++/* the generic netlink interface of a paired wireless link */
++
++#ifndef _UAPI_LINUX_RHIZO_WLAN_H
++#define _UAPI_LINUX_RHIZO_WLAN_H
++
++#define RHIZO_WLAN_GENL_NAME		"rhizo_wlan"
++#define RHIZO_WLAN_GENL_VERSION		1
++
++enum rhizo_wlan_cmd {
++	RHIZO_WLAN_CMD_UNSPEC,
++	RHIZO_WLAN_CMD_CREATE,
++	RHIZO_WLAN_CMD_DESTROY,
++	RHIZO_WLAN_CMD_SET_STATE,
++	RHIZO_WLAN_CMD_GET_STATE,
++
++	__RHIZO_WLAN_CMD_MAX,
++	RHIZO_WLAN_CMD_MAX = __RHIZO_WLAN_CMD_MAX - 1
++};
++
++enum rhizo_wlan_attr {
++	RHIZO_WLAN_ATTR_UNSPEC,
++	RHIZO_WLAN_ATTR_HOST_IFNAME,
++	RHIZO_WLAN_ATTR_WLAN_IFNAME,
++	RHIZO_WLAN_ATTR_WLAN_MAC,
++	RHIZO_WLAN_ATTR_HOST_MAC,
++	RHIZO_WLAN_ATTR_NETNS_PID,
++	RHIZO_WLAN_ATTR_NETNS_FD,
++	RHIZO_WLAN_ATTR_OWNER_UID,
++	RHIZO_WLAN_ATTR_ALPHA2,
++	RHIZO_WLAN_ATTR_PRESENT,
++	RHIZO_WLAN_ATTR_SSID,
++	RHIZO_WLAN_ATTR_BSSID,
++	RHIZO_WLAN_ATTR_SIGNAL_MBM,
++	RHIZO_WLAN_ATTR_CONNECTED,
++	RHIZO_WLAN_ATTR_WIPHY_NAME,
++	RHIZO_WLAN_ATTR_WLAN_IFINDEX,
++	RHIZO_WLAN_ATTR_HOST_IFINDEX,
++
++	__RHIZO_WLAN_ATTR_MAX,
++	RHIZO_WLAN_ATTR_MAX = __RHIZO_WLAN_ATTR_MAX - 1
++};
++
++#endif /* _UAPI_LINUX_RHIZO_WLAN_H */

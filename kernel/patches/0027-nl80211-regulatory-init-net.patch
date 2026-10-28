@@ -1,0 +1,47 @@
+diff --git a/net/wireless/nl80211.c b/net/wireless/nl80211.c
+index f334cdef895..7f2a0d83917 100644
+--- a/net/wireless/nl80211.c
++++ b/net/wireless/nl80211.c
+@@ -9701,6 +9701,12 @@ static int nl80211_set_bss(struct sk_buff *skb, struct genl_info *info)
+ 	return rdev_change_bss(rdev, dev, &params);
+ }
+ 
++/* refuse regulatory changes outside the initial network namespace */
++static bool nl80211_reg_change_allowed(struct genl_info *info)
++{
++	return net_eq(genl_info_net(info), &init_net);
++}
++
+ static int nl80211_req_set_reg(struct sk_buff *skb, struct genl_info *info)
+ {
+ 	char *data = NULL;
+@@ -9708,6 +9718,9 @@ static int nl80211_req_set_reg(struct sk_buff *skb, struct genl_info *info)
+ 	enum nl80211_user_reg_hint_type user_reg_hint_type;
+ 	u32 owner_nlportid;
+ 
++	if (!nl80211_reg_change_allowed(info))
++		return -EPERM;
++
+ 	/*
+ 	 * You should only get this when cfg80211 hasn't yet initialized
+ 	 * completely when built-in to the kernel right between the time
+@@ -9747,6 +9760,9 @@ static int nl80211_req_set_reg(struct sk_buff *skb, struct genl_info *info)
+ 
+ static int nl80211_reload_regdb(struct sk_buff *skb, struct genl_info *info)
+ {
++	if (!nl80211_reg_change_allowed(info))
++		return -EPERM;
++
+ 	return reg_reload_regdb();
+ }
+ 
+@@ -10438,6 +10454,9 @@ static int nl80211_set_reg(struct sk_buff *skb, struct genl_info *info)
+ 	enum nl80211_dfs_regions dfs_region = NL80211_DFS_UNSET;
+ 	struct ieee80211_regdomain *rd;
+ 
++	if (!nl80211_reg_change_allowed(info))
++		return -EPERM;
++
+ 	if (!info->attrs[NL80211_ATTR_REG_ALPHA2])
+ 		return -EINVAL;
+ 

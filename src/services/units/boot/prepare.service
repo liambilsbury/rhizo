@@ -1,0 +1,29 @@
+[Unit]
+Description=Rhizo first-boot setup
+ConditionPathExists=|!/var/lib/rhizo/.prepared
+ConditionDirectoryNotEmpty=|!/var/lib/rhizo/prepared
+ConditionPathExists=|/var/lib/rhizo/prepare-request
+After=systemd-modules-load.service local-fs.target
+After=rhizo-kernel-refresh.service
+Wants=rhizo-selinuxfs.service
+After=rhizo-selinuxfs.service
+Before=display-manager.service getty.target systemd-user-sessions.service ssh.service sshd.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/lib/rhizo/rhizo-selinux-mode --is-startable
+RemainAfterExit=yes
+ExecStartPre=/usr/lib/rhizo/install/prepare/fetch-gsi.sh
+ExecStartPre=-/usr/lib/rhizo/install/prepare/fetch-gsi.sh --release current --derive-only
+ExecStartPre=-/usr/lib/rhizo/install/apps/fetch-app.sh aurora
+ExecStart=/usr/lib/rhizo/install/prepare/prepare.sh --payload /usr/lib/rhizo --release current --keep-running
+ExecStartPost=/bin/sh -c 'printf "kernel=%%s\nversion=%%s\n" "$(uname -r)" "$(cat /usr/lib/rhizo/VERSION 2>/dev/null)" > /var/lib/rhizo/.prepared'
+StandardOutput=append:/var/log/rhizo/prepare.log
+StandardError=append:/var/log/rhizo/prepare.log
+TimeoutStartSec=1800
+ReadWritePaths=/var/lib/rhizo /srv/rhizo /root
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

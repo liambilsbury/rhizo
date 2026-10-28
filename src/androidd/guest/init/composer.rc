@@ -1,0 +1,33 @@
+# @RHIZO_SUBST early_init_restorecon
+
+on post-fs-data
+    mkdir /data/misc/rhizo 0755 system system
+    mkdir /data/rhizo_control 0755 system system
+    restorecon /data/rhizo_control
+    rm /data/rhizo_control/control.out
+    mkdir /data/rhizo_audio_map 0777 system system
+    restorecon /data/rhizo_audio_map
+
+service vendor.rhizo-composer /vendor/bin/hw/rhizo-composer
+    class core
+    shutdown critical
+    user system
+    group system graphics uhid
+    capabilities SYS_NICE
+    stdio_to_kmsg
+    setenv WAYLAND_DISPLAY wayland-0
+    setenv XDG_RUNTIME_DIR /dev/socket/rhizo_wayland
+# @RHIZO_SUBST no_resize
+# @RHIZO_SUBST composer_verbose
+# @RHIZO_SUBST composer_unreliable_fences
+# @RHIZO_SUBST composer_pacing
+# @RHIZO_SUBST composer_debug
+# @RHIZO_SUBST resize_trace
+# @RHIZO_SUBST composer_vsync_min_gap
+# @RHIZO_SUBST composer_device
+# @RHIZO_SUBST display_pool_idle_s
+# @RHIZO_SUBST display_pool_enabled
+# @RHIZO_SUBST input_phys_prefix
+# @RHIZO_SUBST display_geometry
+# @RHIZO_SUBST stream_socket
+# @RHIZO_SUBST clipboard_enabled

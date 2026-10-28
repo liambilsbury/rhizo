@@ -1,0 +1,5 @@
+ACTION!="add|change", GOTO="rhizo_wlan_end"
+SUBSYSTEM!="net", GOTO="rhizo_wlan_end"
+ENV{ID_NET_DRIVER}=="rhizo_wlan", ENV{NM_UNMANAGED}="1"
+
+LABEL="rhizo_wlan_end"

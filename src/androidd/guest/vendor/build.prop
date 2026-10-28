@@ -1,0 +1,17 @@
+# @RHIZO_SUBST zygote_prop
+ro.vendor.product.cpu.abilist64=x86_64
+# @RHIZO_SUBST egl_prop
+suspend.short_suspend_backoff_enabled=true
+suspend.short_suspend_threshold_millis=1000
+# @RHIZO_SUBST apexd_config
+# @RHIZO_SUBST bootanim_prop
+ro.vendor.build.security_patch=2025-12-05
+ro.soc.manufacturer=Rhizo
+ro.product.vendor.model=Rhizo on x86_64
+ro.product.property_source_order=vendor,product,odm,system_ext,system
+ro.soc.model=virtio-gpu
+ro.product.first_api_level=36
+ro.board.api_level=202504
+media.c2.hal.selection=aidl
+debug.stagefright.c2inputsurface=-1
+# @RHIZO_SUBST ro_debuggable

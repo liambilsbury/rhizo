@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.rhizo.network">
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.NETWORK_CARRIER_PROVISIONING"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application android:label="Rhizo"
+                 android:allowBackup="false">
+        <receiver android:name=".Mirror"
+                  android:exported="true"
+                  android:permission="android.permission.NETWORK_SETTINGS">
+            <intent-filter>
+                <action android:name="android.net.wifi.action.NETWORK_SETTINGS_RESET"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -1,0 +1,8 @@
+# @RHIZO_SUBST early_init_restorecon
+
+service vendor.rhizo-camera-provider /vendor/bin/hw/rhizo-camera-provider-service
+    interface aidl android.hardware.camera.provider.ICameraProvider/internal/0
+    class hal
+    user cameraserver
+    group camera
+    stdio_to_kmsg

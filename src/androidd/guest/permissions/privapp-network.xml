@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <privapp-permissions package="com.rhizo.network">
+        <permission name="android.permission.NETWORK_CARRIER_PROVISIONING"/>
+    </privapp-permissions>
+</permissions>

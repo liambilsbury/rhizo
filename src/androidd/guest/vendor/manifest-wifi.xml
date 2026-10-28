@@ -1,0 +1,10 @@
+    <hal format="aidl">
+        <name>android.hardware.wifi</name>
+        <version>3</version>
+        <fqname>IWifi/default</fqname>
+    </hal>
+    <hal format="aidl">
+        <name>android.hardware.wifi.supplicant</name>
+        <version>3</version>
+        <fqname>ISupplicant/default</fqname>
+    </hal>

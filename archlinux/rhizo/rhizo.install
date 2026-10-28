@@ -1,0 +1,145 @@
+_lib=/usr/lib/rhizo/install/lib/pkg-lib.sh
+_teardown=/usr/lib/rhizo/install/teardown/teardown.sh
+_state=/var/lib/rhizo
+_unit_dir=/etc/systemd/system
+_payload=/usr/lib/rhizo
+_cache=/var/cache/rhizo
+_logs=/var/log/rhizo
+_srv=/srv/rhizo
+_dropin_units="rhizo-app-events.service rhizo-deskd.service rhizo-desktop-session.service rhizo-audiod.service rhizo-camerad.service rhizo-locationd.service"
+
+# move the runtime release keys out of the conffile $1 into the state file $2
+rhizo_migrate_env_keys() {
+  _keys='RHIZO_GSI|RHIZO_RELEASE|RHIZO_DATA_IMG|RHIZO_DATA_RELEASE_CHANGE|RHIZO_WIPE_DATA|RHIZO_RESIDENT_G|RHIZO_RESIDENT_DISPATCH'
+  [ -f "$1" ] || return 0
+  grep -Eq "^($_keys)=" "$1" || return 0
+  grep -E "^($_keys)=" "$1" > "$2.migrated" || return 1
+  { cat "$2.migrated"; [ ! -f "$2" ] || cat "$2"; } > "$2.migrate" || return 1
+  mv "$2.migrate" "$2" || return 1
+  _rc=0
+  grep -Ev "^($_keys)=" "$1" > "$1.rhizo-migrate" || _rc=$?
+  [ "$_rc" -le 1 ] || return 1
+  mv "$1.rhizo-migrate" "$1"
+}
+
+# disable and remove rhizo-final-cleanup.service
+_cancel_final_cleanup() {
+  [ -e "$_unit_dir/rhizo-final-cleanup.service" ] || return 0
+  rc=0
+  systemctl disable --now rhizo-final-cleanup.service || rc=1
+  rm -f "$_unit_dir/rhizo-final-cleanup.service" || rc=1
+  systemctl daemon-reload || rc=1
+  if [ "$rc" = 0 ]; then echo "[rhizo] canceled a pending post-removal cleanup from an earlier removal"; fi
+  return "$rc"
+}
+
+_source_lib() {
+  [ -r "$_lib" ] || { echo "[rhizo] cannot read $_lib" >&2; return 1; }
+  # shellcheck source=../../src/install/lib/pkg-lib.sh
+  . "$_lib"
+}
+
+# cancel the final cleanup and clear the saved teardown state
+pre_install() {
+  rc=0
+  _cancel_final_cleanup || rc=1
+  rm -rf "$_state/teardown" || rc=1
+  return "$rc"
+}
+
+# record the configure for the PostTransaction hook
+post_install() {
+  { mkdir -p "$_state" && : > "$_state/.configure-pending"; } \
+    || { echo "[rhizo] could not record the configure for the PostTransaction hook in $_state" >&2; return 1; }
+}
+
+# prepare the state for an upgrade
+pre_upgrade() {
+  rc=0
+  _cancel_final_cleanup || rc=1
+  mkdir -p "$_state" || rc=1
+  printf '%s\n' "$2" > "$_state/.upgrade-from" || rc=1
+  if [ -e "$_state/.units.enable.applied" ]; then
+    cp "$_state/.units.enable.applied" "$_state/.units.enable.replaced" || rc=1
+  else
+    : > "$_state/.units.enable.replaced" || rc=1
+  fi
+  _source_lib || return 1
+  pkg_pre_replace upgrade || rc=1
+  if [ "$rc" = 0 ]; then rhizo_migrate_env_keys /etc/rhizo/androidd.env "$_state/androidd-runtime.env" || rc=1; fi
+  return "$rc"
+}
+
+# record the old version's configure for the PostTransaction hook
+post_upgrade() {
+  rm -f "$_state/androidd-runtime.env.migrated"
+  { mkdir -p "$_state" && printf '%s\n' "$2" > "$_state/.configure-pending"; } \
+    || { echo "[rhizo] could not record the configure for the PostTransaction hook in $_state" >&2; return 1; }
+}
+
+# copy the teardown scripts to $_state/teardown
+_keep_teardown() {
+  _inst=${_teardown%/teardown/teardown.sh}
+  _kept=$_state/teardown
+  if ! { mkdir -p "$_kept/install/teardown" "$_kept/install/lib" "$_kept/install/bootstrap" \
+           && cp "$_inst/teardown/teardown.sh" "$_inst/teardown/teardown-lib.sh" "$_kept/install/teardown/" \
+           && cp "$_inst/lib/host-flavor.sh" "$_inst/lib/pkg-lib.sh" "$_kept/install/lib/" \
+           && cp "$_inst/bootstrap/bootloader.sh" "$_kept/install/bootstrap/" \
+           && cp "$_payload/rhizo-selinux-mode" "$_kept/"; }; then
+    echo "[rhizo] could not keep a copy of the teardown in $_kept" >&2
+    return 1
+  fi
+  echo "[rhizo] pacman removes the package anyway; once the problem above is fixed, finish with:" >&2
+  echo "[rhizo]   sudo bash $_kept/install/teardown/teardown.sh $* && sudo rm -r $_kept" >&2
+}
+
+# stop the units and run the teardown script
+pre_remove() {
+  rc=0
+  if _source_lib; then
+    pkg_pre_replace remove || rc=1
+    pkg_stop_listed_units || rc=1
+  else
+    rc=1
+  fi
+  if [ "${RHIZO_TEARDOWN_PURGE:-0}" = 1 ]; then set -- --purge; else set --; fi
+  if ! bash "$_teardown" "$@"; then
+    rc=1
+    echo "[rhizo] teardown reported a problem; see its output above" >&2
+    _keep_teardown "$@"
+  fi
+  return "$rc"
+}
+
+# remove the directory $1
+_remove_state_dir() {
+  [ -e "$1" ] || return 0
+  rm -rf "$1" && return 0
+  if [ -e "$_unit_dir/rhizo-final-cleanup.service" ]; then
+    echo "[rhizo] $1 is left to rhizo-final-cleanup.service at the next boot"
+    return 0
+  fi
+  echo "[rhizo] could not remove $1" >&2
+  return 1
+}
+
+# remove the cache and log directories
+post_remove() {
+  rc=0
+  rm -f "$_state/.units.enable.applied" "$_state/.units.enable.replaced" "$_state/.configure-pending" || rc=1
+  _remove_state_dir "$_cache" || rc=1
+  _remove_state_dir "$_logs" || rc=1
+  for unit in $_dropin_units; do
+    rm -f "$_unit_dir/$unit.d/10-desktop-user.conf" || rc=1
+    if [ -d "$_unit_dir/$unit.d" ]; then rmdir --ignore-fail-on-non-empty "$_unit_dir/$unit.d" || rc=1; fi
+  done
+  if [ -d "$_payload" ]; then
+    find "$_payload" -depth -type d -name __pycache__ -exec rm -rf {} + || rc=1
+    find "$_payload" -depth -type d -empty -delete || rc=1
+  fi
+  if [ "${RHIZO_TEARDOWN_PURGE:-0}" = 1 ] && [ -d "$_srv" ]; then
+    rmdir --ignore-fail-on-non-empty "$_srv" || rc=1
+  fi
+  systemctl daemon-reload || rc=1
+  return "$rc"
+}

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Rhizo APK installer
+Icon=rhizo
+Exec=rhizo app install %f
+MimeType=application/vnd.android.package-archive;
+NoDisplay=true

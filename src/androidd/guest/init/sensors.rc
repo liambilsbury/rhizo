@@ -1,0 +1,9 @@
+# @RHIZO_SUBST early_init_restorecon
+
+service vendor.rhizo-sensors /vendor/bin/hw/rhizo-sensors-service
+    interface aidl android.hardware.sensors.ISensors/default
+    class hal
+    user system
+    group system
+    rlimit rtprio 10 10
+    stdio_to_kmsg

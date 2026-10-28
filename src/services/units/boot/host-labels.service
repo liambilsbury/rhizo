@@ -1,0 +1,22 @@
+[Unit]
+Description=Rhizo host label removal
+DefaultDependencies=no
+ConditionPathExists=/var/lib/rhizo/.host-labels-pending
+After=local-fs.target
+Before=sysinit.target shutdown.target
+Before=androidd.service rhizo-prepare.service rhizo-policy.service rhizo-selinuxfs.service rhizo-selinux-mode.service
+Before=rhizo-kernel-refresh.service rhizo-update-begin.service rhizo-update-confirm.service rhizo-hostfs.service
+Before=rhizo-app-events.service rhizo-audiod.service rhizo-btd.service rhizo-camerad.service rhizo-delayd.service rhizo-desk-token.service rhizo-deskd.service
+Before=rhizo-displayd.service rhizo-headroomd.service rhizo-keymapd.service rhizo-locationd.service rhizo-rtd.service rhizo-server-idle.service
+Before=rhizo-display-pool.service rhizo-display-pool-release.service rhizo-remove-entries.service rhizo-desktop-attach.service rhizo-session-start.service rhizo-resync.service
+Before=rhizo-resync-rearm.service rhizo-stream-capability.service rhizo-streamd.service
+Before=rhizo-api.socket rhizo-brokerd.socket rhizo-streamd.socket
+Before=rhizo-display-pool.path rhizo-remove-entries.path rhizo-desktop-attach.path rhizo-session-start.path rhizo-resync.path rhizo-stream-capability.path
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/rhizo/install/teardown/teardown.sh --clear-host-labels
+
+[Install]
+WantedBy=multi-user.target

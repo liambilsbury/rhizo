@@ -1,0 +1,299 @@
+diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
+index 4275465ba..410a7d588 100644
+--- a/security/selinux/global_sidtab.c
++++ b/security/selinux/global_sidtab.c
+@@ -172,17 +172,59 @@ static int global_context_to_sid(struct selinux_state *state, u32 ss_sid,
+ 	return rc;
+ }
+ 
++/* return @entry's SID in the namespace with @id */
++static u32 entry_ss_sid(struct sidtab_entry *entry, u64 id)
++{
++	unsigned int seq;
++	u32 ss_sid;
++#if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
++	int i;
++#endif
++
++	do {
++		seq = read_seqcount_begin(&entry->ss_seq);
++		ss_sid = entry->ns == id ? entry->ss_sid : 0;
++#if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
++		for (i = 0; !ss_sid && i < ARRAY_SIZE(entry->ss_sid_cache.ns);
++		     i++)
++			if (entry->ss_sid_cache.ns[i] == id)
++				ss_sid = entry->ss_sid_cache.ss_sid[i];
++#endif
++	} while (read_seqcount_retry(&entry->ss_seq, seq));
++	return ss_sid;
++}
++
++#if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
++/* cache @entry's SID for the namespace with @id */
++static void entry_cache_ss_sid(struct sidtab_entry *entry, u64 id, u32 ss_sid)
++{
++	struct sidtab_ss_sid_cache *cache = &entry->ss_sid_cache;
++	int i, n = ARRAY_SIZE(cache->ns);
++
++	/* find the namespace's slot or a free slot */
++	for (i = 0; i < n && cache->ns[i] != id; i++)
++		;
++	if (i == n)
++		for (i = 0; i < n && cache->ns[i]; i++)
++			;
++	if (i == n)
++		i = (u32)id % n;
++	write_seqcount_begin(&entry->ss_seq);
++	cache->ns[i] = id;
++	cache->ss_sid[i] = ss_sid;
++	write_seqcount_end(&entry->ss_seq);
++}
++#endif
++
+ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
+ 				u32 *ss_sid, gfp_t gfp)
+ {
+ 	struct sidtab_entry *entry;
+ 	int rc;
+ 	const char *scontext;
+-	u32 scontext_len;
++	u32 scontext_len, cached;
+ #if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
+-	struct sidtab_ss_sid_cache *cache;
+ 	unsigned long flags;
+-	int i, first, last;
+ #endif
+ 
+ 	if (sid <= SECINITSID_NUM) {
+@@ -196,8 +238,9 @@ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
+ 		rcu_read_unlock();
+ 		return -EINVAL;
+ 	}
+-	if (entry->state == state && entry->ss_sid) {
+-		*ss_sid = entry->ss_sid;
++	cached = entry_ss_sid(entry, state->id);
++	if (cached) {
++		*ss_sid = cached;
+ 		rcu_read_unlock();
+ 		return 0;
+ 	}
+@@ -212,16 +255,6 @@ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
+ 			return -EINVAL;
+ 		return map_global_sid_to_ss(state, rec, ss_sid, gfp);
+ 	}
+-#if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
+-	cache = &entry->ss_sid_cache;
+-	for (i = cache->first; i >= 0 && i <= cache->last; i++) {
+-		if (cache->state[i] == state && cache->ss_sid[i]) {
+-			*ss_sid = cache->ss_sid[i];
+-			rcu_read_unlock();
+-			return 0;
+-		}
+-	}
+-#endif
+ 	rcu_read_unlock();
+ 
+ 	rc = global_sid_to_context(sid, &scontext, &scontext_len);
+@@ -242,33 +275,8 @@ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
+ 			spin_unlock_irqrestore(&global_sidtab.lock, flags);
+ 			return -EINVAL;
+ 		}
+-		cache = &entry->ss_sid_cache;
+-		first = cache->first;
+-		last = cache->last;
+-		for (i = 0; i < ARRAY_SIZE(cache->ss_sid) && cache->ss_sid[i];
+-		     i++)
+-			;
+-		if (i < ARRAY_SIZE(cache->ss_sid)) {
+-			WRITE_ONCE(cache->ss_sid[i], *ss_sid);
+-			/* ensure that the SID is written before the state */
+-			smp_wmb();
+-			WRITE_ONCE(cache->state[i], state);
+-		} else {
+-			if (first == -1)
+-				i = 0;
+-			else
+-				i = first;
+-			WRITE_ONCE(cache->ss_sid[i], *ss_sid);
+-			/* ensure that the SID is written before the state */
+-			smp_wmb();
+-			WRITE_ONCE(cache->state[i], state);
+-		}
+-		/* ensure that state is updated before indices */
+-		smp_wmb();
+-		if (first == -1 || i < first)
+-			WRITE_ONCE(cache->first, i);
+-		if (last == -1 || i > last)
+-			WRITE_ONCE(cache->last, i);
++		if (entry->sid == sid)
++			entry_cache_ss_sid(entry, state->id, *ss_sid);
+ 		spin_unlock_irqrestore(&global_sidtab.lock, flags);
+ 	}
+ #endif
+diff --git a/security/selinux/include/sidtab.h b/security/selinux/include/sidtab.h
+index 775b5694d..0937fda7c 100644
+--- a/security/selinux/include/sidtab.h
++++ b/security/selinux/include/sidtab.h
+@@ -13,6 +13,7 @@
+ #define _SS_SIDTAB_H_
+ 
+ #include <linux/spinlock_types.h>
++#include <linux/seqlock.h>
+ #include <linux/log2.h>
+ #include <linux/hashtable.h>
+ 
+@@ -20,10 +21,10 @@
+ 
+ #ifdef CONFIG_SECURITY_SELINUX_NS
+ #if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
++/* Per-namespace SIDs of a table entry */
+ struct sidtab_ss_sid_cache {
+ 	u32 ss_sid[CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE];
+-	struct selinux_state *state[CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE];
+-	int first, last;
++	u64 ns[CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE];
+ };
+ #endif
+ #endif
+@@ -35,7 +36,8 @@ struct sidtab_entry {
+ 	struct hlist_node list;
+ #ifdef CONFIG_SECURITY_SELINUX_NS
+ 	u32 ss_sid;
+-	struct selinux_state *state;
++	u64 ns; /* id of adding namespace */
++	seqcount_spinlock_t ss_seq; /* covers ns, ss_sid, cache */
+ #if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
+ 	struct sidtab_ss_sid_cache ss_sid_cache;
+ #endif
+diff --git a/security/selinux/ss/sidtab.c b/security/selinux/ss/sidtab.c
+index 198bcf674..f636ed560 100644
+--- a/security/selinux/ss/sidtab.c
++++ b/security/selinux/ss/sidtab.c
+@@ -77,6 +77,9 @@ int sidtab_set_initial(struct sidtab *s, u32 sid, struct context *context)
+ 		return rc;
+ 
+ 	isid->set = 1;
++#ifdef CONFIG_SECURITY_SELINUX_NS
++	seqcount_spinlock_init(&isid->entry.ss_seq, &s->lock);
++#endif
+ 
+ 	hash = context_compute_hash(context);
+ 
+@@ -297,8 +300,9 @@ int sidtab_context_to_sid(struct sidtab *s, struct context *context, u32 *sid)
+ 
+ 	dst->sid = index_to_sid(count);
+ #ifdef CONFIG_SECURITY_SELINUX_NS
+-	dst->state = state;
++	dst->ns = state ? state->id : 0;
+ 	dst->ss_sid = ss_sid;
++	seqcount_spinlock_init(&dst->ss_seq, &s->lock);
+ #endif
+ 	dst->hash = hash;
+ 
+@@ -551,53 +555,32 @@ void sidtab_destroy(struct sidtab *s)
+ }
+ 
+ #ifdef CONFIG_SECURITY_SELINUX_NS
+-static void sidtab_invalidate_state_entry(struct sidtab_entry *entry,
+-					  struct selinux_state *state)
++/* clear @entry's slots for the namespace with @id */
++static void sidtab_invalidate_state_entry(struct sidtab_entry *entry, u64 id)
+ {
+ #if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
+-	struct sidtab_ss_sid_cache *cache;
+-	int i, first, last;
+-#endif
+-
+-	if (entry->state == state) {
+-		WRITE_ONCE(entry->ss_sid, 0);
+-		WRITE_ONCE(entry->state, NULL);
+-	}
++	struct sidtab_ss_sid_cache *cache = &entry->ss_sid_cache;
++	int i;
+ 
+-#if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
+-	cache = &entry->ss_sid_cache;
+-	first = cache->first;
+-	last = cache->last;
+-	for (i = first; i >= 0 && i <= last; i++) {
+-		if (cache->state[i] == state) {
+-			WRITE_ONCE(cache->ss_sid[i], 0);
+-			WRITE_ONCE(cache->state[i], NULL);
+-			if (first == i) {
+-				for (first = i + 1; first <= last &&
+-					     !cache->ss_sid[first]; first++)
+-					;
+-				if (first == (i+1))
+-					first = -1;
+-				WRITE_ONCE(cache->first, first);
+-			}
+-			if (last == i) {
+-				for (last = i - 1; last >= first &&
+-					     last >= 0 &&
+-					     !cache->ss_sid[last]; last--)
+-					;
+-				if (last == (i-1))
+-					last = -1;
+-				WRITE_ONCE(cache->last, last);
+-			}
+-			return;
+-		}
++	for (i = 0; i < ARRAY_SIZE(cache->ns); i++) {
++		if (cache->ns[i] != id)
++			continue;
++		write_seqcount_begin(&entry->ss_seq);
++		cache->ns[i] = 0;
++		cache->ss_sid[i] = 0;
++		write_seqcount_end(&entry->ss_seq);
+ 	}
+ #endif
++	if (entry->ns == id) {
++		write_seqcount_begin(&entry->ss_seq);
++		entry->ns = 0;
++		entry->ss_sid = 0;
++		write_seqcount_end(&entry->ss_seq);
++	}
+ }
+ 
+ static void sidtab_invalidate_state_tree(union sidtab_entry_inner entry,
+-					 u32 level,
+-					 struct selinux_state *state)
++					 u32 level, u64 id)
+ {
+ 	u32 i;
+ 
+@@ -609,7 +592,7 @@ static void sidtab_invalidate_state_tree(union sidtab_entry_inner entry,
+ 
+ 		for (i = 0; i < SIDTAB_INNER_ENTRIES; i++)
+ 			sidtab_invalidate_state_tree(node->entries[i],
+-						     level - 1, state);
++						     level - 1, id);
+ 	} else {
+ 		struct sidtab_node_leaf *node = entry.ptr_leaf;
+ 
+@@ -617,7 +600,7 @@ static void sidtab_invalidate_state_tree(union sidtab_entry_inner entry,
+ 			return;
+ 
+ 		for (i = 0; i < SIDTAB_LEAF_ENTRIES; i++)
+-			sidtab_invalidate_state_entry(&node->entries[i], state);
++			sidtab_invalidate_state_entry(&node->entries[i], id);
+ 	}
+ }
+ 
+@@ -630,13 +613,14 @@ void sidtab_invalidate_state(struct sidtab *s, struct selinux_state *state)
+ 
+ 	for (i = 0; i < SECINITSID_NUM; i++)
+ 		if (s->isids[i].set)
+-			sidtab_invalidate_state_entry(&s->isids[i].entry, state);
++			sidtab_invalidate_state_entry(&s->isids[i].entry,
++						      state->id);
+ 
+ 	level = SIDTAB_MAX_LEVEL;
+ 	while (level && !s->roots[level].ptr_inner)
+ 		--level;
+ 
+-	sidtab_invalidate_state_tree(s->roots[level], level, state);
++	sidtab_invalidate_state_tree(s->roots[level], level, state->id);
+ 
+ 	spin_unlock_irqrestore(&s->lock, flags);
+ }

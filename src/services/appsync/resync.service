@@ -1,0 +1,16 @@
+[Unit]
+Description=Rhizo desktop entry sync
+After=rhizo-display-pool.service
+
+[Service]
+Type=exec
+RuntimeMaxSec=2700
+ExecStart=/usr/bin/dash /usr/lib/rhizo/tools/resync.sh
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/usr/share/applications -/usr/share/icons -/usr/share/metainfo
+ProtectHome=yes
+CacheDirectory=rhizo-appsync
+RuntimeDirectory=rhizo-resync
+RuntimeDirectoryPreserve=yes
+PrivateTmp=yes

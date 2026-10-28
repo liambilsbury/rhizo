@@ -1,0 +1,121 @@
+--- a/meson.build
++++ b/meson.build
+@@ -1889,7 +1889,7 @@
+ endif
+ if dep_elf.found()
+   pre_args += '-DUSE_LIBELF'
+-elif with_gallium_radeonsi
++elif with_gallium_radeonsi and amd_with_llvm
+   error('Gallium driver radeonsi requires libelf')
+ endif
+ 
+--- a/src/gallium/drivers/radeonsi/si_debug.c
++++ b/src/gallium/drivers/radeonsi/si_debug.c
+@@ -845,6 +845,7 @@
+                                 struct si_shader_inst *instructions,
+                                 gl_shader_stage stage, unsigned wave_size)
+ {
++#if defined(USE_LIBELF)
+    if (!ac_rtld_open(rtld_binary, (struct ac_rtld_open_info){
+                                      .info = &screen->info,
+                                      .shader_type = stage,
+@@ -882,6 +883,7 @@
+          break;
+       disasm = inst_end + 1;
+    }
++#endif
+ }
+ 
+ /* If the shader is being executed, print its asm instructions, and annotate
+@@ -967,8 +969,10 @@
+ 
+    fprintf(f, "\n\n");
+    free(instructions);
++#if defined(USE_LIBELF)
+    for (unsigned i = 0; i < ARRAY_SIZE(rtld_binaries); ++i)
+       ac_rtld_close(&rtld_binaries[i]);
++#endif
+ }
+ 
+ static void si_dump_annotated_shaders(struct si_context *sctx, FILE *f)
+--- a/src/gallium/drivers/radeonsi/si_shader.c
++++ b/src/gallium/drivers/radeonsi/si_shader.c
+@@ -165,6 +165,7 @@
+           screen->info.gfx_level >= GFX7 ? 512 : 256;
+ }
+ 
++#if defined(USE_LIBELF)
+ static bool si_shader_binary_open(struct si_screen *screen, struct si_shader *shader,
+                                   struct ac_rtld_binary *rtld)
+ {
+@@ -203,6 +204,7 @@
+                                        .elf_sizes = part_sizes});
+    return ok;
+ }
++#endif
+ 
+ static unsigned get_shader_binaries(struct si_shader *shader, struct si_shader_binary *bin[4])
+ {
+@@ -228,11 +230,15 @@
+ unsigned si_get_shader_binary_size(struct si_screen *screen, struct si_shader *shader)
+ {
+    if (shader->binary.type == SI_SHADER_BINARY_ELF) {
++#if defined(USE_LIBELF)
+       struct ac_rtld_binary rtld;
+       si_shader_binary_open(screen, shader, &rtld);
+       uint64_t size = rtld.exec_size;
+       ac_rtld_close(&rtld);
+       return size;
++#else
++      return 0;
++#endif
+    } else {
+       struct si_shader_binary *bin[4];
+       unsigned num_bin = get_shader_binaries(shader, bin);
+@@ -388,6 +395,9 @@
+ static int upload_binary_elf(struct si_screen *sscreen, struct si_shader *shader,
+                              uint64_t scratch_va, bool dma_upload, int64_t bo_offset)
+ {
++#if !defined(USE_LIBELF)
++   return -1;
++#else
+    struct ac_rtld_binary binary;
+    if (!si_shader_binary_open(sscreen, shader, &binary))
+       return -1;
+@@ -418,6 +429,7 @@
+    ac_rtld_close(&binary);
+ 
+    return size;
++#endif
+ }
+ 
+ static void calculate_needed_lds_size(struct si_screen *sscreen, struct si_shader *shader)
+@@ -573,6 +585,7 @@
+       return;
+    }
+ 
++#if defined(USE_LIBELF)
+    struct ac_rtld_binary rtld_binary;
+ 
+    if (!ac_rtld_open(&rtld_binary, (struct ac_rtld_open_info){
+@@ -597,6 +610,7 @@
+ 
+ out:
+    ac_rtld_close(&rtld_binary);
++#endif
+ }
+ 
+ static void si_calculate_max_simd_waves(struct si_shader *shader)
+--- a/src/gallium/drivers/radeonsi/si_state_shaders.cpp
++++ b/src/gallium/drivers/radeonsi/si_state_shaders.cpp
+@@ -299,6 +299,10 @@
+    }
+ 
+    shader->binary.type = (enum si_shader_binary_type)head->type;
++#if !defined(USE_LIBELF)
++   if (shader->binary.type == SI_SHADER_BINARY_ELF)
++      return false;
++#endif
+    ptr = read_data(ptr, &shader->config, sizeof(shader->config));
+    ptr = read_data(ptr, &shader->info, sizeof(shader->info));
+    ptr = read_data(ptr, &shader->binary.exec_size, 4);

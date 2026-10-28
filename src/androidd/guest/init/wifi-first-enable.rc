@@ -1,0 +1,8 @@
+service rhizo-wifi-first-enable /system/bin/sh /system_ext/bin/rhizo-wifi-first-enable.sh
+    disabled
+    oneshot
+    user shell
+    seclabel u:r:shell:s0
+
+on property:sys.boot_completed=1
+    start rhizo-wifi-first-enable
