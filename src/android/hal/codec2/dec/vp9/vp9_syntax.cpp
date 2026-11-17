@@ -358,7 +358,7 @@ void LoopFilterLevels(const FrameHeader& h, const ParseState& s, int segment, ui
     if (!s.abs_or_delta_update) lvl_seg += level;
     lvl_seg = Clip3(0, kMaxLoopFilter, lvl_seg);
   }
-  // the spec's loop_filter_delta_update in 8.8.1 step 3 reads as loop_filter_delta_enabled
+  // loop_filter_delta_update in VP9 8.8.1 step 3 is loop_filter_delta_enabled
   if (!h.loop_filter_delta_enabled) {
     for (int ref = 0; ref < 4; ref++) out[ref][0] = out[ref][1] = static_cast<uint8_t>(lvl_seg);
     return;

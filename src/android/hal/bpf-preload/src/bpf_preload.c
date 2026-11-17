@@ -9,7 +9,7 @@
 #elif defined(__aarch64__)
 #define SYS_bpf_nr 280
 #else
-#error "rhizo_bpf_preload: only x86_64 and aarch64 wired up (matches the two host architectures this project builds for)"
+#error "SYS_bpf_nr is defined for x86_64 and aarch64 only"
 #endif
 
 #if defined(__x86_64__)
@@ -46,7 +46,7 @@ static long raw_syscall6(long nr, long a1, long a2, long a3, long a4, long a5,
 }
 #endif
 
-// fail bpf id enumeration with ENOENT
+// fail BPF_PROG_GET_NEXT_ID, BPF_MAP_GET_NEXT_ID, BPF_LINK_GET_NEXT_ID and BPF_BTF_GET_NEXT_ID with ENOENT
 long syscall(long number, ...) {
   va_list ap;
   va_start(ap, number);

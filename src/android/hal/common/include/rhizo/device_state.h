@@ -17,7 +17,7 @@ namespace rhizo_device {
 inline constexpr char kStateDir[] = "/vendor/etc/rhizo-device-state";
 inline constexpr char kStatePath[] = "/vendor/etc/rhizo-device-state/device-state.conf";
 
-// write a message to the kernel log under a tag
+// write "<5>tag: msg" to /dev/kmsg
 inline void Klog(const char* tag, const char* msg) {
   int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
   if (fd >= 0) {
@@ -26,7 +26,7 @@ inline void Klog(const char* tag, const char* msg) {
   }
 }
 
-// read key=value lines from the state file
+// read key=value lines from kStatePath into out
 inline bool ReadState(std::map<std::string, std::string>* out) {
   std::ifstream f(kStatePath);
   if (!f.is_open()) return false;
@@ -39,10 +39,10 @@ inline bool ReadState(std::map<std::string, std::string>* out) {
   return true;
 }
 
-// inotify watch of device state directory
+// inotify watch of kStateDir
 class Watcher {
  public:
-  // watch the state directory and start the watcher thread
+  // add an inotify watch on kStateDir and start thread_
   explicit Watcher(const char* tag, std::function<void()> on_change)
       : tag_(tag), on_change_(std::move(on_change)) {
     fd_ = inotify_init1(IN_CLOEXEC);
@@ -62,7 +62,7 @@ class Watcher {
     thread_ = std::thread([this] { Loop(); });
   }
 
-  // stop the thread and close the fd
+  // clear running_, close fd_ and join thread_
   ~Watcher() {
     running_ = false;
     if (fd_ >= 0) {
@@ -75,7 +75,7 @@ class Watcher {
   Watcher& operator=(const Watcher&) = delete;
 
  private:
-  // call on_change_ for each inotify read
+  // call on_change_ after each read() of fd_ that returns data
   void Loop() {
     alignas(struct inotify_event) char buf[4096];
     while (running_) {
@@ -84,10 +84,10 @@ class Watcher {
       if (running_) on_change_();
     }
   }
-  // log a failed call and that watching is disabled
+  // write the failed call and errno to /dev/kmsg
   void LogFailure(const char* what) {
     char msg[160];
-    snprintf(msg, sizeof(msg), "%s failed (errno=%d) -- watching disabled", what, errno);
+    snprintf(msg, sizeof(msg), "%s failed (errno=%d)", what, errno);
     Klog(tag_, msg);
   }
 

@@ -7,9 +7,13 @@ import select
 import sys
 import time
 
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [_here, os.path.join(_here, ".."), os.path.join(_here, "..", "common")]
+import control_open  # noqa: E402
+
 
 def _instanced(base, sandbox_id, sep="-"):
-    """return the instance name for the sandbox id"""
+    """return base for sandbox_id 0, else base, sep and sandbox_id"""
     return base if sandbox_id == 0 else "%s%s%d" % (base, sep, sandbox_id)
 
 
@@ -29,9 +33,9 @@ def log(msg):
     sys.stderr.flush()
 
 
-def read_from(path, offset=0):
-    """read the bytes of path from offset"""
-    fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+
+def read_from(fd, offset=0):
+    """read fd from offset to EOF and close fd"""
     try:
         chunks = []
         while True:
@@ -61,7 +65,7 @@ class Xkb:
     MASK_ALTGR = 1 << 7
 
     def __init__(self):
-        """load libxkbcommon and set up its function types"""
+        """load libxkbcommon and set the ctypes signatures"""
         lib = ctypes.CDLL("libxkbcommon.so.0")
         lib.xkb_context_new.restype = ctypes.c_void_p
         lib.xkb_keymap_new_from_string.restype = ctypes.c_void_p
@@ -85,16 +89,16 @@ class Xkb:
             raise RuntimeError("xkb_context_new failed")
 
     def resolve(self, keymap_text):
-        """return the characters of each scancode"""
+        """return the four level strings of each evdev code in keymap_text"""
         km = self.lib.xkb_keymap_new_from_string(
             self.ctx, keymap_text.encode("utf-8"), self.FORMAT_TEXT_V1, 0)
         if not km:
-            raise ValueError("xkb_keymap_new_from_string could not parse the keymap")
+            raise ValueError("xkb_keymap_new_from_string failed")
         state = self.lib.xkb_state_new(km)
         buf = ctypes.create_string_buffer(32)
 
         def get(xkbcode, mask):
-            """return the text a key produces under a modifier mask"""
+            """return the UTF-8 text of xkbcode under mask"""
             self.lib.xkb_state_update_mask(state, mask, 0, 0, 0, 0, 0)
             n = self.lib.xkb_state_key_get_utf8(state, xkbcode, buf, len(buf))
             s = buf.raw[:n].decode("utf-8", "replace") if n > 0 else ""
@@ -129,21 +133,29 @@ def encode_table(entries):
 
 
 class KeymapWatch:
-    """watch on control.out keymap lines"""
+    """inotify watch on CONTROL_DIR and offset into CONTROL_OUT"""
 
     def __init__(self):
-        """open the inotify watch on the control directory"""
+        """add an IN_CREATE inotify watch on CONTROL_DIR"""
         self.libc = ctypes.CDLL("libc.so.6", use_errno=True)
         self.fd = self.libc.inotify_init1(0o4000)
         if self.fd < 0:
-            raise OSError(ctypes.get_errno(), "inotify_init1")
+            raise OSError(ctypes.get_errno(), "inotify_init1 failed")
         self.offset = 0
-        wd = self.libc.inotify_add_watch(self.fd, CONTROL_DIR.encode(), IN_CREATE)
+        try:
+            dirfd = control_open.open_dir(HOST_DATA, CONTROL_DIR)
+        except OSError as exc:
+            log("failed to open %s (%s)" % (CONTROL_DIR, exc))
+            return
+        try:
+            wd = self.libc.inotify_add_watch(self.fd, control_open.watch_path(dirfd).encode(), IN_CREATE)
+        finally:
+            os.close(dirfd)
         if wd < 0:
-            log("cannot watch %s: %s" % (CONTROL_DIR, os.strerror(ctypes.get_errno())))
+            log("inotify_add_watch %s failed (%s)" % (CONTROL_DIR, os.strerror(ctypes.get_errno())))
 
     def fileno(self):
-        """return the watched file descriptor"""
+        """return the inotify file descriptor"""
         return self.fd
 
     def drain(self):
@@ -154,19 +166,23 @@ class KeymapWatch:
             pass
 
     def new_lines(self):
-        """return the lines added to the control output"""
-        if not os.path.exists(CONTROL_OUT):
+        """return the lines of CONTROL_OUT past self.offset"""
+        try:
+            fd = control_open.open_reply(HOST_DATA, CONTROL_OUT)
+        except FileNotFoundError:
             return []
-        size = os.path.getsize(CONTROL_OUT)
-        if size < self.offset:
+        except OSError as exc:
+            control_open.refused_once(CONTROL_OUT, exc, log)
+            return []
+        if os.fstat(fd).st_size < self.offset:
             self.offset = 0
-        data = read_from(CONTROL_OUT, self.offset)
+        data = read_from(fd, self.offset)
         self.offset += len(data)
         return data.decode("utf-8", "replace").splitlines()
 
 
 def parse_keymap_ready(line):
-    """parse a keymap ready line into its digest and path, or None"""
+    """parse a keymap ready line into (digest, path), or None"""
     if not line.startswith("keymap ready "):
         return None
     fields = dict(t.split("=", 1) for t in line.split(" ") if "=" in t)
@@ -177,16 +193,16 @@ def parse_keymap_ready(line):
 
 
 def sandbox_to_host(path):
-    """map a sandbox data path to the host path"""
+    """return the host path of a sandbox /data/ path, or None"""
     if not path.startswith(SANDBOX_DATA):
         return None
     return HOST_DATA + path[len(SANDBOX_DATA):]
 
 
 def send_table(digest, table_bytes):
-    """send a keymap table to the control FIFO"""
+    """write a keymap table line to CONTROL_FIFO"""
     line = "keymap table %d %s\n" % (digest, base64.b64encode(table_bytes).decode("ascii"))
-    fd = os.open(CONTROL_FIFO, os.O_WRONLY)
+    fd = control_open.open_fifo(HOST_DATA, CONTROL_FIFO, os.O_WRONLY)
     try:
         os.write(fd, line.encode("utf-8"))
     finally:
@@ -194,28 +210,28 @@ def send_table(digest, table_bytes):
 
 
 def resolve_and_send(xkb, digest, sandbox_path):
-    """send the resolved table for a keymap file"""
+    """write the resolved table of a keymap file to CONTROL_FIFO"""
     host_path = sandbox_to_host(sandbox_path)
     if host_path is None:
-        log("keymap path %s is not under %s, skipping" % (sandbox_path, SANDBOX_DATA))
+        log("keymap path %s is not under %s" % (sandbox_path, SANDBOX_DATA))
         return
-    raw = read_from(host_path)
+    raw = read_from(control_open.open_payload(HOST_DATA, host_path))
     if fnv1a32(raw) != digest:
-        log("keymap %s digest mismatch, skipping" % host_path)
+        log("keymap %s does not match digest" % host_path)
         return
     entries = xkb.resolve(raw.decode("utf-8"))
     send_table(digest, encode_table(entries))
-    log("resolved %d entries for keymap digest %d, table sent" % (len(entries), digest))
+    log("wrote %d entries for keymap digest %d" % (len(entries), digest))
 
 
 def main():
-    """send a resolved keymap table for each new keymap"""
+    """write a resolved keymap table for each keymap ready line"""
     xkb = Xkb()
     watch = KeymapWatch()
     resolved_digest = [None]
 
     def handle(line):
-        """resolve and send the keymap named by a line"""
+        """resolve and write the keymap of a keymap ready line"""
         parsed = parse_keymap_ready(line)
         if not parsed or parsed[0] == resolved_digest[0]:
             return
@@ -223,7 +239,7 @@ def main():
             resolve_and_send(xkb, *parsed)
             resolved_digest[0] = parsed[0]
         except (OSError, ValueError) as e:
-            log("failed to resolve keymap digest %d: %s" % (parsed[0], e))
+            log("failed to resolve keymap digest %d (%s)" % (parsed[0], e))
 
     latest = None
     for line in watch.new_lines():
@@ -232,7 +248,7 @@ def main():
     if latest:
         handle(latest)
 
-    log("watching %s for host keymap changes" % CONTROL_OUT)
+    log("watching %s for keymap ready lines" % CONTROL_OUT)
     while True:
         r, _, _ = select.select([watch], [], [], 5.0)
         if r:

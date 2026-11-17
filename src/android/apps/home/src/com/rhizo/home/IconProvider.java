@@ -25,7 +25,7 @@ import java.io.OutputStream;
 import java.util.List;
 import java.util.regex.Pattern;
 
-// serve an app's launcher icon as a PNG
+// ContentProvider for app launcher icons as PNG
 public class IconProvider extends ContentProvider {
     private static final String TAG = "RhizoHomeIcons";
     private static final int DEFAULT_SIZE = 256;
@@ -41,15 +41,15 @@ public class IconProvider extends ContentProvider {
         return true;
     }
 
-    // open a pipe carrying the package's launcher icon as a PNG
+    // write the package launcher icon PNG to a pipe and return the read end
     @Override
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         int uid = Binder.getCallingUid();
         if (uid != ROOT_UID && uid != SHELL_UID && uid != SYSTEM_UID) {
-            throw new SecurityException("app icons are served to root, shell and system, not uid " + uid);
+            throw new SecurityException("calling uid is not ROOT_UID, SHELL_UID or SYSTEM_UID uid=" + uid);
         }
         if (!"r".equals(mode)) {
-            throw new FileNotFoundException("icons open read-only, not '" + mode + "'");
+            throw new FileNotFoundException("mode '" + mode + "' is not r");
         }
         String pkg = uri.getLastPathSegment();
         if (pkg == null || !PACKAGE.matcher(pkg).matches()) {
@@ -72,7 +72,7 @@ public class IconProvider extends ContentProvider {
         try {
             pipe = ParcelFileDescriptor.createPipe();
         } catch (IOException e) {
-            throw new FileNotFoundException("no pipe for " + pkg + "'s icon: " + e);
+            throw new FileNotFoundException("createPipe failed for " + pkg + " icon with " + e);
         }
         new Thread(new Runnable() {
             @Override
@@ -80,7 +80,7 @@ public class IconProvider extends ContentProvider {
                 try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])) {
                     out.write(png);
                 } catch (IOException e) {
-                    Log.w(TAG, "writing the icon of " + pkg + " failed", e);
+                    Log.w(TAG, "failed to write the icon of " + pkg + " to the pipe", e);
                 }
             }
         }, "rhizo-icon-" + pkg).start();
@@ -102,14 +102,13 @@ public class IconProvider extends ContentProvider {
         int res = ri != null ? ri.getIconResource() : ai.icon;
         Drawable icon = null;
         if (res != 0) {
-            // getDrawableForDensity loads an adaptive icon's layers at the display density
             try {
                 Configuration dense = new Configuration(getContext().getResources().getConfiguration());
                 dense.densityDpi = DisplayMetrics.DENSITY_XXXHIGH;
                 Context app = getContext().createPackageContext(pkg, 0).createConfigurationContext(dense);
                 icon = app.getResources().getDrawable(res, null);
             } catch (PackageManager.NameNotFoundException | RuntimeException e) {
-                Log.w(TAG, pkg + "'s icon resource 0x" + Integer.toHexString(res) + " did not load", e);
+                Log.w(TAG, pkg + " icon resource 0x" + Integer.toHexString(res) + " failed to load", e);
             }
         }
         if (icon == null) {
@@ -120,7 +119,7 @@ public class IconProvider extends ContentProvider {
         icon.draw(new Canvas(bitmap));
         ByteArrayOutputStream png = new ByteArrayOutputStream();
         if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, png)) {
-            throw new FileNotFoundException("PNG encoding of " + pkg + "'s icon failed");
+            throw new FileNotFoundException("failed to encode the icon of " + pkg + " as PNG");
         }
         bitmap.recycle();
         return png.toByteArray();

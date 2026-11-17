@@ -41,7 +41,7 @@ def render(text, whole=None, inline=None, comment_prefix=";"):
         out.append(INLINE_MARKER.sub(lambda g: _inline(inline, g.group(1)), line))
     rendered = "".join(out)
     if "@RHIZO_SUBST" in rendered:
-        raise ValueError("a marker was left unsubstituted")
+        raise ValueError("@RHIZO_SUBST in the rendered text")
     return rendered
 
 

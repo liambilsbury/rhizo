@@ -1,5 +1,5 @@
 #!/bin/bash
-# define what a teardown may remove
+# teardown paths and helpers
 
 RHIZO_TEARDOWN_LIB_STATE_ROOT=/var/lib/rhizo
 RHIZO_TEARDOWN_LIB_PREPARED_ROOT=/var/lib/rhizo/prepared
@@ -58,7 +58,7 @@ RHIZO_TEARDOWN_LIB_HOST_LABELS_PENDING=/var/lib/rhizo/.host-labels-pending
 # shellcheck disable=SC2034
 RHIZO_TEARDOWN_LIB_HOST_MODE_KEPT=/var/lib/rhizo/host-mode-kept.env
 
-# set DEFERRED to the allowed cleanup paths
+# set DEFERRED to the paths rhizo-final-cleanup.service removes
 teardown_deferred_paths() {
   local purge="${1:-0}"
   DEFERRED=(
@@ -88,7 +88,7 @@ teardown_deferred_paths() {
   fi
 }
 
-# print the mounts reaching a dir, deepest first
+# print the mounts of a dir's subtree, deepest first
 teardown_mounts_reaching() {
   local dir
   dir=$(realpath -m -- "$1")
@@ -116,12 +116,12 @@ teardown_mounts_reaching() {
     }' "${2:-/proc/self/mountinfo}" | sort -t $'\t' -k1,1nr | cut -f2-
 }
 
-# unmount a mount
+# call umount2 on $1 with flags $2
 teardown_detach_mount() {
   python3 -c 'import ctypes, sys; sys.exit(0 if ctypes.CDLL(None, use_errno=True).umount2(sys.argv[1].encode(), int(sys.argv[2])) == 0 else 1)' "$1" "$2"
 }
 
-# unmount all of the mounts reaching a dir
+# unmount the mounts of a dir's subtree
 teardown_unmount_reaching() {
   local m
   while IFS= read -r m; do
@@ -226,12 +226,12 @@ teardown_strip_fstab_line() {
   fi
 }
 
-# remove the recorded swapfile and its fstab line
+# remove the recorded swapfile and the fstab swap line
 teardown_swap() {
   local record="$1" swapfile="$2" line="$3" fstab="$4" proc_swaps="$5" owned strip='/^swapfile-fstab$/d; /^swapfile-fstab-eol$/d; /^swapfile:/d'
   owned=$(teardown_swap_owned "$record" "$swapfile")
   if [[ "$owned" == *fstab* ]] && grep -qxF "$line" "$fstab" 2>/dev/null; then
-    teardown_strip_fstab_line "$record" "$line" "$fstab" || { echo "failed strip '$line' from $fstab"; return 1; }
+    teardown_strip_fstab_line "$record" "$line" "$fstab" || { echo "failed to strip '$line' from $fstab"; return 1; }
     echo removed-fstab
   fi
   if [[ "$owned" == *file* ]]; then
@@ -240,7 +240,7 @@ teardown_swap() {
       echo "deferred-file swapoff $swapfile failed"
       strip='/^swapfile-fstab$/d; /^swapfile-fstab-eol$/d'
     elif ! rm -f "$swapfile"; then
-      echo "deferred-file could not remove $swapfile"
+      echo "deferred-file failed to remove $swapfile"
       strip='/^swapfile-fstab$/d; /^swapfile-fstab-eol$/d'
     else
       echo removed-file
@@ -249,7 +249,7 @@ teardown_swap() {
     echo kept-file
   fi
   if [[ -f "$record" ]]; then
-    sed -i "$strip" "$record" || { echo "failed strip the swap tokens from $record"; return 1; }
+    sed -i "$strip" "$record" || { echo "failed to remove the swap tokens from $record"; return 1; }
     [[ -s "$record" ]] || rm -f "$record"
   fi
   return 0
@@ -264,7 +264,7 @@ teardown_remove_recorded_account() {
     if [[ -z "$uid" ]]; then
       sed -i "\#^user:$name\$#d" "$record"
     elif [[ -n "$want_uid" && "$uid" != "$want_uid" ]]; then
-      echo "kept-user $name has uid $uid now, not the $want_uid this install created it with"
+      echo "kept-user $name has uid $uid, expected $want_uid"
     elif userdel "$name"; then
       sed -i "\#^user:$name\$#d" "$record"
       echo "removed-user $name"

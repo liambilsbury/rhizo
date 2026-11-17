@@ -10,7 +10,7 @@ MODE_UNREADABLE_VERDICT = "refused:selinux-mode-unreadable"
 
 
 class ModeUnreadable(Exception):
-    """Unreadable or garbled SELinux mode record"""
+    """exception for an unreadable or invalid SELinux mode file"""
 
 
 def acquire_host_lock():
@@ -34,14 +34,14 @@ def recorded_mode(mode_file=MODE_FILE):
         with open(mode_file) as f:
             mode = f.read().rstrip("\n")
     except OSError as e:
-        raise ModeUnreadable(f"{mode_file}: {e}") from e
+        raise ModeUnreadable(f"failed to read the SELinux mode file {mode_file} ({e})") from e
     if mode not in ("host", "namespace"):
-        raise ModeUnreadable(f"{mode_file} reads {mode!r}")
+        raise ModeUnreadable(f"the SELinux mode file {mode_file} is {mode!r}, expected host or namespace")
     return mode
 
 
 def android_enforce_state(mode_file=MODE_FILE, state_file=ANDROID_ENFORCE_FILE, host_node=ENFORCE_NODE):
-    """return Android's enforce state, empty when unknown"""
+    """return the Android enforce state, or an empty string"""
     try:
         return open(state_file if recorded_mode(mode_file) == "namespace" else host_node).read().strip()
     except (OSError, ModeUnreadable):
@@ -49,7 +49,7 @@ def android_enforce_state(mode_file=MODE_FILE, state_file=ANDROID_ENFORCE_FILE, 
 
 
 def selinuxns_verdict(mode_file=MODE_FILE, verdict_file=VERDICT_FILE):
-    """return this start's SELinux namespace verdict"""
+    """return the SELinux namespace verdict in verdict_file"""
     try:
         mode = recorded_mode(mode_file)
     except ModeUnreadable:
@@ -63,12 +63,12 @@ def selinuxns_verdict(mode_file=MODE_FILE, verdict_file=VERDICT_FILE):
 
 
 def is_final_verdict(verdict):
-    """return whether verdict is final"""
+    """return whether verdict is enforced, permissive, stopped or refused:*"""
     return verdict in ("enforced", "permissive", "stopped") or verdict.startswith("refused:")
 
 
 def wait_for_enforce(deadline_s=60):
-    """wait for Android's enforce state to read 1 or a final verdict"""
+    """wait for android_enforce_state() == "1" or a final verdict"""
     deadline = time.time() + deadline_s
     while time.time() < deadline:
         if android_enforce_state() == "1":
@@ -85,17 +85,17 @@ def release_when_ready(fd, supervisor_alive, log=lambda _m: None, deadline_s=60)
     outcome = wait_for_enforce(deadline_s)
     if outcome and outcome != "enforced":
         os.close(fd)
-        log(f"host lock released (Android's start {outcome}, no supervisor wait)")
+        log(f"host lock released verdict={outcome}")
         return
     ok_enforce = outcome == "enforced"
     if not ok_enforce:
-        log(f"host lock releaser: enforce=1 not observed within {deadline_s}s -- releasing anyway")
+        log(f"no enforce=1 after {deadline_s}s")
     deadline = time.time() + deadline_s
     ok_sup = supervisor_alive()
     while not ok_sup and time.time() < deadline:
         time.sleep(0.25)
         ok_sup = supervisor_alive()
     if not ok_sup:
-        log(f"host lock releaser: supervisor never recorded itself within {deadline_s}s -- releasing anyway")
+        log(f"supervisor_alive() returned False after {deadline_s}s")
     os.close(fd)
-    log(f"host lock released (enforce_seen={ok_enforce} supervisor_seen={ok_sup})")
+    log(f"host lock released enforce_seen={ok_enforce} supervisor_seen={ok_sup}")

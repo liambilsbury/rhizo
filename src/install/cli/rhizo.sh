@@ -1,15 +1,15 @@
 #!/bin/bash
-# run rhizo's install, status, app and device commands
+# rhizo install, status, app and device commands
 set -uo pipefail
 
 PROG=rhizo
 log() { echo "[$PROG] $*" >&2; }
-die() { echo "[$PROG] FAIL: $*" >&2; exit 1; }
+die() { echo "[$PROG] $*" >&2; exit 1; }
 app_fail() { echo "RHIZO_FAIL $*"; exit 1; }
 # print the usage text
 usage() {
   cat <<'EOF'
-Usage: rhizo [-i <id>] <command>
+rhizo [-i <id>] <command>
   version
   install [--profile desktop|server]
   profile [show|desktop|server]
@@ -123,7 +123,7 @@ DESKTOP_SESSION_ENV_WAIT_S=${RHIZO_DESKTOP_SESSION_ENV_WAIT_S:-15}
 SERVER_IDLE_UNIT=rhizo-server-idle.service
 SERVER_API_UNIT=rhizo-api.socket
 
-# succeed for root or an offline test
+# return whether EUID is 0 or RHIZO_CLI_TEST_NO_ROOT=1 under test dirs
 cli_root_ok() {
   [[ $EUID -eq 0 ]] && return 0
   [[ "${RHIZO_CLI_TEST_NO_ROOT:-0}" == 1 ]] || return 1
@@ -137,7 +137,7 @@ load_host_libs() {
     dir="$INSTALL_DIR"
     [[ -r "$dir/$lib" ]] || dir=$(dirname "$SELF")/..
     # shellcheck source=/dev/null
-    . "$dir/$lib" || die "cannot read $lib in $INSTALL_DIR or beside $SELF"
+    . "$dir/$lib" || die "failed to source $dir/$lib"
   done
 }
 
@@ -185,34 +185,34 @@ instance_probe_sock() {
 selinux_mode() {
   local m=""
   if [[ -e "$SELINUX_MODE_FILE" ]]; then
-    m=$(cat "$SELINUX_MODE_FILE") || { log "cannot read $SELINUX_MODE_FILE"; return 1; }
+    m=$(cat "$SELINUX_MODE_FILE") || { log "failed to read $SELINUX_MODE_FILE"; return 1; }
   fi
   [[ -n "$m" ]] || m=$(configured_selinux_mode) || return 1
   case "$m" in
     host|namespace) printf '%s\n' "$m" ;;
-    *) log "the SELinux mode reads '$m', not host or namespace"; return 1 ;;
+    *) log "SELinux mode '$m', expected host or namespace"; return 1 ;;
   esac
 }
-# check the SELinux mode against a mode
+# return whether selinux_mode prints a mode
 selinux_mode_is() {
   local m
-  m=$(selinux_mode) || die "cannot read the SELinux mode (see above)"
+  m=$(selinux_mode) || die "selinux_mode failed"
   [[ "$m" == "$1" ]]
 }
-# print the boot's SELinux mode for labeling
+# print the SELinux mode in SELINUX_MODE_FILE
 label_write_mode() {
   local m
   m=$(cat "$SELINUX_MODE_FILE") && [[ "$m" == host || "$m" == namespace ]] \
-    || { log "cannot read the SELinux mode from $SELINUX_MODE_FILE"; return 1; }
+    || { log "failed to read the SELinux mode from $SELINUX_MODE_FILE"; return 1; }
   printf '%s\n' "$m"
 }
-# check for a host-loaded SELinux policy
+# return whether /proc/self/attr/current contains an SELinux context
 host_policy_loaded() {
   local attr="${RHIZO_ATTR_CURRENT:-/proc/self/attr/current}" ctx
   [[ -e "$attr" ]] || return 1
   if ! ctx=$(LC_ALL=C tr -d '\0' < "$attr" 2>&1); then
     [[ "$ctx" == *"Invalid argument"* ]] && return 1
-    log "cannot read $attr: $ctx"
+    log "failed to read $attr ($ctx)"
     return 2
   fi
   [[ "$ctx" == *:* ]]
@@ -226,8 +226,8 @@ label_android_file() {
   case $? in
     0)
       got=$(/usr/bin/python3 "${RHIZO_LAUNCHER:-$LIB_DIR/launcher3.py}" in-android-policy label "$1" "$2") \
-        || { log "in-android-policy could not label $1 $2: ${got:-no output}"; return 1; }
-      [[ "${got##*$'\n'}" == "$2" ]] || { log "$1 reads ${got##*$'\n'} after labeling it $2"; return 1; }
+        || { log "in-android-policy label $1 $2 failed (${got:-no output})"; return 1; }
+      [[ "${got##*$'\n'}" == "$2" ]] || { log "$1 has label ${got##*$'\n'}, expected $2"; return 1; }
       return 0 ;;
     1) ;;
     *) return 1 ;;
@@ -239,24 +239,24 @@ try:
     os.setxattr(path, "security.selinux", want.encode() + b"\0", follow_symlinks=False)
     got = os.getxattr(path, "security.selinux", follow_symlinks=False).rstrip(b"\0").decode(errors="replace")
 except OSError as e:
-    sys.exit(f"cannot write security.selinux on {path}: {e}")
+    sys.exit(f"failed to write security.selinux on {path} ({e})")
 if got != want:
-    sys.exit(f"{path} reads {got} after labeling it {want}")
+    sys.exit(f"{path} has label {got}, expected {want}")
 ' "$1" "$2"
 }
 # print the configured SELinux mode
 configured_selinux_mode() {
   local helper="${RHIZO_SELINUX_MODE_HELPER:-$LIB_DIR/rhizo-selinux-mode}" m
   if ! m=$("$helper" --env-file "$ETC_RHIZO/androidd.env" --configured); then
-    log "cannot read the configured SELinux mode from $helper"
+    log "$helper --configured failed"
     return 1
   fi
   case "$m" in
     host|namespace) printf '%s\n' "$m" ;;
-    *) log "$helper --configured printed '$m', not host or namespace"; return 1 ;;
+    *) log "$helper --configured printed '$m', expected host or namespace"; return 1 ;;
   esac
 }
-# check for host-mode install marks
+# return whether a host-mode install mark exists
 host_mode_install_found() {
   local kind own m
   grep -qxE 'pacman-downloaduser|login-defs-tty|host-mode-links' "$INSTALL_RECORD" 2>/dev/null && return 0
@@ -264,7 +264,7 @@ host_mode_install_found() {
     if m=$(cat "$SELINUX_MODE_FILE"); then
       [[ "$m" == host ]] && return 0
     else
-      log "cannot read $SELINUX_MODE_FILE; looking for host mode's other marks"
+      log "failed to read $SELINUX_MODE_FILE"
     fi
   fi
   kind=$(bootloader_kind 2>/dev/null) || return 1
@@ -277,16 +277,15 @@ leave_host_mode() {
   [[ -r "$lib" ]] || die "no $lib"
   if host_mode_install_found; then
     was_host=1
-    log "switching this host from host mode to SELinux namespace mode, in effect after a reboot;" \
-        "set RHIZO_SELINUX_MODE=host in $ETC_RHIZO/androidd.env and run 'rhizo install' to stay in host mode"
+    log "SELinux mode at the next boot is namespace"
   fi
   # shellcheck source=pkg-lib.sh
   if ! ( export RHIZO_INSTALL_RECORD="$INSTALL_RECORD"; . "$lib" && pkg_leave_host_mode ); then
-    log "kept the host-mode edit named above and its token in $INSTALL_RECORD"
+    log "pkg_leave_host_mode failed"
   fi
-  systemctl daemon-reload || die "systemctl daemon-reload failed after the host-mode drop-ins were removed"
+  systemctl daemon-reload || die "systemctl daemon-reload failed"
   (( was_host )) && record_host_labels_pending
-  rm -f "$HOST_MODE_KEPT" || log "could not remove $HOST_MODE_KEPT"
+  rm -f "$HOST_MODE_KEPT" || log "failed to remove $HOST_MODE_KEPT"
   return 0
 }
 # print the host's boot SELinux policy config
@@ -301,8 +300,7 @@ host_policy_config() {
     *) return 1 ;;
   esac
   if ! compgen -G "${SELINUX_CONFIG%/*}/$type/policy/policy.*" > /dev/null; then
-    log "no ${SELINUX_CONFIG%/*}/$type/policy/policy.* for SELINUXTYPE=$type in $SELINUX_CONFIG:" \
-        "the next boot removes host mode's labels from host files"
+    log "no ${SELINUX_CONFIG%/*}/$type/policy/policy.* for SELINUXTYPE=$type in $SELINUX_CONFIG"
     return 1
   fi
   echo "SELINUX=$mode SELINUXTYPE=$type in $SELINUX_CONFIG"
@@ -319,35 +317,30 @@ host_policy_meets_labels() {
 refuse_start_mid_switch() {
   [[ -e "$HOST_MODE_KEPT" ]] || return 0
   host_policy_meets_labels && return 0
-  app_fail "host mode is kept and no host file has host mode's label: run 'sudo rhizo install' to switch" \
-           "to namespace mode"
+  app_fail "$HOST_MODE_KEPT exists and no host file has the host mode label"
 }
-# drop the kept host mode record
+# remove HOST_MODE_KEPT when no host file has the host mode label
 release_kept_host_mode() {
   [[ -e "$HOST_MODE_KEPT" ]] || return 1
   host_policy_meets_labels && return 1
-  rm -f "$HOST_MODE_KEPT" || die "could not remove $HOST_MODE_KEPT"
-  log "no host file has host mode's label: removed $HOST_MODE_KEPT"
+  rm -f "$HOST_MODE_KEPT" || die "failed to remove $HOST_MODE_KEPT"
+  log "removed $HOST_MODE_KEPT"
 }
-# keep host mode under a host SELinux policy
+# write HOST_MODE_KEPT for a host SELinux policy and host mode labels
 keep_host_mode_for_host_policy() {
-  local files cmd steps sentence teardown="$INSTALL_DIR/teardown/teardown.sh"
+  local files sentence
   host_mode_install_found || return 1
   host_policy_meets_labels || return 1
   case "$(tail -1 <<<"$LABEL_SCAN")" in
     "RHIZO_TEARDOWN_HOST_LABELS labeled=1")
-      files=$(sed -n 's/^files: //p' <<<"$LABEL_SCAN")
-      cmd="'$(sed -n 's/^command: //p' <<<"$LABEL_SCAN")'" ;;
+      files=$(sed -n 's/^files: //p' <<<"$LABEL_SCAN") ;;
     *)
-      files="the host files host mode labeled (the label scan printed '${LABEL_SCAN:-nothing}')"
-      cmd="restorecon on the files 'sudo bash $teardown --list-host-labels' lists" ;;
+      files="host files (teardown.sh --list-host-labels printed '${LABEL_SCAN:-nothing}')" ;;
   esac
-  steps="1. reboot; 2. run 'sudo rhizo stop' and keep Android stopped; 3. run $cmd; 4. run 'sudo rhizo install'"
-  sentence="this host loads its own SELinux policy ($LABEL_CONFIG) and host mode's label is on $files."
-  sentence+=" To switch to namespace mode: $steps"
+  sentence="SELinux policy $LABEL_CONFIG is loaded and the host mode label is on $files"
   if ! { printf '# %s\nRHIZO_SELINUX_MODE=host\n' "$sentence" > "$HOST_MODE_KEPT.new" \
          && mv "$HOST_MODE_KEPT.new" "$HOST_MODE_KEPT"; }; then
-    log "could not write $HOST_MODE_KEPT: write 'RHIZO_SELINUX_MODE=host' to it as root"
+    log "failed to write $HOST_MODE_KEPT"
     export RHIZO_SELINUX_MODE=host
   fi
   log "$sentence"
@@ -359,26 +352,25 @@ enter_host_mode() {
   [[ -r "$lib" ]] || die "no $lib"
   # shellcheck source=pkg-lib.sh
   ( export RHIZO_INSTALL_RECORD="$INSTALL_RECORD"; . "$lib" && pkg_enter_host_mode ) \
-    || die "could not apply host mode's pacman.conf, login.defs or file links (see above)"
-  systemctl daemon-reload || die "systemctl daemon-reload failed after the host-mode drop-ins were linked"
+    || die "pkg_enter_host_mode failed"
+  systemctl daemon-reload || die "systemctl daemon-reload failed"
   drop_host_labels_pending
 }
-# drop a pending removal of host mode's labels
+# remove HOST_LABELS_PENDING
 drop_host_labels_pending() {
   [[ -e "$HOST_LABELS_PENDING" ]] || return 0
   rm -f "$HOST_LABELS_PENDING" \
-    || die "could not remove $HOST_LABELS_PENDING"
-  log "host mode labels stay on host files: removed $HOST_LABELS_PENDING"
+    || die "failed to remove $HOST_LABELS_PENDING"
+  log "removed $HOST_LABELS_PENDING"
 }
-# record the pending removal of host mode's labels
+# write pending to HOST_LABELS_PENDING
 record_host_labels_pending() {
   [[ -e "$HOST_LABELS_PENDING" ]] && return 0
   if ! echo pending > "$HOST_LABELS_PENDING"; then
-    log "could not write $HOST_LABELS_PENDING: write 'pending' to it as root to remove host mode's labels at the" \
-        "next boot"
+    log "failed to write $HOST_LABELS_PENDING"
     return 0
   fi
-  log "the next boot removes host mode's SELinux labels from host files (rhizo-host-labels.service)"
+  log "wrote $HOST_LABELS_PENDING for rhizo-host-labels.service"
 }
 # print Android's enforce state for an instance
 android_enforce_state() {
@@ -399,7 +391,7 @@ selinuxns_verdict() {
   cat "$(instance_records_dir "${1:-$RHIZO_SANDBOX_ID}")/selinuxns-verdict" 2>/dev/null
   return 0
 }
-# print the verdict this start wrote
+# print selinuxns-verdict when start-id matches the unit InvocationID
 start_verdict() {
   local m want dir verdict
   m=$(selinux_mode) || return 2
@@ -427,10 +419,10 @@ instance_boot_log() {
 # refuse an id outside 0-99
 validate_sandbox_id() {
   [[ "$1" =~ ^[0-9]+$ ]] && (( 10#$1 <= 99 )) \
-    || die "RHIZO_SANDBOX_ID=$1 refused: NET_SUBNET below needs a single id 0-99, two free octet digits and no sign"
+    || die "RHIZO_SANDBOX_ID=$1 is not an integer 0-99"
 }
 
-# set all of the per-instance paths for an id
+# set the per-instance paths for an id
 set_instance_vars() {
   local id run_mount="$RUN_MOUNT"
   validate_sandbox_id "$1"
@@ -507,7 +499,7 @@ resolve_instance_selector() {
   [[ -n "$id" ]] && set_instance_vars "$id"
 }
 
-# check the args for a read-only flag
+# return whether the args contain --verify, --show, -h or --help
 is_readonly_arg() {
   local a
   for a in "$@"; do
@@ -518,21 +510,20 @@ is_readonly_arg() {
 
 # append a token to the install record
 record_install_token() {
-  mkdir -p "$(dirname "$INSTALL_RECORD")" || die "cannot create $(dirname "$INSTALL_RECORD")"
+  mkdir -p "$(dirname "$INSTALL_RECORD")" || die "failed to create $(dirname "$INSTALL_RECORD")"
   grep -qx "$1" "$INSTALL_RECORD" 2>/dev/null && return 0
-  echo "$1" >> "$INSTALL_RECORD" || die "cannot record $1 in $INSTALL_RECORD"
+  echo "$1" >> "$INSTALL_RECORD" || die "failed to write $1 to $INSTALL_RECORD"
 }
 # find or create the uid 1000 account
 resolve_uid1000() {
   local name had_group=1
   name=$(getent passwd 1000 2>/dev/null | cut -d: -f1)
   if [[ -z "$name" ]]; then
-    log "uid 1000 is free: creating the system account rhizo-appwatch"
     getent group rhizo-appwatch >/dev/null 2>&1 || had_group=0
     if [[ "$(host_flavor)" == cachyos ]]; then
       host_sys_account_add rhizo-appwatch 1000 || die "useradd of rhizo-appwatch at uid 1000 failed"
       [[ "$(getent passwd 1000 2>/dev/null | cut -d: -f1)" == rhizo-appwatch ]] \
-        || die "rhizo-appwatch exists at a uid other than 1000: remove or rename it, then run 'rhizo install'"
+        || die "rhizo-appwatch has a uid other than 1000"
     else
       adduser --uid 1000 --system --no-create-home --group rhizo-appwatch \
         || die "adduser --uid 1000 --system --no-create-home --group rhizo-appwatch failed"
@@ -541,17 +532,17 @@ resolve_uid1000() {
     record_install_token user:rhizo-appwatch
     (( had_group )) || record_install_token group:rhizo-appwatch
   elif [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "$name" ]]; then
-    die "uid 1000 is '$name', not '$SUDO_USER': resolve the uid collision, then run 'rhizo install'"
+    die "uid 1000 is '$name', not '$SUDO_USER'"
   else
-    log "using uid 1000 '$name' for desktop integration"
+    log "desktop user is uid 1000 '$name'"
   fi
-  mkdir -p "$ETC_RHIZO" || die "cannot create $ETC_RHIZO"
+  mkdir -p "$ETC_RHIZO" || die "failed to create $ETC_RHIZO"
   if [[ ! -f "$ETC_RHIZO/desktop-user" ]]; then
-    echo "$name" > "$ETC_RHIZO/desktop-user" || die "cannot write $ETC_RHIZO/desktop-user"
-    log "recorded uid 1000's account as '$name' in $ETC_RHIZO/desktop-user"
+    echo "$name" > "$ETC_RHIZO/desktop-user" || die "failed to write $ETC_RHIZO/desktop-user"
+    log "wrote '$name' to $ETC_RHIZO/desktop-user"
   elif [[ "$(cat "$ETC_RHIZO/desktop-user")" != "$name" ]]; then
-    log "uid 1000 is '$name', not '$(cat "$ETC_RHIZO/desktop-user")': rewriting $ETC_RHIZO/desktop-user"
-    echo "$name" > "$ETC_RHIZO/desktop-user" || die "cannot write $ETC_RHIZO/desktop-user"
+    log "writing '$name' over '$(cat "$ETC_RHIZO/desktop-user")' in $ETC_RHIZO/desktop-user"
+    echo "$name" > "$ETC_RHIZO/desktop-user" || die "failed to write $ETC_RHIZO/desktop-user"
   fi
 }
 
@@ -563,8 +554,8 @@ ensure_broker_group() {
   getent group rhizo >/dev/null || had_group=0
   groupadd -f rhizo || die "groupadd -f rhizo failed"
   if (( had_group == 0 )); then
-    mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
-    echo "group:rhizo" >> "$INSTALL_RECORD" || die "cannot record group:rhizo in $INSTALL_RECORD"
+    mkdir -p "$STATE_DIR" || die "failed to create $STATE_DIR"
+    echo "group:rhizo" >> "$INSTALL_RECORD" || die "failed to write group:rhizo to $INSTALL_RECORD"
   fi
   usermod -aG rhizo "$owner" || die "usermod -aG rhizo $owner failed"
   log "added '$owner' to group rhizo"
@@ -578,7 +569,7 @@ seed_apk_handler() {
     || die "appsync.py --mimeapps-only failed"
 }
 
-# print a capability's value through capabilities
+# print a capability scope from sandbox.capabilities
 read_capability() {
   local out rc
   out=$(PYTHONPATH="$LIB_DIR" /usr/bin/python3 -c '
@@ -612,11 +603,11 @@ print(err or "")
 # set a key in a policy.conf section
 write_policy_key() {
   local section="$1" key="$2" value="$3" tmp err
-  err=$(policy_parse_error "$POLICY_CONF") || die "could not run the policy parser on $POLICY_CONF"
-  [[ -z "$err" ]] || die "$err: fix $POLICY_CONF, then set $section.$key again"
-  mkdir -p "$ETC_RHIZO" || die "cannot create $ETC_RHIZO"
+  err=$(policy_parse_error "$POLICY_CONF") || die "policy_parse_error $POLICY_CONF failed"
+  [[ -z "$err" ]] || die "failed to parse $POLICY_CONF ($err)"
+  mkdir -p "$ETC_RHIZO" || die "failed to create $ETC_RHIZO"
   [[ -f "$POLICY_CONF" ]] || : > "$POLICY_CONF"
-  tmp=$(mktemp "$POLICY_CONF.XXXXXX") || die "cannot create a temp file beside $POLICY_CONF"
+  tmp=$(mktemp "$POLICY_CONF.XXXXXX") || die "mktemp failed"
   awk -v section="[$section]" -v key="$key" -v value="$value" '
     /^\[/ {
       if (in_section && !wrote) { print key " = " value; wrote = 1 }
@@ -635,20 +626,20 @@ write_policy_key() {
       if (in_section && !wrote) print key " = " value
       if (!seen) printf "[%s]\n%s = %s\n", substr(section, 2, length(section) - 2), key, value
     }
-  ' "$POLICY_CONF" > "$tmp" || { rm -f "$tmp"; die "could not rewrite $POLICY_CONF"; }
-  err=$(policy_parse_error "$tmp") || { rm -f "$tmp"; die "could not run the policy parser on the rewrite of $POLICY_CONF"; }
-  [[ -z "$err" ]] || { rm -f "$tmp"; die "setting $section.$key makes $POLICY_CONF unparseable: $err"; }
-  mv "$tmp" "$POLICY_CONF" || die "could not replace $POLICY_CONF"
+  ' "$POLICY_CONF" > "$tmp" || { rm -f "$tmp"; die "failed to write $tmp"; }
+  err=$(policy_parse_error "$tmp") || { rm -f "$tmp"; die "policy_parse_error $tmp failed"; }
+  [[ -z "$err" ]] || { rm -f "$tmp"; die "failed to parse $tmp with $section.$key = $value ($err)"; }
+  mv "$tmp" "$POLICY_CONF" || die "failed to move $tmp to $POLICY_CONF"
   chmod 0644 "$POLICY_CONF"
 }
 
 # set the [rhizo] profile key
 write_profile_key() {
   local value="$1" err
-  err=$(policy_parse_error "$POLICY_CONF") || die "could not run the policy parser on $POLICY_CONF"
+  err=$(policy_parse_error "$POLICY_CONF") || die "policy_parse_error $POLICY_CONF failed"
   if [[ -n "$err" ]]; then
-    [[ "$value" == desktop ]] || die "profile $value refused: $err: fix it, then set the profile again"
-    log "$err: applying desktop to the units only"
+    [[ "$value" == desktop ]] || die "failed to parse $POLICY_CONF ($err)"
+    log "failed to parse $POLICY_CONF ($err)"
     return 0
   fi
   write_policy_key rhizo profile "$value"
@@ -666,7 +657,7 @@ clear_leftover_mask_targets() {
 # enable or disable the control API socket
 set_api_socket() {
   if ! systemctl cat "$SERVER_API_UNIT" >/dev/null 2>&1; then
-    log "warning: $SERVER_API_UNIT is not installed"
+    log "$SERVER_API_UNIT is not installed"
     return 0
   fi
   if [[ "$1" == enable ]]; then
@@ -697,7 +688,7 @@ start_desktop_units() {
   done
   (( ${#watch[@]} == 0 )) || systemctl start "${watch[@]}" || return 1
   until [[ -e "$DESKTOP_SESSION_ENV" ]]; do
-    (( waited < DESKTOP_SESSION_ENV_WAIT_S * 5 )) || { echo "no desktop session within ${DESKTOP_SESSION_ENV_WAIT_S}s ($DESKTOP_SESSION_ENV absent): $DESKTOP_ATTACH_UNIT starts the daemons when it arrives"; return 0; }
+    (( waited < DESKTOP_SESSION_ENV_WAIT_S * 5 )) || { echo "no $DESKTOP_SESSION_ENV within ${DESKTOP_SESSION_ENV_WAIT_S}s"; return 0; }
     sleep 0.2; waited=$((waited + 1))
   done
   (( ${#daemons[@]} == 0 )) || systemctl start --no-block "${daemons[@]}"
@@ -713,7 +704,7 @@ apply_profile() {
     systemctl --global mask "${SERVER_MASKED_USER_UNITS[@]}" \
       || die "systemctl --global mask failed for the desktop-only user units"
     desktop_user_systemctl stop "${SERVER_MASKED_USER_UNITS[@]}" \
-      || die "could not stop ${SERVER_MASKED_USER_UNITS[*]} in the desktop user's running manager"
+      || die "failed to stop ${SERVER_MASKED_USER_UNITS[*]} with systemctl --user"
     systemctl unmask "$SERVER_IDLE_UNIT" \
       || die "systemctl unmask $SERVER_IDLE_UNIT failed"
     systemctl enable "$SERVER_IDLE_UNIT" \
@@ -734,7 +725,7 @@ apply_profile() {
     systemctl start "$DESKTOP_ATTACH_UNIT" \
       || die "systemctl start $DESKTOP_ATTACH_UNIT failed"
     { desktop_user_systemctl daemon-reload && desktop_user_systemctl start "${DESKTOP_USER_PATH_UNITS[@]}"; } \
-      || die "could not start ${DESKTOP_USER_PATH_UNITS[*]} in the desktop user's running manager"
+      || die "failed to start ${DESKTOP_USER_PATH_UNITS[*]} with systemctl --user"
     start_desktop_units \
       || die "systemctl start failed for the desktop-only units"
   fi
@@ -759,7 +750,7 @@ cmd_profile() {
   esac
 }
 
-# check pid 1 for a Rhizo policy context
+# return whether pid 1 has context u:r:kernel:s0 or u:r:rhizo_host:s0
 rhizo_policy_loaded() {
   [[ "$(tr -d '\0' 2>/dev/null < "$PROC_ROOT/1/attr/current")" =~ ^u:r:(kernel|rhizo_host):s0$ ]]
 }
@@ -770,7 +761,7 @@ loaded_policy_dri() {
   sed -n 's/^dri=\(on\|off\)$/\1/p' "$POLICY_MODE_FILE" 2>/dev/null | tail -1
 }
 
-# print the driver set a start stages
+# print gpu_driver_amd or gpu_driver
 gpu_driver_on() {
   if [[ -d "$LIB_DIR/gpu_driver_amd/egl" && -d "$LIB_DIR/gpu_driver_amd/lib" ]] \
      && [[ "$(bash "$GPU_RESOLVER" --env-file "$ETC_RHIZO/androidd.env" 2>/dev/null)" == amd ]]; then
@@ -790,13 +781,13 @@ cmd_gpu() {
   local sub="${1:-show}" dri mode loaded line
   case "$sub" in
     show)
-      dri=$(read_dri) || die "could not read devices.dri through $LIB_DIR/sandbox/capabilities.py"
-      [[ "$dri" == Error:* ]] && die "cannot read devices.dri: ${dri#Error: }"
+      dri=$(read_dri) || die "read_dri failed"
+      [[ "$dri" == Error:* ]] && die "failed to read devices.dri (${dri#Error: })"
       if [[ "$dri" == False ]]; then mode=off; else mode=on; fi
       line=$(gpu_line "$mode")
       loaded=$(loaded_policy_dri)
       if [[ -n "$loaded" && "$loaded" != "$mode" ]]; then
-        log "devices.dri = $mode applies after a host reboot (this boot's policy is for dri = $loaded)"
+        log "devices.dri = $mode in $POLICY_CONF, dri = $loaded in the loaded policy"
         line+=" loaded=$loaded"
       fi
       echo "$line"
@@ -805,23 +796,22 @@ cmd_gpu() {
       cli_root_ok || die "gpu $sub must run as root"
       write_policy_key devices dri "$sub"
       if ! rhizo_policy_loaded; then
-        log "devices.dri = $sub: rebuilding the prepared tree"
-        ( prepare_now ) >&2 || log "prepare failed: each start copies until 'sudo rhizo prepare' succeeds"
+        ( prepare_now ) >&2 || log "prepare failed"
         gpu_line "$sub"
         return 0
       fi
       loaded=$(loaded_policy_dri)
       if [[ "$loaded" == "$sub" ]]; then
-        log "devices.dri = $sub: the next start uses it"
+        log "devices.dri = $sub at the next start"
         gpu_line "$sub"
         return 0
       fi
       ( mark_setup_pending "rebuild the prepared tree for devices.dri = $sub" "gpu $sub" ) \
-        || log "the next boot will not rebuild the prepared tree: each start copies until 'sudo rhizo prepare' succeeds"
+        || log "mark_setup_pending failed"
       if [[ -n "$loaded" ]]; then
-        log "devices.dri = $sub applies after a host reboot (this boot's policy is for dri = $loaded)"
+        log "devices.dri = $sub in $POLICY_CONF, dri = $loaded in the loaded policy"
       else
-        log "devices.dri = $sub applies after a host reboot"
+        log "devices.dri = $sub at the next boot"
       fi
       echo "RHIZO_GPU_REBOOT_REQUIRED=1 dri=$sub loaded=${loaded:-unknown}"
       ;;
@@ -860,11 +850,9 @@ do_reset() {
     m=$(sed -n 's/^variant=//p' "$DATA_IMG.meta" | tail -1); [[ -n "$m" ]] && variant="$m"
   fi
 
-  local enforce; enforce=$(android_enforce_state "$RHIZO_SANDBOX_ID") || die "cannot read the SELinux mode (see above)"
-  log "stopping $unit"
+  local enforce; enforce=$(android_enforce_state "$RHIZO_SANDBOX_ID") || die "android_enforce_state failed"
   systemctl stop "$unit" || die "systemctl stop $unit failed"
 
-  log "re-instantiating $DATA_IMG from the $release/$variant template"
   local out rc mode_args ok_marker
   if [[ "$enforce" == 1 ]]; then
     mode_args=(--data-only)
@@ -878,11 +866,10 @@ do_reset() {
         --gsi "$(release_tree "$release")" "${mode_args[@]}" 2>&1)
   rc=$?
   printf '%s\n' "$out" >&2
-  [[ $rc -eq 0 ]] || die "prepare.sh ${mode_args[0]} failed (rc=$rc): data.img not replaced"
+  [[ $rc -eq 0 ]] || die "prepare.sh ${mode_args[0]} failed with exit status $rc"
   grep -qE "$ok_marker" <<<"$out" \
-    || die "prepare.sh printed no success marker: data.img not replaced"
+    || die "prepare.sh printed no line matching $ok_marker"
 
-  log "starting $unit"
   systemctl start "$unit" || die "systemctl start $unit failed"
   await_android_boot reset || die "$ANDROID_BOOT_WHY"
 
@@ -895,34 +882,33 @@ await_android_boot() {
   local unit await="$INSTALL_DIR/prepare/await-boot-completed.py"
   unit=$(instance_unit "$RHIZO_SANDBOX_ID")
   ANDROID_BOOT_WHY=""
-  log "waiting for sys.boot_completed (bounded 300s)"
   if ! /usr/bin/python3 "$await" --instance "$RHIZO_SANDBOX_ID" --timeout 300; then
     ANDROID_BOOT_WHY="no sys.boot_completed within 300s of the $1"
     return 1
   fi
   if ! wait_boot_completed "$RHIZO_SANDBOX_ID" 300; then
-    ANDROID_BOOT_WHY="$unit started and instance $RHIZO_SANDBOX_ID reported no sys.boot_completed=1 over its probe socket within 300s"
+    ANDROID_BOOT_WHY="no sys.boot_completed=1 from $unit within 300s"
     return 1
   fi
 }
 
-# wait for this start's enforcing SELinux namespace verdict
+# wait for an enforced or permissive start_verdict
 await_android_enforcing() {
   local unit m verdict="" deadline=$((SECONDS + ${1:-120}))
   unit=$(instance_unit "$RHIZO_SANDBOX_ID")
-  m=$(selinux_mode) || { ANDROID_BOOT_WHY="cannot read the SELinux mode after the start"; return 1; }
+  m=$(selinux_mode) || { ANDROID_BOOT_WHY="selinux_mode failed"; return 1; }
   [[ "$m" == namespace ]] || return 0
   while :; do
-    verdict=$(start_verdict "$unit") || { ANDROID_BOOT_WHY="cannot read the SELinux mode after the start"; return 1; }
+    verdict=$(start_verdict "$unit") || { ANDROID_BOOT_WHY="start_verdict $unit failed"; return 1; }
     if [[ "$verdict" == refused:* ]]; then
-      ANDROID_BOOT_WHY="Android's SELinux namespace start was refused: ${verdict#refused:}"
+      ANDROID_BOOT_WHY="SELinux namespace start refused (${verdict#refused:})"
       return 1
     fi
     start_verdict_ok "$verdict" && return 0
     (( SECONDS < deadline )) || break
     sleep 2
   done
-  ANDROID_BOOT_WHY="Android reported sys.boot_completed=1 with SELinux namespace verdict '${verdict:-<none>}', not enforced"
+  ANDROID_BOOT_WHY="sys.boot_completed=1 with SELinux namespace verdict '${verdict:-<none>}', not enforced"
   return 1
 }
 
@@ -933,9 +919,8 @@ start_android_enforcing() {
   ANDROID_BOOT_WHY=""
   [[ -r "$INSTALL_DIR/prepare/await-boot-completed.py" ]] \
     || { ANDROID_BOOT_WHY="no $INSTALL_DIR/prepare/await-boot-completed.py"; return 1; }
-  log "starting $unit"
   if ! systemctl start "$unit"; then
-    ANDROID_BOOT_WHY="$(policy_refusal_note "$unit")systemctl start $unit failed (unit state: $(systemctl is-active "$unit" 2>/dev/null))"
+    ANDROID_BOOT_WHY="$(policy_refusal_note "$unit")systemctl start $unit failed (ActiveState=$(systemctl is-active "$unit" 2>/dev/null))"
     return 1
   fi
   await_android_boot start || return 1
@@ -947,7 +932,6 @@ restart_android() {
   local unit
   unit=$(instance_unit "$RHIZO_SANDBOX_ID")
   ANDROID_BOOT_WHY=""
-  log "stopping $unit"
   systemctl stop "$unit" || { ANDROID_BOOT_WHY="systemctl stop $unit failed"; return 1; }
   start_android_enforcing
 }
@@ -956,7 +940,7 @@ restart_android() {
 wait_boot_completed() {
   local id="$1" timeout="$2" sock bc deadline
   [[ -r "$PROBE_CLIENT" ]] \
-    || { log "no $PROBE_CLIENT: cannot read instance $id's sys.boot_completed"; return 1; }
+    || { log "no $PROBE_CLIENT"; return 1; }
   sock=$(instance_probe_sock "$id")
   deadline=$((SECONDS + timeout))
   while (( SECONDS < deadline )); do
@@ -1013,14 +997,14 @@ cmd_install() {
       *) die "--profile takes desktop or server, not '$profile'" ;;
     esac
   elif ! profile=$(read_capability rhizo.profile); then
-    log "could not read the current profile: using desktop"
+    log "read_capability rhizo.profile failed, profile=desktop"
     profile=desktop
   fi
 
   load_host_libs
-  mode=$(configured_selinux_mode) || die "install needs the configured SELinux mode (see above)"
+  mode=$(configured_selinux_mode) || die "configured_selinux_mode failed"
   if release_kept_host_mode; then
-    mode=$(configured_selinux_mode) || die "install needs the configured SELinux mode (see above)"
+    mode=$(configured_selinux_mode) || die "configured_selinux_mode failed"
   fi
   resolve_uid1000
   ensure_broker_group
@@ -1079,22 +1063,22 @@ cmd_gsi() {
 mode_refusal() {
   local helper="$LIB_DIR/rhizo-selinux-mode" env=(--env-file "$ETC_RHIZO/androidd.env") out mode why rc=0
   out=$("$helper" "${env[@]}" --mode-and-why) || rc=$?
-  if (( rc != 0 )); then printf '%s exited %d reading this boot'"'"'s SELinux mode\n' "$helper" "$rc"; return 2; fi
+  if (( rc != 0 )); then printf '%s --mode-and-why failed with exit status %d\n' "$helper" "$rc"; return 2; fi
   IFS=$'\t' read -r mode why <<<"$out"
   [[ "$mode" == refuse:* ]] || return 1
-  printf '%s\n%s\n' "${mode#refuse:}" "${why:-$helper gave no reason}"
+  printf '%s\n%s\n' "${mode#refuse:}" "${why:-$helper printed no reason}"
 }
 
 # print the pending Rhizo kernel release
 pending_rhizo_kernel() {
   local flavor out rel line rc=0 rels=()
   declare -F host_flavor >/dev/null || load_host_libs
-  flavor=$(host_flavor 2>&1) || { echo "the host flavor probe failed ($flavor)"; return 2; }
+  flavor=$(host_flavor 2>&1) || { echo "host_flavor failed ($flavor)"; return 2; }
   case "$flavor" in
     ubuntu)
-      command -v dpkg-query >/dev/null 2>&1 || { echo "no dpkg-query to list the installed kernels"; return 2; }
+      command -v dpkg-query >/dev/null 2>&1 || { echo "no dpkg-query"; return 2; }
       out=$(dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 'linux-image-*-rhizo' 2>&1) || rc=$?
-      (( rc <= 1 )) || { echo "dpkg-query exited $rc listing the Rhizo kernel packages: $(tail -1 <<<"$out")"; return 2; }
+      (( rc <= 1 )) || { echo "dpkg-query failed with exit status $rc ($(tail -1 <<<"$out"))"; return 2; }
       while IFS= read -r line; do
         case "${line:0:3}" in
           "ii ") [[ "${line:4}" =~ ^linux-image-([0-9].*-rhizo)$ ]] && rels+=("${BASH_REMATCH[1]}") ;;
@@ -1102,16 +1086,16 @@ pending_rhizo_kernel() {
       done <<<"$out"
       rel=$(printf '%s\n' "${rels[@]}" | sort -V | tail -1) ;;
     cachyos)
-      command -v pacman >/dev/null 2>&1 || { echo "no pacman to list the installed kernels"; return 2; }
+      command -v pacman >/dev/null 2>&1 || { echo "no pacman"; return 2; }
       out=$(pacman -Q linux-rhizo 2>&1) || rc=$?
-      (( rc <= 1 )) || { echo "pacman exited $rc listing the Rhizo kernel packages: $(tail -1 <<<"$out")"; return 2; }
+      (( rc <= 1 )) || { echo "pacman failed with exit status $rc ($(tail -1 <<<"$out"))"; return 2; }
       rel=$(sed -n 's/^linux-rhizo \(.*\)-[0-9][0-9]*$/\1/p' <<<"$out" | tr _ -) ;;
     *) return 1 ;;
   esac
   [[ -n "$rel" && "$rel" != "$(uname -r)" ]] && echo "$rel"
 }
 
-# load the setup state and its reason
+# set SETUP_STATE, SETUP_REASON and SETUP_SENTENCE
 load_setup_state() {
   local out rc=0 kernel krc
   SETUP_REASON="" SETUP_SENTENCE=""
@@ -1134,7 +1118,7 @@ load_setup_state() {
            krc=0; kernel=$(pending_rhizo_kernel) || krc=$?
            if (( krc == 0 )); then
              SETUP_STATE=pending-reboot; SETUP_REASON=""
-             SETUP_SENTENCE="reboot into the Rhizo kernel, $kernel, to run setup"
+             SETUP_SENTENCE="installed Rhizo kernel $kernel is not running"
            elif (( krc == 2 )); then
              SETUP_SENTENCE="$SETUP_SENTENCE ($kernel)"
            fi
@@ -1153,37 +1137,34 @@ setup_state() {
 
 # print the note for the configuring state
 configuring_note() {
-  echo "pacman is running rhizo's configure: wait for it, or with no pacman running remove $PACMAN_DB_LOCK and run" \
-       "'sudo /usr/share/libalpm/scripts/rhizo-configure'"
+  echo "$CONFIGURE_PENDING and $PACMAN_DB_LOCK exist"
 }
 
 # print the note for a failed install
 install_failed_note() {
   local step rc
   if [[ ! -s "$INSTALL_FAILED" ]]; then
-    echo "pacman's configure hook did not finish ($CONFIGURE_PENDING exists): run" \
-         "'sudo /usr/share/libalpm/scripts/rhizo-configure', or install the same packages again"
+    echo "$CONFIGURE_PENDING exists"
     return 0
   fi
   read -r step rc < "$INSTALL_FAILED"
-  echo "the install failed at ${step:-an unnamed step} (exit ${rc:-?}): fix that step, then install the same packages again"
+  echo "${step:-install} failed with exit status ${rc:-?}"
 }
 
 defer_prepare_to_next_boot() {
   local enforcing="$1" mode="${2:-host}"
   mark_setup_pending "finish the upgrade" upgrade
-  log "reboot to finish the upgrade"
   if [[ "$mode" == namespace && "$(uname -r)" != *-rhizo ]]; then
-    log "reboot into the Rhizo kernel to run setup; apps and data are kept"
+    log "rhizo-prepare.service runs at the next boot on a Rhizo kernel"
     echo "RHIZO_UPGRADE_REBOOT_REQUIRED=1 reason=rhizo-kernel"
   elif [[ "$mode" == namespace ]]; then
-    log "rhizo-prepare.service runs setup at the next boot; apps and data are kept"
+    log "rhizo-prepare.service runs at the next boot"
     echo "RHIZO_UPGRADE_REBOOT_REQUIRED=1 reason=setup-at-boot"
   elif [[ "$enforcing" == 1 ]]; then
-    log "SELinux is enforcing: rhizo-prepare.service runs setup at the next boot; apps and data are kept"
+    log "rhizo-prepare.service runs at the next boot"
     echo "RHIZO_UPGRADE_REBOOT_REQUIRED=1 reason=enforcing"
   else
-    log "rhizo-prepare.service runs setup at the next boot; apps and data are kept"
+    log "rhizo-prepare.service runs at the next boot"
     echo "RHIZO_UPGRADE_REBOOT_REQUIRED=1 reason=setup-at-boot"
   fi
 }
@@ -1194,16 +1175,16 @@ mark_setup_pending() {
   enabled=$(systemctl is-enabled rhizo-prepare.service 2>/dev/null)
   case "$enabled" in
     enabled|enabled-runtime) : ;;
-    *) die "rhizo-prepare.service is '${enabled:-not installed}': run 'systemctl enable rhizo-prepare.service', then 'rhizo $2'" ;;
+    *) die "rhizo-prepare.service is '${enabled:-not installed}', not enabled" ;;
   esac
   rm -f "$PREPARED_MARKER" \
-    || die "could not clear $PREPARED_MARKER"
+    || die "failed to remove $PREPARED_MARKER"
   if ! err=$( { : > "$REBOOT_REQUIRED_FILE"; } 2>&1 ); then
-    log "could not write $REBOOT_REQUIRED_FILE: $err"
+    log "failed to write $REBOOT_REQUIRED_FILE ($err)"
   fi
 }
 
-# record a prepare request for the next boot
+# write PREPARE_REQUEST for the next boot
 defer_prepare_request() {
   cli_root_ok || die "prepare must run as root"
   local release=current variant="" wipe=0 status current candidate out reason tree
@@ -1213,20 +1194,20 @@ defer_prepare_request() {
       --variant) variant="${2:-}"; shift 2 ;;
       --wipe-data) wipe=1; shift ;;
       --payload) shift 2 ;;
-      *) die "SELinux is enforcing: a prepare at the next boot takes --release, --variant and --wipe-data, not '$1'" ;;
+      *) die "a deferred prepare takes --release, --variant and --wipe-data, not '$1'" ;;
     esac
   done
   [[ -s "$PREPARE_REQUEST" ]] \
-    && die "a prepare of $(sed -n 's/^release=//p' "$PREPARE_REQUEST" | tail -1) is already pending for the next boot: reboot first"
+    && die "$PREPARE_REQUEST exists for release $(sed -n 's/^release=//p' "$PREPARE_REQUEST" | tail -1)"
   status=$("$INSTALL_DIR/update/gsi-update.sh" status 2>/dev/null | tail -1)
   current=$(sed -n 's/.* current=\([^ ]*\) .*/\1/p' <<<"$status")
   candidate=$(sed -n 's/.* candidate=\([^ ]*\) .*/\1/p' <<<"$status")
-  [[ -n "$current" && -n "$candidate" ]] || die "rhizo gsi status named no current release: '$status'"
+  [[ -n "$current" && -n "$candidate" ]] || die "gsi-update.sh status printed no current= ('$status')"
   [[ "$release" == current ]] && release="$current"
   [[ "$candidate" == - ]] \
-    || die "a rhizo gsi trial of $candidate is armed: wait for it or run 'rhizo gsi abort', then prepare $release"
+    || die "a rhizo gsi trial of $candidate is armed"
   [[ "$release" == "$current" || "$wipe" == 1 ]] \
-    || die "preparing $release in place of $current needs --wipe-data; 'rhizo gsi update --release $release' keeps /data"
+    || die "preparing $release in place of $current needs --wipe-data"
   out=$("$INSTALL_DIR/update/gsi-update.sh" kernel-check --release "$release" 2>&1)
   if [[ "$(tail -1 <<<"$out")" != "RHIZO_GSI_KERNEL_OK release=$release" ]]; then
     printf '%s\n' "$out" | grep -v '^RHIZO_' >&2
@@ -1239,31 +1220,31 @@ defer_prepare_request() {
     out=$("$INSTALL_DIR/prepare/fetch-gsi.sh" --release "$release" --fetch-only 2>&1)
     if [[ "$(tail -1 <<<"$out")" != RHIZO_GSI_FETCHED* ]]; then
       printf '%s\n' "$out" >&2
-      die "could not fetch $release's image for the next boot's prepare"
+      die "fetch-gsi.sh --release $release --fetch-only failed"
     fi
   fi
   mkdir -p "$(dirname "$PREPARE_REQUEST")"
   { printf 'release=%s\nvariant=%s\nwipe_data=%s\n' "$release" "$variant" "$wipe" > "$PREPARE_REQUEST.tmp" \
-      && mv "$PREPARE_REQUEST.tmp" "$PREPARE_REQUEST"; } || die "could not write $PREPARE_REQUEST"
+      && mv "$PREPARE_REQUEST.tmp" "$PREPARE_REQUEST"; } || die "failed to write $PREPARE_REQUEST"
   mark_setup_pending "prepare $release" prepare
-  log "rhizo-prepare.service prepares $release$( ((wipe)) && echo " on a new /data") at the next boot: reboot to run it"
+  log "rhizo-prepare.service prepares $release$( ((wipe)) && echo " with --wipe-data") at the next boot"
   echo "RHIZO_PREPARE_REBOOT_REQUIRED=1 reason=enforcing release=$release"
 }
 
 # re-run the bootstrap and the prepare
 cmd_upgrade() {
   [[ -x "$INSTALL_DIR/bootstrap/bootstrap.sh" && -x "$INSTALL_DIR/prepare/prepare.sh" ]] \
-    || die "install/bootstrap/bootstrap.sh or install/prepare/prepare.sh missing under $LIB_DIR"
+    || die "no $INSTALL_DIR/bootstrap/bootstrap.sh or $INSTALL_DIR/prepare/prepare.sh"
   local enforcing=0 mode
-  mode=$(configured_selinux_mode) || die "upgrade needs the configured SELinux mode (see above)"
+  mode=$(configured_selinux_mode) || die "configured_selinux_mode failed"
   if [[ "$mode" == namespace ]] && is_readonly_arg "$@"; then
     cmd_prepare "$@"
     return
   fi
   if [[ -e "$HOST_MODE_KEPT" ]] && ! is_readonly_arg "$@"; then
-    cli_root_ok || die "upgrade over a kept host mode must run as root"
+    cli_root_ok || die "upgrade with $HOST_MODE_KEPT must run as root"
     if release_kept_host_mode; then
-      mode=$(configured_selinux_mode) || die "upgrade needs the configured SELinux mode (see above)"
+      mode=$(configured_selinux_mode) || die "configured_selinux_mode failed"
     fi
   fi
   if [[ "$mode" == namespace ]] && ! grep -qx 'selinux-mode namespace' "$INSTALL_RECORD" 2>/dev/null; then
@@ -1273,12 +1254,7 @@ cmd_upgrade() {
   fi
   [[ "$mode" == host ]] && ! selinux_mode_is namespace && [[ "$(cat "$SELINUX_ENFORCE_FILE" 2>/dev/null)" == 1 ]] \
     && enforcing=1
-  if [[ "$mode" == namespace ]]; then
-    log "re-applying the boot line, bootloader and swap bootstrap"
-  else
-    log "re-applying the LSM, GRUB and swap bootstrap"
-  fi
-  "$INSTALL_DIR/bootstrap/bootstrap.sh" >&2 || die "the bootstrap step failed during upgrade"
+  "$INSTALL_DIR/bootstrap/bootstrap.sh" >&2 || die "bootstrap.sh failed"
   if is_readonly_arg "$@"; then
     cmd_prepare "$@"
     return
@@ -1289,14 +1265,13 @@ cmd_upgrade() {
 # confirm the purge with a typed yes
 confirm_purge() {
   [[ "${RHIZO_ASSUME_YES:-0}" == 1 ]] && return 0
-  log "--purge removes, IRREVERSIBLY:"
-  log "  every installed app and its data ($DATA_IMG)"
-  log "  $ETC_RHIZO in full, including hostfs.conf if you edited it"
-  log "  the uid-1000 system account this installer created, if it created one"
-  [[ -t 0 ]] || die "purge needs a terminal to confirm on, or RHIZO_ASSUME_YES=1"
+  log "--purge removes $DATA_IMG"
+  log "--purge removes $ETC_RHIZO"
+  log "--purge removes the uid 1000 account in $INSTALL_RECORD"
+  [[ -t 0 ]] || die "stdin is not a terminal and RHIZO_ASSUME_YES is not 1"
   local reply
   read -r -p "[$PROG] type 'yes' to purge: " reply
-  [[ "$reply" == yes ]] || die "purge not confirmed: typed '${reply:-<empty>}', not 'yes'; nothing removed"
+  [[ "$reply" == yes ]] || die "reply is '${reply:-<empty>}', not 'yes'"
 }
 
 # test whether a package is installed
@@ -1305,7 +1280,7 @@ uninstall_holds() {
   err=$(host_pkg_installed "$1" 2>&1) || rc=$?
   case $rc in
     0|1) return "$rc" ;;
-    *)   die "cannot tell whether $1 is installed: nothing removed${err:+ ($err)}" ;;
+    *)   die "host_pkg_installed $1 failed${err:+ ($err)}" ;;
   esac
 }
 
@@ -1318,9 +1293,9 @@ rhizo_added_packages() {
   for f in "$dir"/history.log.*.gz; do [[ -e "$f" ]] && files+=("$f"); done
   mapfile -t files < <(printf '%s\n' "${files[@]}" | sed -n 's/.*\.\([0-9]\+\)\.gz$/\1 &/p' | sort -rn | cut -d' ' -f2-)
   [[ -e "$dir/history.log" ]] && files+=("$dir/history.log")
-  (( ${#files[@]} )) || { echo "no apt history in $dir, so the packages Rhizo's install added cannot be named"; return 2; }
+  (( ${#files[@]} )) || { echo "no apt history in $dir"; return 2; }
   for f in "${files[@]}"; do
-    [[ -r "$f" ]] || { echo "cannot read $f as uid $EUID, so the packages Rhizo's install added cannot be named"; return 2; }
+    [[ -r "$f" ]] || { echo "failed to read $f as uid $EUID"; return 2; }
   done
   arch=$(dpkg --print-architecture) || { echo "dpkg --print-architecture failed"; return 2; }
   out=$(zcat -f -- "${files[@]}" | awk '
@@ -1335,8 +1310,8 @@ rhizo_added_packages() {
            }
          }
          END {for (i = 1; i <= n; i++) print t[i]}') \
-    || { echo "zcat could not read apt's history in $dir"; return 2; }
-  [[ -n "$out" ]] || { echo "apt's history in $dir holds no transaction that installed rhizo, so the packages it added cannot be named"; return 2; }
+    || { echo "zcat of apt history in $dir failed"; return 2; }
+  [[ -n "$out" ]] || { echo "apt history in $dir has no transaction that installed rhizo"; return 2; }
   while IFS=$'\t' read -r start end line; do
     while IFS= read -r pkg; do
       [[ "$pkg" =~ ^([^:\ ]+):([^\ ]+)\ \([^\)]*,\ automatic\)$ ]] || continue
@@ -1350,22 +1325,22 @@ rhizo_added_packages() {
   mapfile -t dfiles < <(printf '%s\n' "${dfiles[@]}" | sed -n 's/.*\.\([0-9]\+\)\.gz$/\1 &/p' | sort -rn | cut -d' ' -f2-)
   [[ -e "$logdir/dpkg.log.1" ]] && dfiles+=("$logdir/dpkg.log.1")
   [[ -e "$logdir/dpkg.log" ]] && dfiles+=("$logdir/dpkg.log")
-  (( ${#dfiles[@]} )) || { echo "no dpkg log in $logdir, so the packages Rhizo's install added cannot be named"; return 2; }
+  (( ${#dfiles[@]} )) || { echo "no dpkg log in $logdir"; return 2; }
   for f in "${dfiles[@]}"; do
-    [[ -r "$f" ]] || { echo "cannot read $f as uid $EUID, so the packages Rhizo's install added cannot be named"; return 2; }
+    [[ -r "$f" ]] || { echo "failed to read $f as uid $EUID"; return 2; }
   done
-  out=$(zcat -f -- "${dfiles[@]}") || { echo "zcat could not read dpkg's log in $logdir"; return 2; }
+  out=$(zcat -f -- "${dfiles[@]}") || { echo "zcat of dpkg log in $logdir failed"; return 2; }
   for name in "${!want[@]}"; do
     IFS=$'\t' read -r start end <<<"${want[$name]}"
     old=$(awk -v s="$start" -v e="$end" -v n="$name" -v a="$arch" '
             $3 == "install" && ($4 == n || $4 == n ":" a || $4 == n ":all") && ($1 " " $2) >= s && ($1 " " $2) <= e {o = $5}
             END {print o}' <<<"$out")
-    [[ -n "$old" ]] || { echo "dpkg's log in $logdir holds no install of $name between $start and $end, so whether it had configuration files before Rhizo cannot be told"; return 2; }
+    [[ -n "$old" ]] || { echo "dpkg log in $logdir has no install of $name between $start and $end"; return 2; }
     if [[ "$old" == "<none>" ]]; then how[$name]=purge; else how[$name]=remove; fi
   done
   # shellcheck disable=SC2016
   out=$(dpkg-query -W -f '${db:Status-Abbrev} ${Package}:${Architecture}\n' "${!want[@]}" 2>&1) || rc=$?
-  (( rc <= 1 )) || { echo "dpkg-query exited $rc listing the packages Rhizo's install added: $(grep '^dpkg-query:' <<<"$out" | tail -1)"; return 2; }
+  (( rc <= 1 )) || { echo "dpkg-query failed with exit status $rc ($(grep '^dpkg-query:' <<<"$out" | tail -1))"; return 2; }
   while IFS= read -r line; do
     case "${line:0:3}" in
       "ii ") name=${line:4}; name=${name%:"$arch"}; name=${name%:all}
@@ -1378,7 +1353,7 @@ rhizo_added_packages() {
   for name in "${list[@]}"; do [[ -n "${auto[$name]:-}" ]] && keep+=("$name"); done
   list=("${keep[@]}")
   while (( ${#list[@]} )); do
-    sim=$(apt-get -s purge "${list[@]}" 2>&1) || { echo "apt-get -s purge of the packages Rhizo's install added failed: $(tail -1 <<<"$sim")"; return 2; }
+    sim=$(apt-get -s purge "${list[@]}" 2>&1) || { echo "apt-get -s purge failed ($(tail -1 <<<"$sim"))"; return 2; }
     outside=()
     declare -A inl=(); for name in "${list[@]}"; do inl[$name]=1; done
     while read -r _ pkg _; do
@@ -1390,7 +1365,7 @@ rhizo_added_packages() {
       < <(apt-cache depends --installed --recurse --no-recommends --no-suggests --no-conflicts --no-breaks \
             --no-replaces --no-enhances "${outside[@]}")
     keep=(); for name in "${list[@]}"; do [[ -n "${drop[$name]:-}" ]] || keep+=("$name"); done
-    (( ${#keep[@]} < ${#list[@]} )) || { echo "purging the packages Rhizo's install added would remove ${outside[*]}, and none of them depends on one"; return 2; }
+    (( ${#keep[@]} < ${#list[@]} )) || { echo "apt-get -s purge removes ${outside[*]} outside the added packages"; return 2; }
     list=("${keep[@]}")
     unset inl
   done
@@ -1403,8 +1378,8 @@ rhizo_pacman_added() {
   local log="${RHIZO_PACMAN_LOG:-/var/log/pacman.log}" out name field value changed line rc=0
   local -a list=() keep=()
   local -A ours=([rhizo]=1) inl=() reason=() needs=()
-  [[ -e "$log" ]] || { echo "no pacman log at $log, so the packages Rhizo's install added cannot be named"; return 2; }
-  [[ -r "$log" ]] || { echo "cannot read $log as uid $EUID, so the packages Rhizo's install added cannot be named"; return 2; }
+  [[ -e "$log" ]] || { echo "no $log"; return 2; }
+  [[ -r "$log" ]] || { echo "failed to read $log as uid $EUID"; return 2; }
   out=$(awk '
          / \[ALPM\] transaction started$/ {n = 0; r = 0; u = 0}
          $2 == "[ALPM]" && $3 == "installed" {t[++n] = $4; if ($4 == "rhizo") r = 1}
@@ -1414,17 +1389,17 @@ rhizo_pacman_added() {
            if (r || (seen && u)) { seen = 1; for (i = 1; i <= n; i++) k[++m] = t[i] }
          }
          END {if (seen) print "#rhizo"; for (i = 1; i <= m; i++) print k[i]}' "$log") \
-    || { echo "awk could not read $log"; return 2; }
-  [[ "$out" == "#rhizo"* ]] || { echo "$log holds no transaction that installed rhizo, so the packages it added cannot be named"; return 2; }
+    || { echo "awk failed on $log"; return 2; }
+  [[ "$out" == "#rhizo"* ]] || { echo "$log has no transaction that installed rhizo"; return 2; }
   while IFS= read -r name; do
     [[ "$name" == "#rhizo" || -n "${ours[$name]:-}" ]] || inl[$name]=1
   done <<<"$out"
   (( ${#inl[@]} )) || return 0
   out=$(pacman -Qq "${!inl[@]}" 2>&1) || rc=$?
-  (( rc <= 1 )) || { echo "pacman -Qq exited $rc listing the packages Rhizo's install added: $(tail -1 <<<"$out")"; return 2; }
+  (( rc <= 1 )) || { echo "pacman -Qq failed with exit status $rc ($(tail -1 <<<"$out"))"; return 2; }
   mapfile -t keep < <(grep -v '^error: ' <<<"$out" | grep .)
   (( ${#keep[@]} )) || return 0
-  out=$(pacman -Qi "${keep[@]}" 2>&1) || { echo "pacman -Qi failed on the packages Rhizo's install added: $(tail -1 <<<"$out")"; return 2; }
+  out=$(pacman -Qi "${keep[@]}" 2>&1) || { echo "pacman -Qi failed ($(tail -1 <<<"$out"))"; return 2; }
   while IFS= read -r line; do
     field=${line%%:*}; field=${field%"${field##*[![:space:]]}"}; value=${line#*: }
     case "$field" in
@@ -1463,7 +1438,7 @@ cmd_uninstall() {
   done
   if ! is_readonly_arg "${args[@]:-}"; then
     load_host_libs
-    manager=$(host_pkg_manager 2>&1) || die "$manager: nothing removed"
+    manager=$(host_pkg_manager 2>&1) || die "host_pkg_manager failed ($manager)"
     if uninstall_holds rhizo; then rhizo_held=1; fi
   fi
   if is_readonly_arg "${args[@]:-}" || (( ! rhizo_held )); then
@@ -1477,7 +1452,7 @@ cmd_uninstall() {
     exec "$INSTALL_DIR/teardown/teardown.sh" --purge "${args[@]}"
   fi
   (( ${#args[@]} == 0 )) \
-    || die "uninstall on a $manager install takes only --purge or --verify, got: ${args[*]}"
+    || die "uninstall on a $manager install takes --purge or --verify, not '${args[*]}'"
   if [[ "$manager" == pacman ]]; then
     local pkgs=(rhizo) pm=(-R) added rc=0
     if (( purge )); then
@@ -1487,11 +1462,11 @@ cmd_uninstall() {
     fi
     [[ "${RHIZO_ASSUME_YES:-0}" == 1 ]] && pm+=(--noconfirm)
     added=$(rhizo_pacman_added) || rc=$?
-    log "pacman ${pm[*]} removes ${pkgs[*]} and the packages Rhizo's install added:"
+    log "pacman ${pm[*]} removes ${pkgs[*]} and the packages Rhizo's install added"
     if (( rc )); then
-      log "  none named: $added"
+      log "  failed to list the packages Rhizo's install added ($added)"
     elif [[ -z "$added" ]]; then
-      log "  none: every package it added is gone, kept by hand, or needed by another installed package"
+      log "  no package from Rhizo's install to remove"
     else
       log "  $(tr '\n' ' ' <<<"$added" | sed 's/ $//')"
       mapfile -t -O "${#pkgs[@]}" pkgs <<<"$added"
@@ -1503,26 +1478,25 @@ cmd_uninstall() {
   (( ! purge )) || confirm_purge
   added=$(rhizo_added_packages) || rc=$?
   if (( purge )); then
-    log "apt-get purge rhizo; then purge the Rhizo kernel's packages; then the packages Rhizo's install added:"
+    log "the Rhizo kernel packages and the packages Rhizo's install added are still installed after apt-get purge rhizo"
   else
-    log "apt-get remove rhizo; then remove the Rhizo kernel's packages; then the packages Rhizo's install added:"
+    log "the Rhizo kernel packages and the packages Rhizo's install added are still installed after apt-get remove rhizo"
   fi
   if (( rc )); then
-    log "  none named: $added"
+    log "  failed to list the packages Rhizo's install added ($added)"
   elif [[ -z "$added" ]]; then
-    log "  none: every package it added is gone, kept by hand, or needed by another installed package"
+    log "  no package from Rhizo's install to remove"
   elif (( purge )); then
-    [[ "$added" != *purge$'\t'* ]] || log "  sudo apt purge $(sed -n 's/^purge\t//p' <<<"$added" | tr '\n' ' ' | sed 's/ $//')"
-    [[ "$added" != *remove$'\t'* ]] || log "  sudo apt remove $(sed -n 's/^remove\t//p' <<<"$added" | tr '\n' ' ' | sed 's/ $//')" \
-      "(keeps their configuration files)"
+    [[ "$added" != *purge$'\t'* ]] || log "  purge=$(sed -n 's/^purge\t//p' <<<"$added" | tr '\n' ' ' | sed 's/ $//')"
+    [[ "$added" != *remove$'\t'* ]] || log "  remove=$(sed -n 's/^remove\t//p' <<<"$added" | tr '\n' ' ' | sed 's/ $//')"
   else
-    log "  sudo apt remove $(cut -f2 <<<"$added" | tr '\n' ' ' | sed 's/ $//')"
+    log "  remove=$(cut -f2 <<<"$added" | tr '\n' ' ' | sed 's/ $//')"
   fi
   (( purge )) && exec apt-get -y purge rhizo
   exec apt-get "${yes[@]}" remove rhizo
 }
 
-# print this boot's policy refusal reason
+# print the current boot's policy refusal reason
 policy_refusal_reason() {
   [[ -r "$POLICY_REFUSED_FILE" ]] || return 0
   sed -n 's/^reason=//p' "$POLICY_REFUSED_FILE" | head -1
@@ -1532,13 +1506,13 @@ policy_refusal_reason() {
 policy_refusal_note() {
   local why verdict
   why=$(policy_refusal_reason)
-  [[ -n "$why" ]] && printf "Android's policy was refused on this boot: %s. " "$why"
+  [[ -n "$why" ]] && printf "policy refused on the current boot with reason=%s. " "$why"
   if [[ -n "${1:-}" ]]; then
-    verdict=$(start_verdict "$1") || { printf "The SELinux mode could not be read. "; return 0; }
+    verdict=$(start_verdict "$1") || { printf "start_verdict failed. "; return 0; }
   else
-    verdict=$(selinuxns_verdict "$RHIZO_SANDBOX_ID") || { printf "The SELinux mode could not be read. "; return 0; }
+    verdict=$(selinuxns_verdict "$RHIZO_SANDBOX_ID") || { printf "selinuxns_verdict failed. "; return 0; }
   fi
-  [[ "$verdict" == refused:* ]] && printf "Android's SELinux namespace start was refused: %s. " "${verdict#refused:}"
+  [[ "$verdict" == refused:* ]] && printf "SELinux namespace start refused (%s). " "${verdict#refused:}"
   return 0
 }
 # print Android's SELinux namespace state
@@ -1550,23 +1524,23 @@ selinuxns_status() {
     pending|handed-off)
       case "$unit_state" in
         active|activating) echo "Android starting" ;;
-        "")                echo "Android verdict '$verdict' (unit state unknown)" ;;
-        *)                 echo "Android start ended with no verdict (recorded '$verdict', unit $unit_state)" ;;
+        "")                echo "Android verdict '$verdict', unit state unknown" ;;
+        *)                 echo "Android verdict '$verdict' with unit $unit_state" ;;
       esac ;;
-    refused:*)          echo "Android refused: ${verdict#refused:}" ;;
+    refused:*)          echo "Android refused (${verdict#refused:})" ;;
     permissive)         echo "Android permissive (RHIZO_PERMISSIVE=1)" ;;
     stopped)            echo "Android stopped" ;;
-    "")                 echo "Android not started on this boot" ;;
+    "")                 echo "Android not started on the current boot" ;;
     *)                  echo "Android verdict '$verdict'" ;;
   esac
 }
 
-# print this boot's Android policy state
+# print the current boot's Android policy state
 policy_status_line() {
   local refused
   refused=$(policy_refusal_reason)
   if [[ -n "$refused" ]]; then
-    echo "pending-reboot (refused: $refused)"
+    echo "pending-reboot reason=$refused"
     return
   fi
   if ! rhizo_policy_loaded; then
@@ -1585,40 +1559,39 @@ policy_status_line() {
     echo "loaded-at-boot by rhizo-policy.service ${loaded_at:-?} sha=${sha:0:12}"
     return
   fi
-  echo "loaded (source unknown: no state file)"
+  echo "loaded, no /run/rhizo-policy-loaded"
 }
 
 # print the last start's prepared-tree refusal
 prepared_refusal_status() {
   local record="$PREPARED_ROOT/refusal" reason outcome failed error
-  local fix="run 'sudo rhizo prepare'"
   [[ -s "$record" ]] || return 0
   reason=$(sed -n 's/^reason=//p' "$record" | tail -1)
   outcome=$(sed -n 's/^outcome=//p' "$record" | tail -1)
   failed=$(sed -n 's/^failed=//p' "$record" | tail -1)
   error=$(sed -n 's/^error=//p' "$record" | tail -1)
   if [[ -s "$PREPARE_REQUEST" ]]; then
-    echo "refused ($reason) at the last start; a re-prepare is pending for the next boot"
+    echo "refused ($reason) at the last start with $PREPARE_REQUEST pending"
   elif [[ "$outcome" == rebuild-failed ]]; then
-    echo "refused ($reason) at the last start; its rebuild at boot failed ($failed): $fix"
+    echo "refused ($reason) at the last start, rebuild at boot failed ($failed)"
   elif [[ "$outcome" == unit-query-failed ]]; then
-    echo "refused ($reason) at the last start; cannot read whether rhizo-prepare.service is enabled ($error): $fix"
+    echo "refused ($reason) at the last start, systemctl is-enabled rhizo-prepare.service failed ($error)"
   elif [[ "$outcome" == repeated ]]; then
-    echo "refused ($reason) again after its rebuild at the last start: $fix"
+    echo "refused ($reason) again after the rebuild at the last start"
   elif [[ "$outcome" == no-prepare-unit ]]; then
-    echo "refused ($reason) at the last start; rhizo-prepare.service is not enabled: $fix"
+    echo "refused ($reason) at the last start, rhizo-prepare.service is not enabled"
   else
-    echo "refused ($reason) at the last start; the next start checks the rebuilt tree"
+    echo "refused ($reason) at the last start, rebuilt for the next start"
   fi
 }
 
-# print this boot's start refusal
+# print the current boot's start refusal
 boot_refusal_status() {
   local out rc=0
   out=$(mode_refusal) || rc=$?
   case $rc in
-    0) echo "refused ($(sed -n 1p <<<"$out")): $(sed -n 2p <<<"$out")" ;;
-    2) echo "unknown: $out" ;;
+    0) echo "refused ($(sed -n 1p <<<"$out")), $(sed -n 2p <<<"$out")" ;;
+    2) echo "unknown ($out)" ;;
   esac
 }
 # print the state of host mode's label removal
@@ -1626,7 +1599,7 @@ host_labels_status() {
   local head state reason sentence
   [[ -e "$HOST_LABELS_PENDING" ]] || return 0
   if ! head=$(head -1 "$HOST_LABELS_PENDING"); then
-    echo "unknown: cannot read $HOST_LABELS_PENDING"
+    echo "unknown, failed to read $HOST_LABELS_PENDING"
     return 0
   fi
   sentence=$(sed -n 2p "$HOST_LABELS_PENDING")
@@ -1634,12 +1607,12 @@ host_labels_status() {
   case "$state" in
     pending)
       if [[ "$(systemctl is-failed rhizo-host-labels.service 2>/dev/null)" == failed ]]; then
-        echo "failed on this boot (journalctl -b -u rhizo-host-labels.service); the next boot retries"
+        echo "rhizo-host-labels.service failed on the current boot"
       else
-        echo "pending: the next boot removes host mode's labels (rhizo-host-labels.service)"
+        echo "pending for rhizo-host-labels.service at the next boot"
       fi ;;
-    refused|failed) echo "$state ($reason): $sentence" ;;
-    *) echo "unknown: $HOST_LABELS_PENDING reads '$head'" ;;
+    refused|failed) echo "$state ($reason), $sentence" ;;
+    *) echo "unknown, $HOST_LABELS_PENDING contains '$head'" ;;
   esac
 }
 
@@ -1661,75 +1634,75 @@ cmd_status() {
     return 0
   fi
 
-  log "version      : $(rhizo_version)"
-  log "sandbox      : $([[ $running == 1 ]] && echo "running (init pid $init)" || echo "not running")"
-  [[ -n "$unit" ]] && log "$(instance_unit "$RHIZO_SANDBOX_ID") : $unit"
+  log "version=$(rhizo_version)"
+  log "sandbox=$([[ $running == 1 ]] && echo "running (init pid $init)" || echo "not running")"
+  [[ -n "$unit" ]] && log "$(instance_unit "$RHIZO_SANDBOX_ID")=$unit"
   if selinux_mode_is namespace; then
-    log "selinux      : namespace, $(selinuxns_status "$unit")"
+    log "selinux=namespace, $(selinuxns_status "$unit")"
   else
-    log "policy       : $(policy_status_line) enforce=$(cat "$SELINUX_ENFORCE_FILE" 2>/dev/null || echo '?')"
+    log "policy=$(policy_status_line) enforce=$(cat "$SELINUX_ENFORCE_FILE" 2>/dev/null || echo '?')"
   fi
 
   shopt -s nullglob
   local trees=("$GSI_ROOT"/gsi_system*)
   shopt -u nullglob
   if (( ${#trees[@]} )); then
-    log "gsi trees    : ${trees[*]}"
+    log "gsi_trees=${trees[*]}"
   else
-    log "gsi trees    : none under $GSI_ROOT"
+    log "gsi_trees=none under $GSI_ROOT"
   fi
 
   local data=absent
   if [[ -s "$DATA_IMG" ]]; then
     data=present
-    log "data.img     : present ($(du -h --apparent-size "$DATA_IMG" 2>/dev/null | cut -f1))"
-    [[ -f "$DATA_IMG.meta" ]] && log "data.img.meta: $(tr '\n' ' ' < "$DATA_IMG.meta")"
+    log "data.img=$DATA_IMG ($(du -h --apparent-size "$DATA_IMG" 2>/dev/null | cut -f1))"
+    [[ -f "$DATA_IMG.meta" ]] && log "$DATA_IMG.meta $(tr '\n' ' ' < "$DATA_IMG.meta")"
   else
-    log "data.img     : absent ($DATA_IMG)"
+    log "data.img=absent ($DATA_IMG)"
   fi
 
   if [[ -L "$PREPARED_ROOT/current" ]]; then
-    log "prepared     : current key $(readlink "$PREPARED_ROOT/current")"
+    log "prepared=$(readlink "$PREPARED_ROOT/current")"
   else
-    log "prepared     : no $PREPARED_ROOT/current; run 'rhizo prepare'"
+    log "prepared=no $PREPARED_ROOT/current"
   fi
   local refusal; refusal=$(prepared_refusal_status)
-  [[ -n "$refusal" ]] && log "prepared     : $refusal"
+  [[ -n "$refusal" ]] && log "prepared=$refusal"
   local setup; load_setup_state; setup=$SETUP_STATE
   case "$setup" in
-    done)           log "setup        : done ($(tr '\n' ' ' < "$PREPARED_MARKER" 2>/dev/null))" ;;
-    pending)        log "setup        : pending; see systemctl status rhizo-prepare.service" ;;
+    done)           log "setup=done ($(tr '\n' ' ' < "$PREPARED_MARKER" 2>/dev/null))" ;;
+    pending)        log "setup=pending, rhizo-prepare.service activating" ;;
     pending-reboot)
-      [[ -n "$SETUP_SENTENCE" ]] || SETUP_SENTENCE="reboot to finish the install or upgrade"
-      log "setup        : pending-reboot; $SETUP_SENTENCE" ;;
-    refused)        log "setup        : refused ($SETUP_REASON); $SETUP_SENTENCE" ;;
-    helper-failed)  log "setup        : unknown; $SETUP_SENTENCE" ;;
-    install-failed) log "setup        : install-failed; $(install_failed_note)" ;;
-    configuring)    log "setup        : configuring; $(configuring_note)" ;;
+      [[ -n "$SETUP_SENTENCE" ]] || SETUP_SENTENCE="no $PREPARED_MARKER"
+      log "setup=pending-reboot, $SETUP_SENTENCE" ;;
+    refused)        log "setup=refused ($SETUP_REASON), $SETUP_SENTENCE" ;;
+    helper-failed)  log "setup=unknown, $SETUP_SENTENCE" ;;
+    install-failed) log "setup=install-failed, $(install_failed_note)" ;;
+    configuring)    log "setup=configuring, $(configuring_note)" ;;
   esac
-  log "gapps        : $(gapps_status_line)"
-  log "aurora       : $(aurora_status_line)"
+  log "gapps=$(gapps_status_line)"
+  log "aurora=$(aurora_status_line)"
   local labels; labels=$(host_labels_status)
-  [[ -n "$labels" ]] && log "host labels  : $labels"
-  [[ -s "$HOST_MODE_KEPT" ]] && log "host mode    : kept; $(sed -n '1s/^# //p' "$HOST_MODE_KEPT")"
+  [[ -n "$labels" ]] && log "host_labels=$labels"
+  [[ -s "$HOST_MODE_KEPT" ]] && log "host_mode=kept, $(sed -n '1s/^# //p' "$HOST_MODE_KEPT")"
   local refusal_now=""
   case "$setup" in
     refused|helper-failed|pending-reboot) ;;
     *) refusal_now=$(boot_refusal_status) ;;
   esac
-  [[ -n "$refusal_now" ]] && log "this boot    : $refusal_now"
+  [[ -n "$refusal_now" ]] && log "boot_refusal=$refusal_now"
 
   if (( ! running )); then
-    log "boot         : not running; last boot log $(instance_boot_log "$RHIZO_SANDBOX_ID")"
+    log "boot=not running, boot log $(instance_boot_log "$RHIZO_SANDBOX_ID")"
   elif [[ ! -r "$PROBE_CLIENT" ]]; then
-    log "boot         : no $PROBE_CLIENT"
+    log "boot=unknown, no $PROBE_CLIENT"
   else
     local bc; bc=$(android_sh "getprop sys.boot_completed" 10 2>&1)
     bc="${bc//$'\n'/ }"
     if [[ "${bc//[[:space:]]/}" == 1 ]]; then
-      log "boot         : sys.boot_completed=1"
+      log "sys.boot_completed=1"
     else
-      log "boot         : sys.boot_completed reads '${bc:0:200}', not 1"
+      log "sys.boot_completed is '${bc:0:200}', not 1"
     fi
   fi
 
@@ -1794,7 +1767,7 @@ print(json.dumps({
 
 DOCTOR_ISSUES=0
 DOCTOR_WARNINGS=0
-# test whether a unix socket path listens
+# return whether /proc/net/unix lists a listening socket at a path
 unix_socket_listening() {
   awk -v p="$1" 'NR > 1 && $4 == "00010000" && $8 == p { found = 1 } END { exit !found }' "$PROC_NET_UNIX"
 }
@@ -1806,10 +1779,10 @@ report() {
     fail) DOCTOR_ISSUES=$((DOCTOR_ISSUES + 1)) ;;
     warn) DOCTOR_WARNINGS=$((DOCTOR_WARNINGS + 1)) ;;
   esac
-  log "  $name: $status -- $*"
+  log "  $name=$status $*"
 }
 
-# report the host flavor and architecture
+# check host_flavor and uname -m
 check_platform() {
   local ubuntu_on="x86_64 aarch64" cachyos_on="x86_64" flavor arch
   arch=$(uname -m)
@@ -1819,173 +1792,170 @@ check_platform() {
   elif [[ "$flavor" == cachyos && " $cachyos_on " == *" $arch "* ]]; then
     report platform ok "CachyOS $arch"
   elif [[ "$flavor" == ubuntu ]]; then
-    report platform fail "ubuntu 24.04 $arch is unsupported; Rhizo targets Ubuntu 24.04 on ${ubuntu_on/ / or }"
+    report platform fail "Ubuntu 24.04 on $arch, not ${ubuntu_on/ / or }"
   else
-    report platform fail "${flavor#unsupported:} $arch is unsupported; Rhizo targets Ubuntu 24.04 on" \
-      "${ubuntu_on/ / or } and CachyOS on $cachyos_on"
+    report platform fail "${flavor#unsupported:} $arch, not Ubuntu 24.04 on ${ubuntu_on/ / or } or CachyOS on $cachyos_on"
   fi
 }
-# report whether the kernel config sets CONFIG_SECURITY_SELINUX=y
+# check the kernel config for CONFIG_SECURITY_SELINUX=y
 check_selinux_kconfig() {
   local src err rc=0
   if ! src=$(host_kconfig_source 2>&1); then
-    report selinux-kconfig fail "$src: cannot confirm CONFIG_SECURITY_SELINUX=y"
+    report selinux-kconfig fail "host_kconfig_source failed ($src)"
     return
   fi
   err=$(host_kconfig_has SECURITY_SELINUX 2>&1) || rc=$?
   case $rc in
     0) report selinux-kconfig ok "CONFIG_SECURITY_SELINUX=y in $src" ;;
     1) report selinux-kconfig fail "$src does not set CONFIG_SECURITY_SELINUX=y" ;;
-    *) report selinux-kconfig fail "cannot read $src${err:+ (${err//$'\n'/; })}" ;;
+    *) report selinux-kconfig fail "failed to read $src${err:+ (${err//$'\n'/; })}" ;;
   esac
 }
-# report whether selinuxfs is mounted
+# check whether selinuxfs is mounted
 check_selinuxfs() {
   local mode
-  mode=$(selinux_mode) || { report selinuxfs fail "cannot read the SELinux mode (see above)"; return; }
+  mode=$(selinux_mode) || { report selinuxfs fail "selinux_mode failed"; return; }
   if [[ "$mode" == namespace ]]; then
-    report selinuxfs skip "namespace mode: Android mounts selinuxfs in its namespace"
+    report selinuxfs skip "Android mounts selinuxfs in Android's SELinux namespace"
     return
   fi
   local lsm; lsm=$(cat "$RHIZO_LSM_FILE" 2>/dev/null)
   [[ ",$lsm," == *",selinux,"* ]] || return 0
   if [[ -e "$SELINUX_ENFORCE_FILE" ]]; then report selinuxfs ok "mounted at /sys/fs/selinux"
-  else report selinuxfs fail "selinux is an active LSM and /sys/fs/selinux is not mounted:" \
-         "see systemctl status rhizo-selinuxfs.service"; fi
+  else report selinuxfs fail "selinux is an active LSM and /sys/fs/selinux is not mounted"; fi
 }
-# report the host render node
+# check the host render node
 check_render_node() {
   local line why dri
-  local tail_why=("devices.dri is on and needs a render node: install a GPU driver, or run 'sudo rhizo gpu off'")
   dri=$(read_dri 2>/dev/null) || dri=True
   if [[ "$dri" == Error:* ]]; then
-    report render-node fail "cannot read devices.dri: ${dri#Error: }; every start is refused (gpu_driver_refused=host-policy-error)"
+    report render-node fail "failed to read devices.dri (${dri#Error: }), gpu_driver_refused=host-policy-error"
     return
   fi
   if [[ "$dri" == False ]]; then
-    report render-node skip "devices.dri is off: Android renders in software"
+    report render-node skip "devices.dri is off"
     return
   fi
   if ! line=$(bash "$GPU_RESOLVER" --node --env-file "$ETC_RHIZO/androidd.env" 2>/dev/null); then
     why=$(bash "$GPU_RESOLVER" --node --env-file "$ETC_RHIZO/androidd.env" 2>&1 >/dev/null | tail -1)
-    report render-node fail "${why#*detect-gpu-driver: };" "${tail_why[@]}"
+    report render-node fail "${why#*detect-gpu-driver: }, devices.dri is on"
   elif [[ -c "${line%% *}" ]]; then report render-node ok "${line%% *} (${line##* })"
-  else report render-node fail "no ${line%% *};" "${tail_why[@]}"; fi
+  else report render-node fail "no ${line%% *}, devices.dri is on"; fi
 }
-# report stream.enabled with devices.dri off
+# check stream.enabled against devices.dri
 check_stream_gpu() {
   local dri stream
   dri=$(read_dri 2>/dev/null) || return 0
   [[ "$dri" == False ]] || return 0
   stream=$(read_capability stream.enabled 2>/dev/null) || return 0
   [[ "$stream" == True ]] || return 0
-  report stream warn "stream.enabled is on and devices.dri is off: each start withholds the stream (stream_refused=devices-dri-off)"
+  report stream warn "stream.enabled is on and devices.dri is off, stream_refused=devices-dri-off"
 }
-# report the first swap device
+# check /proc/swaps for a swap device
 check_swap() {
   local dev
   if ! dev=$(awk 'NR > 1 {print $1; exit}' "$PROC_SWAPS" 2>&1); then
-    report swap warn "cannot read $PROC_SWAPS: $dev"
+    report swap warn "failed to read $PROC_SWAPS ($dev)"
   elif [[ -n "$dev" ]]; then report swap ok "$dev"
   else report swap warn "no swap device"; fi
 }
-# report a bootloader read failure
+# log a bootloader read failure
 bootloader_unread() {
   local why="${2//$'\n'/; }"
   if (( $1 == 2 && EUID != 0 )); then
-    report bootloader warn "$why: run 'sudo rhizo doctor' to check the bootloader config"
+    report bootloader warn "$why"
   else
     report bootloader fail "$why"
   fi
 }
-# report the bootloader's rhizo cmdline tokens
+# check the bootloader for rhizo cmdline tokens
 check_bootloader() {
   local kind own gen missing over rtok eff src why=""
   kind=$(bootloader_kind 2>&1) || { bootloader_unread $? "$kind"; return; }
   own=$(bootloader_own_tokens "$kind" 2>&1) || { bootloader_unread $? "$own"; return; }
   if [[ -z "$own" ]]; then
-    report bootloader warn "rhizo's cmdline tokens are not configured: run 'rhizo install'"
+    report bootloader warn "no rhizo cmdline token in the bootloader config"
     return
   fi
   gen=$(bootloader_generated "$kind" 2>&1) || { bootloader_unread $? "$gen"; return; }
   missing=$(bootloader_missing "$kind" "${own//$'\n'/ }" 2>&1) || { bootloader_unread $? "$missing"; return; }
-  if [[ -n "$missing" ]]; then report bootloader warn "$kind: $gen lacks:$missing; run 'rhizo install'"; return; fi
+  if [[ -n "$missing" ]]; then report bootloader warn "$kind $gen has no$missing"; return; fi
   if [[ "$(host_flavor)" != ubuntu ]]; then
     over=$(bootloader_overridden "$kind" "${own//$'\n'/ }" 2>&1) || { bootloader_unread $? "$over"; return; }
     while read -r rtok eff; do
       [[ -n "$rtok" ]] || continue
       src=$(bootloader_token_source "$kind" "$eff" 2>&1) || { bootloader_unread $? "$src"; return; }
-      [[ -n "$src" ]] || src="the host's own configuration"
-      why+="${why:+; }$(bl_override_why "$rtok" "$eff" "$src")"
+      [[ -n "$src" ]] || src="the host configuration"
+      why+="${why:+ and }$(bl_override_why "$rtok" "$eff" "$src")"
     done <<<"$over"
   fi
-  if [[ -z "$why" ]]; then report bootloader ok "$kind: $gen carries every token"
-  else report bootloader warn "$kind: $gen carries every token, but ${why//$'\n'/ and }"; fi
+  if [[ -z "$why" ]]; then report bootloader ok "$kind $gen has the rhizo cmdline tokens"
+  else report bootloader warn "$kind $gen has the rhizo cmdline tokens, ${why//$'\n'/ and }"; fi
 }
-# report whether SELinux is active
+# check whether selinux is the active LSM
 check_selinux_active() {
   local mode
-  mode=$(selinux_mode) || { report selinux-active fail "cannot read the SELinux mode (see above)"; return; }
+  mode=$(selinux_mode) || { report selinux-active fail "selinux_mode failed"; return; }
   if [[ "$mode" == namespace ]]; then
     check_selinux_namespace
     return
   fi
   local lsm; lsm=$(cat "$RHIZO_LSM_FILE" 2>/dev/null)
   if [[ ",$lsm," != *",selinux,"* ]]; then
-    report selinux-active warn "selinux is not the active LSM (lsm=${lsm:-<securityfs not mounted>}): run 'rhizo install' and reboot"
+    report selinux-active warn "selinux is not the active LSM (lsm=${lsm:-<securityfs not mounted>})"
   elif [[ "$(host_flavor)" != ubuntu ]] && bl_lsm_bpf_first "$lsm"; then
-    report selinux-active fail "bpf precedes selinux in the active LSM list ($lsm): run 'rhizo install' and reboot"
+    report selinux-active fail "bpf precedes selinux in the active LSM list ($lsm)"
   else
     report selinux-active ok "selinux is the active LSM (lsm=$lsm, enforce=$(cat /sys/fs/selinux/enforce 2>/dev/null || echo '?'))"
   fi
 }
 
-# report the SELinux namespace mode state
+# check the SELinux namespace mode state
 check_selinux_namespace() {
   local helper="$LIB_DIR/rhizo-selinux-mode" env=(--env-file "$ETC_RHIZO/androidd.env") mode why
   IFS=$'\t' read -r mode why <<<"$("$helper" "${env[@]}" --mode-and-why)"
   case "$mode" in
     namespace)
-      report selinux-active ok "SELinux namespace mode: kernel $(uname -r), Landlock ABI $("$helper" --landlock-abi)"
+      report selinux-active ok "SELinux namespace mode, kernel $(uname -r), Landlock ABI $("$helper" --landlock-abi)"
       local host_state host_rc=0
       host_state=$("$helper" --host-state) || host_rc=$?
       if [[ $host_rc -eq 0 && -n "$host_state" ]]; then
-        report host-selinux ok "host SELinux $host_state: Rhizo leaves it as found"
+        report host-selinux ok "host SELinux $host_state"
       else
         report host-selinux warn "$helper --host-state exited $host_rc${host_state:+ printing '$host_state'}"
       fi ;;
     refuse:kernel-has-no-selinux-namespaces)
       report selinux-active warn "$why ($mode)" ;;
     *)
-      report selinux-active fail "${why:-$helper named no reason} (${mode:-no answer from $helper})" ;;
+      report selinux-active fail "${why:-$helper printed no reason} (${mode:-$helper printed no mode})" ;;
   esac
 }
 
-# report rhizo-policy.service's state
+# check rhizo-policy.service
 check_policy_unit() {
   local mode
-  mode=$(selinux_mode) || { report policy-unit fail "cannot read the SELinux mode (see above)"; return; }
+  mode=$(selinux_mode) || { report policy-unit fail "selinux_mode failed"; return; }
   if [[ "$mode" == namespace ]]; then
-    report policy-unit skip "namespace mode: the host loads no policy"
+    report policy-unit skip "no host policy in SELinux namespace mode"
     return
   fi
   if ! command -v systemctl >/dev/null 2>&1; then
-    report policy-unit warn "no systemctl: cannot read rhizo-policy.service's state"
+    report policy-unit warn "no systemctl"
     return
   fi
   local enabled; enabled=$(systemctl is-enabled rhizo-policy.service 2>/dev/null)
   case "$enabled" in
     ""|not-found)
-      report policy-unit warn "rhizo-policy.service is not installed: run 'rhizo install'"
+      report policy-unit warn "rhizo-policy.service is not installed"
       return
       ;;
     masked|masked-runtime)
-      report policy-unit warn "rhizo-policy.service is $enabled ('$(policy_status_line)', enforce=$(cat /sys/fs/selinux/enforce 2>/dev/null || echo '?')): run 'systemctl unmask rhizo-policy.service' and reboot"
+      report policy-unit warn "rhizo-policy.service is $enabled ('$(policy_status_line)', enforce=$(cat /sys/fs/selinux/enforce 2>/dev/null || echo '?'))"
       return
       ;;
   esac
   if [[ ! -e "$SELINUX_ENFORCE_FILE" ]]; then
-    report policy-unit warn "SELinux is not the active LSM on this boot (no $SELINUX_ENFORCE_FILE): rhizo-policy.service skipped"
+    report policy-unit warn "SELinux is not the active LSM (no $SELINUX_ENFORCE_FILE)"
     return
   fi
   local state; state=$(systemctl is-active rhizo-policy.service 2>/dev/null)
@@ -1997,13 +1967,13 @@ check_policy_unit() {
       if grep -qs '^RHIZO_PERMISSIVE=1' /etc/rhizo/androidd.env 2>/dev/null; then
         report policy-unit ok "rhizo-policy.service is active under RHIZO_PERMISSIVE=1 ('$pline', enforce=$enforce)"
       elif [[ "$pline" == loaded-at-boot* && "$enforce" == 1 ]]; then
-        report policy-unit ok "rhizo-policy.service is active: $pline, enforce=$enforce"
+        report policy-unit ok "rhizo-policy.service is active, $pline, enforce=$enforce"
       else
-        report policy-unit fail "rhizo-policy.service is active and loaded no verified policy this boot ('$pline', enforce=$enforce): see /var/log/rhizo/policy.log"
+        report policy-unit fail "rhizo-policy.service is active with no verified policy ('$pline', enforce=$enforce)"
       fi
       ;;
     failed)
-      report policy-unit fail "rhizo-policy.service failed: no Android policy loaded at boot; see /var/log/rhizo/policy.log"
+      report policy-unit fail "rhizo-policy.service failed"
       ;;
     *)
       report policy-unit fail "rhizo-policy.service is '$state' and '$enabled', not active"
@@ -2011,85 +1981,83 @@ check_policy_unit() {
   esac
 }
 
-# report the account with uid 1000
+# check the uid 1000 account
 check_uid1000() {
   local name; name=$(getent passwd 1000 2>/dev/null | cut -d: -f1)
   if [[ -z "$name" ]]; then
-    report uid-1000 ok "free: 'rhizo install' creates a system account"
+    report uid-1000 ok "no account at uid 1000"
   else
     report uid-1000 ok "'$name' runs rhizo-app-events.service"
   fi
 }
-# report free space on /
+# check free space on /
 check_disk_space() {
   local free_kb free_gb; free_kb=$(df -Pk / | awk 'NR==2{print $4}')
   free_gb=$((free_kb / 1024 / 1024))
   if (( free_kb >= 8 * 1024 * 1024 )); then
     report disk-space ok "${free_gb}GiB free on /"
   else
-    report disk-space warn "${free_gb}GiB free on /; the GSI, prepared tree and data template need 8GiB"
+    report disk-space warn "${free_gb}GiB free on /, below 8GiB"
   fi
 }
-# report the GSI trees under GSI_ROOT
+# check for GSI trees under GSI_ROOT
 check_gsi_tree() {
   shopt -s nullglob
   local trees=("$GSI_ROOT"/gsi_system*)
   shopt -u nullglob
   if (( ${#trees[@]} )); then
-    report gsi-tree ok "${#trees[@]} tree(s) under $GSI_ROOT: ${trees[*]}"
+    report gsi-tree ok "${trees[*]}"
   else
-    report gsi-tree warn "no GSI tree under $GSI_ROOT: run 'rhizo prepare'"
+    report gsi-tree warn "no GSI tree under $GSI_ROOT"
   fi
 }
-# report what the running kernel lacks
+# run kernel-check.sh
 check_kernel() {
   local out
   if out=$("$TOOLS_DIR/kernel-check.sh" 2>&1); then
     report kernel ok "$(uname -r) has built-in binder, /dev/ashmem and /proc/config.gz"
   else
-    report kernel warn "${out:-kernel-check.sh failed with no message}"
+    report kernel warn "${out:-kernel-check.sh failed}"
   fi
 }
-# report whether the running kernel's module tree exists
+# check for the module tree of uname -r
 check_kernel_modules_tree() {
   local kver; kver=$(uname -r)
   if [[ -d "$KERNEL_MODULES_ROOT/$kver" ]]; then report kernel-modules-tree ok "$KERNEL_MODULES_ROOT/$kver"
-  else report kernel-modules-tree warn "no $KERNEL_MODULES_ROOT/$kver: reboot into the installed kernel"; fi
+  else report kernel-modules-tree warn "no $KERNEL_MODULES_ROOT/$kver"; fi
 }
-# report the payload setup state
+# check the payload setup state
 check_setup() {
   load_setup_state
   case "$SETUP_STATE" in
-    done)           report setup ok "rhizo-prepare.service finished this payload's setup ($(tr '\n' ' ' < "$PREPARED_MARKER" 2>/dev/null))" ;;
-    pending)        report setup warn "setup has not finished; see systemctl status rhizo-prepare.service" ;;
-    pending-reboot) report setup warn "reboot to finish the install or upgrade" ;;
-    refused)        report setup warn "refused ($SETUP_REASON): $SETUP_SENTENCE" ;;
+    done)           report setup ok "rhizo-prepare.service wrote $PREPARED_MARKER ($(tr '\n' ' ' < "$PREPARED_MARKER" 2>/dev/null))" ;;
+    pending)        report setup warn "rhizo-prepare.service is activating" ;;
+    pending-reboot) report setup warn "no $PREPARED_MARKER" ;;
+    refused)        report setup warn "refused ($SETUP_REASON), $SETUP_SENTENCE" ;;
     helper-failed)  report setup fail "$SETUP_SENTENCE" ;;
     install-failed) report setup fail "$(install_failed_note)" ;;
     configuring)    report setup warn "$(configuring_note)" ;;
   esac
 }
 
-# report Google's apps' state
+# check the gapps state
 check_gapps() {
   local release dir
   if [[ ! -e "$GAPPS_STATE/enabled" ]]; then
-    report gapps skip "Google's apps are off ('sudo rhizo gapps enable' fetches them)"
+    report gapps skip "Google's apps are off"
     return
   fi
   release=$(configured_release)
   dir="$GAPPS_STATE/$release/current"
   if [[ ! -e "$dir" ]]; then
-    report gapps fail "enabled with no payload for $release: every start is refused; run 'sudo rhizo gapps enable'" \
-                      "or 'sudo rhizo gapps disable'"
+    report gapps fail "enabled with no payload for $release"
   elif /usr/bin/python3 -I "$(apps_dir)/store_payload.py" verify "$dir" >/dev/null 2>&1; then
     report gapps ok "enabled for $release, payload verified ($(readlink -f -- "$dir"))"
   else
-    report gapps fail "enabled and $release's payload fails verification: every start is refused; run" \
-                      "'sudo rhizo gapps enable' or 'sudo rhizo gapps disable'"
+    report gapps fail "enabled and store_payload.py verify $dir failed"
   fi
 }
-# report Aurora Store's state
+# check the Aurora Store state
 check_aurora() {
   local policy dir
   policy=$(aurora_policy)
@@ -2098,18 +2066,18 @@ check_aurora() {
     off) report aurora skip "apps.aurora is off" ;;
     on)
       if [[ -n "$dir" ]]; then report aurora ok "apps.aurora is on, staged from $dir"
-      else report aurora warn "apps.aurora is on and Aurora Store is not fetched: run 'sudo rhizo aurora on'"; fi ;;
-    *) report aurora warn "cannot read apps.aurora through $LIB_DIR/sandbox/capabilities.py" ;;
+      else report aurora warn "apps.aurora is on and Aurora Store is not fetched"; fi ;;
+    *) report aurora warn "failed to read apps.aurora" ;;
   esac
 }
 
-# report package database and apt timer health
+# check the package database and apt timers
 check_apt_health() {
   if [[ "$(host_flavor)" == cachyos ]]; then
     local out rc
     out=$(pacman -Dk 2>&1); rc=$?
-    if (( rc == 0 )); then report pkg-health ok "pacman -Dk reports a consistent package database"
-    else report pkg-health fail "pacman -Dk: $(tr '\n' ' ' <<<"$out" | cut -c1-200)"; fi
+    if (( rc == 0 )); then report pkg-health ok "pacman -Dk exited 0"
+    else report pkg-health fail "pacman -Dk failed ($(tr '\n' ' ' <<<"$out" | cut -c1-200))"; fi
     return
   fi
   if command -v dpkg >/dev/null 2>&1; then
@@ -2119,11 +2087,11 @@ check_apt_health() {
     local audit_stderr; audit_stderr=$(cat "$audit_err" 2>/dev/null)
     rm -f "$audit_err"
     if (( audit_rc > 1 )) || [[ -n "$audit_stderr" ]]; then
-      report apt-health fail "dpkg --audit could not be trusted (rc=$audit_rc stderr='$(tr '\n' ' ' <<<"$audit_stderr" | cut -c1-200)')"
+      report apt-health fail "dpkg --audit failed (rc=$audit_rc stderr='$(tr '\n' ' ' <<<"$audit_stderr" | cut -c1-200)')"
     elif [[ -z "$audit" ]]; then
-      report apt-health ok "dpkg --audit reports nothing (no half-installed or unconfigured packages)"
+      report apt-health ok "dpkg --audit printed nothing"
     else
-      report apt-health fail "dpkg --audit is not empty: $(tr '\n' ' ' <<<"$audit" | cut -c1-200)"
+      report apt-health fail "dpkg --audit printed $(tr '\n' ' ' <<<"$audit" | cut -c1-200)"
     fi
   else
     report apt-health warn "no dpkg in PATH"
@@ -2138,43 +2106,43 @@ check_apt_health() {
       esac
     done
     if (( ${#masked[@]} )); then
-      report apt-timers warn "${masked[*]} masked: security updates are off"
+      report apt-timers warn "${masked[*]} masked"
     else
       report apt-timers ok "apt-daily.timer and apt-daily-upgrade.timer are not masked"
     fi
   else
-    report apt-timers warn "no systemctl: cannot read apt-daily*.timer state"
+    report apt-timers warn "no systemctl"
   fi
 }
 
-# report rhizo-server-idle.service state
+# check rhizo-server-idle.service
 check_idle_detector() {
   local idle_stop_s
   idle_stop_s=$(read_capability server.idle_stop_s 2>/dev/null) || idle_stop_s=600
   if [[ "$idle_stop_s" == 0 ]]; then
-    report idle-detector ok "server.idle_stop_s=0: idle stop is off"
+    report idle-detector ok "server.idle_stop_s=0"
     return
   fi
   if ! command -v systemctl >/dev/null 2>&1; then
-    report idle-detector warn "no systemctl: cannot read $SERVER_IDLE_UNIT's state"
+    report idle-detector warn "no systemctl"
     return
   fi
   if [[ "$(systemctl is-active androidd.service 2>/dev/null)" != active ]]; then
-    report idle-detector warn "androidd.service is not running: $SERVER_IDLE_UNIT not checked"
+    report idle-detector warn "androidd.service is not running"
     return
   fi
   local idle_state; idle_state=$(systemctl is-active "$SERVER_IDLE_UNIT" 2>/dev/null)
   if [[ "$idle_state" == active ]]; then
-    report idle-detector ok "$SERVER_IDLE_UNIT is active: idle_stop_s=$idle_stop_s"
+    report idle-detector ok "$SERVER_IDLE_UNIT is active, idle_stop_s=$idle_stop_s"
   else
-    report idle-detector fail "$SERVER_IDLE_UNIT is '${idle_state:-<none>}', not active, with androidd.service running: check nf_conntrack_netlink, then run 'systemctl restart $SERVER_IDLE_UNIT'"
+    report idle-detector fail "$SERVER_IDLE_UNIT is '${idle_state:-<none>}', not active, with androidd.service running"
   fi
 }
 
-# report each desktop service state
+# check the desktop services
 check_desktop_daemons() {
   if ! command -v systemctl >/dev/null 2>&1; then
-    report desktop-daemons warn "no systemctl: cannot read the desktop services' state"
+    report desktop-daemons warn "no systemctl"
     return
   fi
   local androidd_active=0
@@ -2188,7 +2156,7 @@ check_desktop_daemons() {
     case "$state" in
       masked|masked-runtime)
         if [[ "$profile" == server ]]; then
-          report "$unit" ok "masked by the server profile (rhizo.profile=server)"
+          report "$unit" ok "masked with rhizo.profile=server"
         else
           report "$unit" fail "is masked under rhizo.profile=${profile:-<unreadable>}, not server"
         fi
@@ -2200,21 +2168,21 @@ check_desktop_daemons() {
       audio_out=$(read_capability audio.out 2>/dev/null) || audio_out=True
       audio_in=$(read_capability audio.in 2>/dev/null) || audio_in=True
       if [[ "$audio_out" != True && "$audio_in" != True ]]; then
-        report "$unit" ok "audio.out and audio.in are off: the unit's ExecCondition skips it"
+        report "$unit" ok "audio.out and audio.in are off"
         continue
       fi
     fi
     if [[ "$unit" == rhizo-camerad.service ]]; then
       local camera; camera=$(read_capability devices.camera 2>/dev/null) || camera=True
       if [[ "$camera" != True ]]; then
-        report "$unit" ok "devices.camera is off: the unit's ExecCondition skips it"
+        report "$unit" ok "devices.camera is off"
         continue
       fi
     fi
     if [[ "$unit" == rhizo-locationd.service ]]; then
       local location; location=$(read_capability devices.location 2>/dev/null) || location=True
       if [[ "$location" != True ]]; then
-        report "$unit" ok "devices.location is off: the unit's ExecCondition skips it"
+        report "$unit" ok "devices.location is off"
         continue
       fi
     fi
@@ -2222,15 +2190,15 @@ check_desktop_daemons() {
       local gate_rc=0
       "$TOOLS_DIR/capability-allowed.sh" --any $DESK_BRIDGE_CAPABILITIES >/dev/null 2>&1 || gate_rc=$?
       if (( gate_rc == 1 )); then
-        report "$unit" ok "$DESK_BRIDGE_CAPABILITIES are all off: the unit's ExecCondition skips it"
+        report "$unit" ok "$DESK_BRIDGE_CAPABILITIES are off"
         continue
       elif (( gate_rc != 0 )); then
-        report "$unit" fail "$TOOLS_DIR/capability-allowed.sh --any $DESK_BRIDGE_CAPABILITIES exited $gate_rc"
+        report "$unit" fail "$TOOLS_DIR/capability-allowed.sh --any $DESK_BRIDGE_CAPABILITIES failed with exit status $gate_rc"
         continue
       fi
     fi
     if (( ! androidd_active )); then
-      report "$unit" warn "androidd.service is not running: $unit not checked"
+      report "$unit" warn "androidd.service is not running"
       continue
     fi
     local unit_state; unit_state=$(systemctl is-active "$unit" 2>/dev/null)
@@ -2244,33 +2212,33 @@ check_desktop_daemons() {
   local owner uid
   owner=$(cat "$ETC_RHIZO/desktop-user" 2>/dev/null || true)
   if [[ -z "$owner" ]]; then
-    report pipewire-socket warn "no $ETC_RHIZO/desktop-user: PipeWire socket not checked"
+    report pipewire-socket warn "no $ETC_RHIZO/desktop-user"
     return
   fi
   uid=$(id -u "$owner" 2>/dev/null || true)
   if [[ -z "$uid" ]]; then
-    report pipewire-socket warn "'$owner' has no uid: PipeWire socket not checked"
+    report pipewire-socket warn "'$owner' has no uid"
     return
   fi
   if unix_socket_listening "/run/user/$uid/pipewire-0"; then
-    report pipewire-socket ok "/run/user/$uid/pipewire-0 present for '$owner'"
+    report pipewire-socket ok "/run/user/$uid/pipewire-0 is listening for '$owner'"
   elif (( audiod_active )); then
     report pipewire-socket fail "/run/user/$uid/pipewire-0 absent for '$owner' with rhizo-audiod.service active"
   else
-    report pipewire-socket warn "/run/user/$uid/pipewire-0 absent for '$owner'; rhizo-audiod.service is not active"
+    report pipewire-socket warn "/run/user/$uid/pipewire-0 absent for '$owner' and rhizo-audiod.service is not active"
   fi
 }
 
-# report a policy.conf parse error
+# check that policy.conf parses
 check_policy_parse() {
   local out rc
   out=$(policy_parse_error "$POLICY_CONF"); rc=$?
   if (( rc != 0 )); then
-    report policy-parse fail "the policy parser exited $rc (see above)"
+    report policy-parse fail "policy_parse_error failed with exit status $rc"
     return
   fi
   if [[ -n "$out" ]]; then
-    report policy-parse fail "$out: every optional capability is off"
+    report policy-parse fail "failed to parse $POLICY_CONF ($out)"
   else
     report policy-parse ok "$POLICY_CONF parses or is absent"
   fi
@@ -2278,7 +2246,6 @@ check_policy_parse() {
 
 # run the preflight checks and print counts
 cmd_doctor() {
-  log "checking this host for Rhizo's requirements"
   load_host_libs
   check_platform
   check_policy_parse
@@ -2305,8 +2272,8 @@ cmd_doctor() {
     local keys=0 adb
     [[ -r "$ADB_KEYS_FILE" ]] && keys=$(grep -cv '^[[:space:]]*$' "$ADB_KEYS_FILE" 2>/dev/null)
     adb=$(sandbox_adb_endpoint)
-    log "  adb endpoint: ${adb:-not running}"
-    log "  registered adb keys: ${keys:-0}"
+    log "  adb_endpoint=${adb:-not running}"
+    log "  adb_keys=${keys:-0}"
   fi
   check_desktop_daemons
   if (( DOCTOR_ISSUES > 0 )); then
@@ -2346,9 +2313,9 @@ PKG_LIST=""
 load_package_list() {
   local flag="${1:-}" out rc noise
   out=$(android_sh "pm list packages $flag" 30); rc=$?
-  (( rc == 0 )) || app_fail "pm list packages $flag exited $rc over $PROBE_SOCK: ${out:0:200}"
+  (( rc == 0 )) || app_fail "pm list packages $flag failed with exit status $rc (${out:0:200})"
   noise=$(grep -v '^package:' <<<"$out" | grep -v '^[[:space:]]*$')
-  [[ -z "$noise" ]] || app_fail "pm list packages $flag printed non-package output: ${noise:0:200}"
+  [[ -z "$noise" ]] || app_fail "pm list packages $flag printed non-package lines (${noise:0:200})"
   PKG_LIST=$(grep '^package:' <<<"$out" | sed 's/^package://' | sort)
 }
 
@@ -2370,7 +2337,7 @@ load_badging() {
   [[ -x "$TOOLS_DIR/aapt2" ]] \
     || app_fail "no executable $TOOLS_DIR/aapt2"
   BADGING=$("$TOOLS_DIR/aapt2" dump badging "$1" 2>&1); rc=$?
-  (( rc == 0 )) || app_fail "aapt2 dump badging $1 exited $rc: ${BADGING:0:300}"
+  (( rc == 0 )) || app_fail "aapt2 dump badging $1 failed with exit status $rc (${BADGING:0:300})"
 }
 
 # refuse a start before setup completes
@@ -2378,25 +2345,25 @@ refuse_start_without_setup() {
   local state; load_setup_state; state=$SETUP_STATE
   [[ "$state" == install-failed ]] && app_fail "$(install_failed_note)"
   [[ "$state" == configuring ]] && app_fail "$(configuring_note)"
-  [[ "$state" == refused ]] && app_fail "setup refused on this boot (refuse:$SETUP_REASON): $SETUP_SENTENCE"
-  [[ "$state" == helper-failed ]] && app_fail "setup state unknown: $SETUP_SENTENCE"
+  [[ "$state" == refused ]] && app_fail "setup refused on the current boot (refuse:$SETUP_REASON), $SETUP_SENTENCE"
+  [[ "$state" == helper-failed ]] && app_fail "setup state unknown ($SETUP_SENTENCE)"
   [[ "$state" == pending-reboot ]] || return 0
   if selinux_mode_is namespace; then
-    app_fail "setup is pending a reboot: reboot into the Rhizo kernel to finish the install or upgrade"
+    app_fail "setup is pending a reboot into the Rhizo kernel"
   fi
   if [[ "$(cat "$SELINUX_ENFORCE_FILE" 2>/dev/null)" == 1 ]]; then
-    app_fail "setup is pending a reboot: reboot to finish the upgrade"
+    app_fail "setup is pending a reboot with SELinux enforce=1"
   fi
-  app_fail "setup is pending a reboot: reboot to finish the install"
+  app_fail "setup is pending a reboot"
 }
 
 # check the SELinux mode helper result
 refuse_start_without_mode() {
   local helper="$LIB_DIR/rhizo-selinux-mode" env=(--env-file "$ETC_RHIZO/androidd.env") out mode why
-  out=$("$helper" "${env[@]}" --mode-and-why) || app_fail "cannot read this boot's SELinux mode from $helper (exit $?, see above)"
+  out=$("$helper" "${env[@]}" --mode-and-why) || app_fail "$helper --mode-and-why failed with exit status $?"
   IFS=$'\t' read -r mode why <<<"$out"
   [[ "$mode" == refuse:* ]] || return 0
-  app_fail "${why:-$helper refused this boot} ($mode)"
+  app_fail "${why:-$helper printed no reason} ($mode)"
 }
 
 # print RHIZO_PERMISSIVE from the instance env files
@@ -2425,23 +2392,22 @@ start_sandbox() {
   if [[ -z "$(sandbox_init_pid)" ]]; then
     state=$(systemctl is-active "$unit" 2>/dev/null)
     if [[ "$state" == activating ]]; then
-      log "$unit is already starting: waiting for it"
+      log "$unit is activating"
     else
       refuse_start_without_setup
       refuse_start_without_mode
       refuse_start_mid_switch
       systemctl start "$unit" \
-        || app_fail "$(policy_refusal_note "$unit")systemctl start $unit failed (unit state: $(systemctl is-active "$unit" 2>/dev/null))"
+        || app_fail "$(policy_refusal_note "$unit")systemctl start $unit failed (ActiveState=$(systemctl is-active "$unit" 2>/dev/null))"
     fi
   fi
   t0=$(date +%s)
   deadline=$(( t0 + 300 ))
-  log "waiting up to 300s for sys.boot_completed=1 from $unit over $PROBE_SOCK"
   while (( $(date +%s) < deadline )); do
     if (( ns )); then
-      verdict=$(start_verdict "$unit") || app_fail "cannot read the SELinux mode while waiting for $unit"
+      verdict=$(start_verdict "$unit") || app_fail "start_verdict $unit failed"
       [[ "$verdict" == refused:* ]] \
-        && app_fail "Android's SELinux namespace start was refused: ${verdict#refused:} ($unit is $(systemctl is-active "$unit" 2>/dev/null))"
+        && app_fail "SELinux namespace start refused (${verdict#refused:}), $unit is $(systemctl is-active "$unit" 2>/dev/null)"
       note=", SELinux namespace verdict ${verdict:-not yet written}"
     fi
     init=$(sandbox_init_pid)
@@ -2449,30 +2415,29 @@ start_sandbox() {
       out=$(android_sh "getprop sys.boot_completed" 10 2>&1)
       bc="${out//[[:space:]]/}"
       if [[ "$bc" == 1 ]] && { (( ! ns )) || start_verdict_ok "$verdict"; }; then
-        log "$unit reported sys.boot_completed=1 after $(( $(date +%s) - t0 ))s$note"
+        log "sys.boot_completed=1 from $unit after $(( $(date +%s) - t0 ))s$note"
         return 0
       fi
     else
       state=$(systemctl is-active "$unit" 2>/dev/null)
       [[ "$state" == inactive || "$state" == failed ]] \
-        && app_fail "$(policy_refusal_note "$unit")$unit went $state with no 'init second_stage': see journalctl -u $unit and /var/log/rhizo/supervisor.log"
+        && app_fail "$(policy_refusal_note "$unit")$unit is $state with no 'init second_stage'"
     fi
     sleep 1
   done
   [[ -n "$init" ]] \
-    || app_fail "$(policy_refusal_note "$unit")no 'init second_stage' 300s after the start ($unit is $(systemctl is-active "$unit" 2>/dev/null))"
+    || app_fail "$(policy_refusal_note "$unit")no 'init second_stage' 300s after systemctl start, $unit is $(systemctl is-active "$unit" 2>/dev/null)"
   (( ns )) && [[ "$bc" == 1 ]] \
-    && app_fail "Android reported sys.boot_completed=1 with SELinux namespace verdict '${verdict:-<none>}', not enforced, after 300s ($unit is $(systemctl is-active "$unit" 2>/dev/null))"
+    && app_fail "sys.boot_completed=1 with SELinux namespace verdict '${verdict:-<none>}', not enforced, after 300s, $unit is $(systemctl is-active "$unit" 2>/dev/null)"
   out="${out//$'\n'/ }"
   out="${out:-<none>}"
-  app_fail "init second_stage is running but sys.boot_completed never read 1 within 300s (last read '${out:0:200}', $unit is $(systemctl is-active "$unit" 2>/dev/null))"
+  app_fail "init second_stage is running and sys.boot_completed is '${out:0:200}', not 1, after 300s, $unit is $(systemctl is-active "$unit" 2>/dev/null)"
 }
 
 # start the selected instance and wait for boot
 cmd_start() {
   resolve_instance_selector "$@"
   start_sandbox
-  log "the sandbox is up and sys.boot_completed is 1"
 }
 
 # stop the selected instance unit
@@ -2487,16 +2452,14 @@ cmd_stop() {
     state=$(systemctl is-active "$unit" 2>/dev/null)
     case "$state" in
       ""|inactive|failed)
-        die "instance $RHIZO_SANDBOX_ID is not configured: no $ETC_RHIZO/instances/$RHIZO_SANDBOX_ID.env ('rhizo" \
-            "instance add $RHIZO_SANDBOX_ID' makes one)" ;;
+        die "no $ETC_RHIZO/instances/$RHIZO_SANDBOX_ID.env" ;;
     esac
     log "$unit is $state with no $ETC_RHIZO/instances/$RHIZO_SANDBOX_ID.env"
   fi
-  log "stopping $unit"
-  systemctl stop "$unit" || die "systemctl stop $unit failed (unit state: $(systemctl is-active "$unit" 2>/dev/null))"
+  systemctl stop "$unit" || die "systemctl stop $unit failed (ActiveState=$(systemctl is-active "$unit" 2>/dev/null))"
   state=$(systemctl is-active "$unit" 2>/dev/null)
   [[ "$state" == inactive || "$state" == failed ]] \
-    || die "systemctl stop $unit returned 0 but the unit is '${state:-<none>}', not inactive"
+    || die "$unit is '${state:-<none>}' after systemctl stop, not inactive"
   log "$unit is $state"
 }
 
@@ -2506,7 +2469,7 @@ cmd_app_list() {
   require_probe_client
   load_package_list -3; third="$PKG_LIST"
   load_package_list;    all="$PKG_LIST"
-  [[ -n "$all" ]] || app_fail "pm list packages named no package at all"
+  [[ -n "$all" ]] || app_fail "pm list packages printed no package"
   while IFS= read -r pkg; do
     [[ -n "$pkg" ]] || continue
     label=$(entry_label "$pkg")
@@ -2533,16 +2496,16 @@ remove_inbox_file() {
 # copy an APK into the sandbox inbox
 stage_into_inbox() {
   local src="$1" nonce label mode
-  [[ -r "$src" ]] || app_fail "cannot read $src"
+  [[ -r "$src" ]] || app_fail "failed to read $src"
   [[ -d "$INBOX_HOST_DIR" ]] \
-    || app_fail "no $INBOX_HOST_DIR: the sandbox has not booted"
+    || app_fail "no $INBOX_HOST_DIR"
   nonce=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
-  [[ ${#nonce} == 16 ]] || app_fail "could not read 8 random bytes for an inbox name"
-  mode=$(label_write_mode) || app_fail "cannot tell whether $src needs an inbox label"
+  [[ ${#nonce} == 16 ]] || app_fail "failed to read 8 bytes from /dev/urandom"
+  mode=$(label_write_mode) || app_fail "label_write_mode failed"
   label=-
   [[ "$mode" == namespace ]] && label="$INBOX_LABEL"
   /usr/bin/python3 "$LIB_DIR/inbox_stage.py" "$RUN_ROOT" "$nonce.apk" "$src" "$label" "$(stat -L -c %s -- "$src")" \
-    || app_fail "cannot stage $src into $INBOX_HOST_DIR/$nonce.apk"
+    || app_fail "failed to stage $src into $INBOX_HOST_DIR/$nonce.apk"
   INBOX_FILE="$INBOX_HOST_DIR/$nonce.apk"
   INBOX_SANDBOX_FILE="$INBOX_SANDBOX_DIR/$nonce.apk"
 }
@@ -2555,7 +2518,7 @@ cmd_app_install() {
     --from-inbox)
       INBOX_SANDBOX_FILE="${2:-}"
       [[ "$INBOX_SANDBOX_FILE" =~ ^/data/rhizo_inbox/[0-9a-f]{16}\.apk$ ]] \
-        || app_fail "--from-inbox takes a path the broker wrote, not '${2:-<empty>}'"
+        || app_fail "--from-inbox takes /data/rhizo_inbox/<16 hex digits>.apk, not '${2:-<empty>}'"
       INBOX_FILE="$INBOX_HOST_DIR/$(basename "$INBOX_SANDBOX_FILE")"
       [[ -r "$INBOX_FILE" ]] || app_fail "no $INBOX_FILE"
       ;;
@@ -2568,21 +2531,21 @@ cmd_app_install() {
   load_badging "$INBOX_FILE"
   local pkg label
   pkg=$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$BADGING" | head -1)
-  [[ -n "$pkg" ]] || app_fail "aapt2 dump badging named no package in $INBOX_FILE"
+  [[ -n "$pkg" ]] || app_fail "aapt2 dump badging printed no package for $INBOX_FILE"
   check_package_name "$pkg"
 
   load_package_list; local before="$PKG_LIST"
   local out rc
   out=$(android_sh "pm install -r --user 0 $INBOX_SANDBOX_FILE" 300); rc=$?
-  (( rc == 0 )) || app_fail "pm install exited $rc over $PROBE_SOCK: ${out:0:300}"
-  grep -qx 'Success' <<<"$out" || app_fail "pm install did not print a literal Success line: ${out:0:300}"
+  (( rc == 0 )) || app_fail "pm install failed with exit status $rc (${out:0:300})"
+  grep -qx 'Success' <<<"$out" || app_fail "pm install printed no Success line (${out:0:300})"
   load_package_list; local after="$PKG_LIST"
   grep -qxF "$pkg" <<<"$after" \
-    || app_fail "pm install printed Success but $pkg is not in pm list packages afterwards"
+    || app_fail "pm install printed Success and pm list packages has no $pkg"
   if grep -qxF "$pkg" <<<"$before"; then
     log "replaced the installed $pkg"
   else
-    log "newly present packages: $(comm -13 <(echo "$before") <(echo "$after") | tr '\n' ' ')"
+    log "pm list packages added $(comm -13 <(echo "$before") <(echo "$after") | tr '\n' ' ')"
   fi
 
   label=$(entry_label "$pkg")
@@ -2600,8 +2563,8 @@ cmd_app_remove() {
   load_package_list -3
   grep -qxF "$pkg" <<<"$PKG_LIST" || app_fail "$pkg is not a third-party package"
   out=$(android_sh "pm uninstall --user 0 $pkg" 120); rc=$?
-  (( rc == 0 )) || app_fail "pm uninstall exited $rc over $PROBE_SOCK: ${out:0:300}"
-  grep -qx 'Success' <<<"$out" || app_fail "pm uninstall did not print a literal Success line: ${out:0:300}"
+  (( rc == 0 )) || app_fail "pm uninstall failed with exit status $rc (${out:0:300})"
+  grep -qx 'Success' <<<"$out" || app_fail "pm uninstall printed no Success line (${out:0:300})"
   load_package_list
   if grep -qxF "$pkg" <<<"$PKG_LIST"; then
     app_fail "pm uninstall printed Success and $pkg is in pm list packages"
@@ -2623,7 +2586,7 @@ cmd_app() {
 }
 
 GAPPS_PACKAGES=(com.google.android.gms com.google.android.gsf com.android.vending)
-GAPPS_TERMS="Google's apps (Google Play Store, Google Play services) are Google's proprietary software, fetched from LiteGapps, a third party, under its terms. They are not part of Rhizo, Rhizo does not host them, and you are responsible for your right to use them."
+GAPPS_TERMS="Google's apps (Google Play Store, Google Play services) are Google's proprietary software, fetched from LiteGapps, a third party, under LiteGapps' terms. They are not part of Rhizo, Rhizo does not host them, and you are responsible for your right to use them."
 GAPPS_REGISTER_URL=https://www.google.com/android/uncertified
 GAPPS_GSF_DBS=(data/data/com.google.android.gms/databases/gservices.db
                data/data/com.google.android.gsf/databases/gservices.db)
@@ -2675,11 +2638,11 @@ aurora_fail() { local why="$1"; shift; log "$*"; echo "RHIZO_AURORA_FAILED reaso
 # append a line to the apps log
 gapps_log() {
   mkdir -p "$VAR_LOG" 2>/dev/null
-  printf '%s rhizo: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$VAR_LOG/gapps.log" 2>/dev/null
+  printf '%s [rhizo] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$VAR_LOG/gapps.log" 2>/dev/null
   return 0
 }
 
-# run fetch-app.sh and keep its result line
+# run fetch-app.sh and set FETCH_LINE
 run_fetch_app() {
   local fetch out rc
   fetch="$(apps_dir)/fetch-app.sh"
@@ -2695,7 +2658,7 @@ run_fetch_app() {
   [[ $rc -eq 0 && "$FETCH_LINE" == RHIZO_APP_FETCHED* ]]
 }
 
-# print a key's value from the fetch result line
+# print a key's value from FETCH_LINE
 fetch_field() { sed -n "s/.* $1=\([^ ]*\).*/\1/p" <<<"$FETCH_LINE"; }
 
 # print the packages of a list that pm lists
@@ -2703,7 +2666,7 @@ listed_packages() {
   local out rc p
   out=$(android_sh "pm list packages" 60); rc=$?
   if (( rc != 0 )); then
-    log "pm list packages exited $rc over $PROBE_SOCK: ${out:0:200}"
+    log "pm list packages failed with exit status $rc (${out:0:200})"
     return 1
   fi
   for p in "$@"; do
@@ -2723,7 +2686,7 @@ gms_running() {
   done
 }
 
-# show Google's apps' terms and take a typed y
+# log GAPPS_TERMS and read a typed y
 confirm_gapps_terms() {
   local reply
   log "$GAPPS_TERMS"
@@ -2752,12 +2715,12 @@ write_gapps_record() {
   fi
 }
 
-# turn gapps off again after a failed trial and exit
+# remove GAPPS_STATE/enabled, restart Android and exit 1
 gapps_rollback() {
-  log "Google's apps did not come up ($2): turning them off again"
+  log "gapps trial failed ($2)"
   rm -f "$GAPPS_STATE/enabled" \
-    || log "could not remove $GAPPS_STATE/enabled: run 'sudo rhizo gapps disable'"
-  restart_android || log "Android did not come back after turning Google's apps off: $ANDROID_BOOT_WHY"
+    || log "failed to remove $GAPPS_STATE/enabled"
+  restart_android || log "restart_android failed ($ANDROID_BOOT_WHY)"
   echo "RHIZO_GAPPS_FAILED reason=$1"
   exit 1
 }
@@ -2766,13 +2729,11 @@ gapps_rollback() {
 compile_gapps() {
   local p out rc
   for p in "${GAPPS_PACKAGES[@]}"; do
-    log "compiling $p (speed-profile)"
     out=$(android_sh "cmd package compile -m speed-profile -f $p" 900); rc=$?
     if (( rc == 0 )) && grep -qx 'Success' <<<"$out"; then
       log "compiled $p"
     else
-      log "warning: cmd package compile -m speed-profile -f $p did not print Success (exit $rc): ${out:0:200};" \
-          "Android compiles it in the background instead"
+      log "cmd package compile -m speed-profile -f $p printed no Success line, exit status $rc (${out:0:200})"
     fi
   done
 }
@@ -2792,43 +2753,36 @@ cmd_gapps_enable() {
   release=$(configured_release)
   if ! litegapps_pinned "$release"; then
     p=$(litegapps_pinned_releases)
-    gapps_refuse no-pin "Google's apps are not available on $release: LiteGapps has no payload pinned for it" \
-                        "in $pins, only for ${p// /, }; 'sudo rhizo gsi update --release <release>' switches Android's" \
-                        "release"
+    gapps_refuse no-pin "$pins has no LiteGapps pin for $release, only for ${p// /, }"
   fi
   confirm_gapps_terms "$assume"; rc=$?
   case $rc in
     0) ;;
-    2) gapps_refuse no-terminal "gapps enable needs a terminal to accept the terms on, or --yes: nothing fetched" ;;
-    *) gapps_refuse no-consent "the terms were not accepted: nothing fetched" ;;
+    2) gapps_refuse no-terminal "stdin is not a terminal and --yes is not set" ;;
+    *) gapps_refuse no-consent "terms not accepted" ;;
   esac
-  log "fetching LiteGapps' payload for $release"
   if ! run_fetch_app litegapps --release "$release"; then
     [[ "$FETCH_LINE" == RHIZO_APP_REFUSED* ]] \
-      && gapps_refuse "$(fetch_field reason)" "fetch-app.sh refused LiteGapps' payload for $release ($FETCH_LINE):" \
-                                              "nothing enabled"
-    gapps_fail "fetch-$(fetch_field reason)" "could not fetch LiteGapps' payload for $release ($FETCH_LINE):" \
-                                             "nothing enabled; see $VAR_LOG/gapps.log"
+      && gapps_refuse "$(fetch_field reason)" "fetch-app.sh litegapps --release $release refused ($FETCH_LINE)"
+    gapps_fail "fetch-$(fetch_field reason)" "fetch-app.sh litegapps --release $release failed ($FETCH_LINE)"
   fi
   log "LiteGapps' payload for $release is in $(fetch_field dir)"
-  write_gapps_record || gapps_fail record "could not write $GAPPS_STATE/enabled: nothing enabled"
-  log "recorded your acceptance in $GAPPS_STATE/enabled"
+  write_gapps_record || gapps_fail record "failed to write $GAPPS_STATE/enabled"
+  log "wrote $GAPPS_STATE/enabled"
   if ! android_running; then
-    log "Android is not running: its next start stages Google's apps for $release"
+    log "Android is not running"
     echo "RHIZO_GAPPS_ENABLED release=$release"
-    log "next: start Android ('rhizo start'), then run 'sudo rhizo gapps register' to register this device with Google"
     return 0
   fi
-  log "restarting Android to stage Google's apps for $release"
   if ! restart_android; then
     why=boot; detail=$ANDROID_BOOT_WHY
   elif ! listed=$(listed_packages "${GAPPS_PACKAGES[@]}"); then
-    why=probe; detail="pm list packages failed over $PROBE_SOCK"
+    why=probe; detail="pm list packages failed"
   else
     missing=""
     for p in "${GAPPS_PACKAGES[@]}"; do grep -qxF "$p" <<<"$listed" || missing+=" $p"; done
     if [[ -n "$missing" ]]; then
-      why=packages-missing; detail="pm does not list$missing"
+      why=packages-missing; detail="pm list packages has no$missing"
     elif ! gms_running 60; then
       why=gms-not-running; detail="no com.google.android.gms process within 60s of the boot"
     fi
@@ -2836,10 +2790,9 @@ cmd_gapps_enable() {
   [[ -z "$why" ]] || gapps_rollback "$why" "$detail"
   compile_gapps
   echo "RHIZO_GAPPS_ENABLED release=$release"
-  log "next: run 'sudo rhizo gapps register' to register this device with Google"
 }
 
-# check whether the host is denied an Android data path
+# return whether stat of a path fails with Permission denied
 host_denied() {
   local err
   [[ -e "$1" ]] && return 1
@@ -2847,22 +2800,22 @@ host_denied() {
   [[ "$err" == *"Permission denied"* ]]
 }
 
-# copy the GSF database out and print its android id
+# copy gservices.db and set GSF_ID_DEC and GSF_ID_HEX
 gsf_id_from_copy() {
   local db="$1" tmp out rc=0 f err
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/rhizo-gsf.XXXXXX") \
-    || { GSF_READ_WHY="cannot create a private directory for the GSF database copy"; return 1; }
+    || { GSF_READ_WHY="mktemp -d failed"; return 1; }
   chmod 0700 "$tmp"
   for f in "" -wal -shm; do
     [[ -f "$db$f" ]] || continue
     if ! err=$(cp -- "$db$f" "$tmp/gservices.db$f" 2>&1); then
       [[ "$err" == *"Permission denied"* ]] && rc=3
-      GSF_READ_WHY="cannot copy $db$f: $err"
+      GSF_READ_WHY="failed to copy $db$f ($err)"
     fi
   done
   if (( rc == 0 )) && [[ ! -s "$tmp/gservices.db" ]]; then
     rc=4
-    GSF_READ_WHY="the copy of $db is empty"
+    GSF_READ_WHY="$tmp/gservices.db is empty"
   fi
   if (( rc == 0 )); then
     out=$(/usr/bin/python3 -I "$(apps_dir)/store_payload.py" gsf-id "$tmp" 2>&1); rc=$?
@@ -2870,19 +2823,19 @@ gsf_id_from_copy() {
       read -r GSF_ID_DEC GSF_ID_HEX <<<"$(grep -E '^-?[0-9]+ [0-9a-f]+$' <<<"$out" | tail -1)"
       [[ "$GSF_ID_DEC" =~ ^-?[0-9]+$ ]] || { rc=1; GSF_READ_WHY="store_payload.py gsf-id printed '${out:0:200}', not '<decimal> <hex>'"; }
     elif (( rc != 2 )); then
-      GSF_READ_WHY="store_payload.py gsf-id exited $rc: ${out:0:200}"
+      GSF_READ_WHY="store_payload.py gsf-id failed with exit status $rc (${out:0:200})"
       rc=1
     fi
   fi
   rm -f -- "$tmp/gservices.db" "$tmp"/gservices.db-*
-  rmdir -- "$tmp" 2>/dev/null || log "could not remove $tmp"
+  rmdir -- "$tmp" 2>/dev/null || log "failed to remove $tmp"
   return "$rc"
 }
 
 GSF_READ_WHY=""
 # wait for the GSF database's android id
 read_gsf_id() {
-  local timeout="$1" deadline db rel rc logged=0 mode=""
+  local timeout="$1" deadline db rel rc mode=""
   deadline=$((SECONDS + timeout))
   GSF_ID_DEC="" GSF_ID_HEX="" GSF_READ_WHY=""
   mode=$(selinux_mode 2>/dev/null)
@@ -2895,15 +2848,11 @@ read_gsf_id() {
         (( rc == 3 )) && return 3
         if (( rc == 4 )) && [[ "$mode" == host ]]; then return 3; fi
       elif host_denied "$db"; then
-        GSF_READ_WHY="the host is denied $db"
+        GSF_READ_WHY="stat of $db failed with Permission denied"
         return 3
       fi
     done
     (( SECONDS < deadline )) || break
-    if (( ! logged )); then
-      log "waiting up to ${timeout}s for Google Services Framework to check in and write its ID"
-      logged=1
-    fi
     sleep 3
   done
   [[ -z "$GSF_READ_WHY" ]] || log "$GSF_READ_WHY"
@@ -2914,21 +2863,18 @@ read_gsf_id() {
 # print a registration failure and exit 1
 register_fail() { local why="$1"; shift; log "$*"; echo "RHIZO_GAPPS_REGISTER_FAILED reason=$why"; exit 1; }
 
-# exit naming why the host cannot read the GSF ID
+# exit 1 with the GSF ID read failure
 register_unreadable() {
   local mode
   mode=$(selinux_mode 2>/dev/null)
   [[ -z "$GSF_READ_WHY" ]] || log "$GSF_READ_WHY"
   if [[ "$mode" == host ]]; then
-    register_fail host-mode-unreadable "Android runs in host SELinux mode, where Android's policy keeps Rhizo from" \
-      "reading Google Services Framework's data, so Rhizo cannot read this device's GSF ID: switch to namespace" \
-      "mode (drop RHIZO_SELINUX_MODE=host from $ETC_RHIZO/androidd.env, run 'sudo rhizo install' and reboot)," \
-      "or read the ID with an app that shows it and register it at $GAPPS_REGISTER_URL yourself"
+    register_fail host-mode-unreadable "failed to read gservices.db in host SELinux mode"
   fi
-  register_fail unreadable "the host cannot read the gservices database under $RUN_ROOT/data/data (${GSF_READ_WHY:-denied}), so Rhizo cannot read this device's GSF ID"
+  register_fail unreadable "failed to read gservices.db under $RUN_ROOT/data/data (${GSF_READ_WHY:-denied})"
 }
 
-# load the desktop user and their session environment
+# set DESKTOP_RUN_USER and DESKTOP_RUN_ENV
 load_desktop_env() {
   local user uid home line
   user="${SUDO_USER:-}"
@@ -2963,12 +2909,12 @@ copy_to_desktop_clipboard() {
   elif desktop_env_has DISPLAY && command -v xclip >/dev/null 2>&1; then
     tool=(xclip -selection clipboard)
   else
-    gapps_log "no wl-copy with WAYLAND_DISPLAY or xclip with DISPLAY for $DESKTOP_RUN_USER: clipboard not set"
+    gapps_log "no wl-copy with WAYLAND_DISPLAY or xclip with DISPLAY for $DESKTOP_RUN_USER"
     return 1
   fi
   argv=(runuser -u "$DESKTOP_RUN_USER" -- env -i "${DESKTOP_RUN_ENV[@]}" "${tool[@]}")
   printf '%s' "$1" | timeout 10 "${argv[@]}" >/dev/null 2>&1; rc=$?
-  gapps_log "clipboard argv: ${argv[*]} exit=$rc"
+  gapps_log "clipboard argv=${argv[*]} exit=$rc"
   return "$rc"
 }
 
@@ -2981,7 +2927,7 @@ open_on_desktop() {
     opener=(xdg-open)
   fi
   argv=(runuser -u "$DESKTOP_RUN_USER" -- env -i "${DESKTOP_RUN_ENV[@]}" "${opener[@]}" "$url")
-  gapps_log "opener argv: ${argv[*]}"
+  gapps_log "opener argv=${argv[*]}"
   [[ -w "$VAR_LOG/gapps.log" ]] && out="$VAR_LOG/gapps.log"
   setsid -w "${argv[@]}" </dev/null >>"$out" 2>&1 &
   pid=$!
@@ -2991,7 +2937,7 @@ open_on_desktop() {
   done
   if kill -0 "$pid" 2>/dev/null; then
     disown "$pid"
-    gapps_log "opener pid $pid still running after 10s: left running"
+    gapps_log "opener pid $pid is still running after 10s"
     return 0
   fi
   wait "$pid"; rc=$?
@@ -3003,7 +2949,7 @@ open_on_desktop() {
 write_gsf_record() {
   local f="$GAPPS_STATE/registration"
   ( umask 077; printf 'id=%s\nhex=%s\nread=%s\n' "$GSF_ID_DEC" "$GSF_ID_HEX" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$f.tmp" ) \
-    && mv -f "$f.tmp" "$f" || log "could not record the GSF ID in $f"
+    && mv -f "$f.tmp" "$f" || log "failed to write $f"
 }
 
 # clear Google Play's data after a registration
@@ -3011,12 +2957,12 @@ gapps_register_done() {
   local p out rc before changed=0
   for p in com.android.vending com.google.android.gms; do
     out=$(android_sh "am force-stop $p" 30); rc=$?
-    (( rc == 0 )) || log "am force-stop $p exited $rc: ${out:0:200}"
+    (( rc == 0 )) || log "am force-stop $p failed with exit status $rc (${out:0:200})"
   done
   for p in com.android.vending com.google.android.gms; do
     out=$(android_sh "pm clear $p" 120); rc=$?
     { (( rc == 0 )) && grep -qx 'Success' <<<"$out"; } \
-      || register_fail clear-failed "pm clear $p did not print Success (exit $rc): ${out:0:200}"
+      || register_fail clear-failed "pm clear $p printed no Success line, exit status $rc (${out:0:200})"
     log "cleared $p's data"
   done
   before=$(sed -n 's/^id=//p' "$GAPPS_STATE/registration" 2>/dev/null | tail -1)
@@ -3025,15 +2971,13 @@ gapps_register_done() {
   if (( rc == 0 )); then
     if [[ -n "$before" && "$before" != "$GSF_ID_DEC" ]]; then
       changed=1
-      log "warning: the GSF ID changed from $before to $GSF_ID_DEC: register $GSF_ID_DEC at $GAPPS_REGISTER_URL," \
-          "then run 'sudo rhizo gapps register --done' again"
+      log "GSF ID is $GSF_ID_DEC, not $before"
     fi
     write_gsf_record
   else
-    log "warning: could not read the GSF ID again to check it did not change"
+    log "read_gsf_id 30 failed"
   fi
   echo "RHIZO_GAPPS_REGISTERED id=${GSF_ID_DEC:--} changed=$changed"
-  (( changed )) || log "open Google Play Store and sign in; Google can take a few minutes to accept a newly registered device"
 }
 
 # show the GSF ID and open Google's registration page
@@ -3047,7 +2991,7 @@ cmd_gapps_register() {
   [[ $# -eq 0 ]] || die "gapps register takes --done, not '$1'"
   cli_root_ok || die "gapps register must run as root"
   [[ -e "$GAPPS_STATE/enabled" ]] \
-    || gapps_refuse not-enabled "Google's apps are not enabled: run 'sudo rhizo gapps enable' first"
+    || gapps_refuse not-enabled "Google's apps are not enabled"
   if ! android_running; then
     echo "RHIZO_SANDBOX starting=1"
     start_sandbox
@@ -3059,32 +3003,30 @@ cmd_gapps_register() {
   read_gsf_id 120; rc=$?
   (( rc == 3 )) && register_unreadable
   (( rc == 0 )) \
-    || register_fail no-gsf-id "Google Services Framework wrote no ID within 120s: keep Android running with a network" \
-                               "connection for a few minutes, then run 'sudo rhizo gapps register' again"
+    || register_fail no-gsf-id "no GSF ID in gservices.db within 120s"
   write_gsf_record
-  log "this device's Google Services Framework ID is $GSF_ID_DEC (hex $GSF_ID_HEX)"
+  log "GSF ID is $GSF_ID_DEC (hex $GSF_ID_HEX)"
   if load_desktop_env; then
     copy_to_desktop_clipboard "$GSF_ID_DEC" && log "copied $GSF_ID_DEC to $DESKTOP_RUN_USER's clipboard"
     if open_on_desktop "$GAPPS_REGISTER_URL"; then
       log "opened $GAPPS_REGISTER_URL in $DESKTOP_RUN_USER's session"
     else
-      log "could not open $GAPPS_REGISTER_URL (see $VAR_LOG/gapps.log): open it in a browser"
+      log "failed to open $GAPPS_REGISTER_URL"
     fi
   else
-    gapps_log "no desktop user (no SUDO_USER and no account at uid $DESKTOP_UID): did not open $GAPPS_REGISTER_URL"
-    log "no desktop user to open it for: open $GAPPS_REGISTER_URL in a browser"
+    gapps_log "no SUDO_USER and no account at uid $DESKTOP_UID"
+    log "no desktop user, $GAPPS_REGISTER_URL not opened"
   fi
   echo "RHIZO_GAPPS_REGISTER id=$GSF_ID_DEC url=$GAPPS_REGISTER_URL"
-  log "next: sign in on that page, enter $GSF_ID_DEC and register it, then run 'sudo rhizo gapps register --done'"
 }
 
-# move a known apps state subtree aside and delete it
+# move GAPPS_STATE or AURORA_STATE aside and delete the moved tree
 remove_state_subtree() {
   local src trash m
   case "$1" in
     gapps)  src=$GAPPS_STATE ;;
     aurora) src=$AURORA_STATE ;;
-    *) log "refusing to remove '$1': not an apps state directory"; return 1 ;;
+    *) log "'$1' is not gapps or aurora"; return 1 ;;
   esac
   if [[ -L "$src" ]]; then
     rm -f -- "$src"
@@ -3093,14 +3035,14 @@ remove_state_subtree() {
   [[ -e "$src" ]] || return 0
   [[ -d "$src" ]] || { log "$src is not a directory"; return 1; }
   m=$(mounts_reaching "$src" | head -1)
-  [[ -z "$m" ]] || { log "$m is mounted under $src: not removing it"; return 1; }
+  [[ -z "$m" ]] || { log "$m is mounted under $src"; return 1; }
   trash="${src%/*}/.${src##*/}.removing.$$"
-  mv -T -- "$src" "$trash" || { log "cannot move $src aside"; return 1; }
+  mv -T -- "$src" "$trash" || { log "failed to move $src to $trash"; return 1; }
   find "$trash" -xdev -mindepth 1 ! -type d -delete && find "$trash" -xdev -depth -type d -empty -delete
-  [[ ! -e "$trash" ]] || { log "could not delete all of $trash"; return 1; }
+  [[ ! -e "$trash" ]] || { log "failed to delete $trash"; return 1; }
 }
 
-# print which of Google's apps keep a data directory
+# print Google's apps with a directory under data/data
 gapps_data_left() {
   local p left=""
   for p in "${GAPPS_PACKAGES[@]}"; do
@@ -3109,7 +3051,7 @@ gapps_data_left() {
   printf '%s' "${left# }"
 }
 
-# print Google's apps' data directories the host is denied
+# print Google's apps with a denied data/data directory
 gapps_data_denied() {
   local p denied=""
   for p in "${GAPPS_PACKAGES[@]}"; do
@@ -3118,7 +3060,7 @@ gapps_data_denied() {
   printf '%s' "${denied# }"
 }
 
-# remove Google's apps, their updates and their data
+# remove Google's apps, app updates and app data
 cmd_gapps_disable() {
   local unit was_running=0 p out rc listed left deadline
   [[ $# -eq 0 ]] || die "gapps disable takes no arguments"
@@ -3131,7 +3073,7 @@ cmd_gapps_disable() {
       echo "RHIZO_GAPPS_DISABLED"
       return 0
     fi
-    listed=$(listed_packages "${GAPPS_PACKAGES[@]}") || gapps_fail probe "cannot list Android's packages"
+    listed=$(listed_packages "${GAPPS_PACKAGES[@]}") || gapps_fail probe "listed_packages failed"
     if [[ -z "$listed" && -z "$(gapps_data_left)" ]]; then
       log "Google's apps are not enabled"
       echo "RHIZO_GAPPS_DISABLED"
@@ -3141,45 +3083,42 @@ cmd_gapps_disable() {
   if (( was_running )); then
     for p in "${GAPPS_PACKAGES[@]}"; do
       out=$(android_sh "cmd package uninstall-system-updates $p" 120); rc=$?
-      log "cmd package uninstall-system-updates $p (exit $rc): ${out:0:200}"
+      log "cmd package uninstall-system-updates $p exit=$rc (${out:0:200})"
     done
-    log "stopping $unit"
-    systemctl stop "$unit" || gapps_fail stop-failed "systemctl stop $unit failed: Google's apps are still enabled"
+    systemctl stop "$unit" || gapps_fail stop-failed "systemctl stop $unit failed"
   fi
   remove_state_subtree gapps \
-    || gapps_fail state "could not remove $GAPPS_STATE: Google's apps stay enabled; see the line above"
-  log "removed $GAPPS_STATE: the payloads and the acceptance and registration records"
+    || gapps_fail state "failed to remove $GAPPS_STATE"
+  log "removed $GAPPS_STATE"
   start_android_enforcing \
-    || gapps_fail boot "Google's apps are off, but Android did not boot to remove them: $ANDROID_BOOT_WHY;" \
-                       "run 'sudo rhizo gapps disable' again once it starts"
-  listed=$(listed_packages "${GAPPS_PACKAGES[@]}") || gapps_fail probe "cannot list Android's packages"
+    || gapps_fail boot "start_android_enforcing failed ($ANDROID_BOOT_WHY)"
+  listed=$(listed_packages "${GAPPS_PACKAGES[@]}") || gapps_fail probe "listed_packages failed"
   for p in $listed; do
     out=$(android_sh "pm uninstall $p" 120); rc=$?
-    log "pm uninstall $p (exit $rc): ${out:0:200}"
+    log "pm uninstall $p exit=$rc (${out:0:200})"
   done
-  listed=$(listed_packages "${GAPPS_PACKAGES[@]}") || gapps_fail probe "cannot list Android's packages"
-  [[ -z "$listed" ]] || gapps_fail packages-left "pm still lists $(paste -sd' ' <<<"$listed") after pm uninstall"
+  listed=$(listed_packages "${GAPPS_PACKAGES[@]}") || gapps_fail probe "listed_packages failed"
+  [[ -z "$listed" ]] || gapps_fail packages-left "pm list packages has $(paste -sd' ' <<<"$listed") after pm uninstall"
   deadline=$((SECONDS + 60))
   left=$(gapps_data_left)
   while [[ -n "$left" ]] && (( SECONDS < deadline )); do
     sleep 2
     left=$(gapps_data_left)
   done
-  [[ -z "$left" ]] || gapps_fail data-left "Android kept the data of $left under $RUN_ROOT/data/data 60s after the boot"
+  [[ -z "$left" ]] || gapps_fail data-left "$left is still under $RUN_ROOT/data/data 60s after the boot"
   left=$(gapps_data_denied)
   [[ -z "$left" ]] \
-    || log "the host is denied $RUN_ROOT/data/data/ for $left (host SELinux mode), so only pm's list proves them gone"
+    || log "stat of $RUN_ROOT/data/data/ for $left failed with Permission denied"
   if (( ! was_running )); then
-    log "stopping $unit again, as it was not running before"
+    log "stopping $unit"
     systemctl stop "$unit" || log "systemctl stop $unit failed"
   fi
   [[ ! -s "$STATE_DIR/update/previous-data.img" ]] \
-    || log "the /data kept for 'rhizo gsi rollback' may still hold Google's apps: after a rollback, run" \
-           "'sudo rhizo gapps disable' again to remove them"
+    || log "$STATE_DIR/update/previous-data.img exists"
   echo "RHIZO_GAPPS_DISABLED"
 }
 
-# print whether gapps is on and its payload's state
+# print the gapps state and payload state
 cmd_gapps_status() {
   local release enabled=0 payload dir gsf=- accepted user rc left
   [[ $# -eq 0 ]] || die "gapps status takes no arguments"
@@ -3200,27 +3139,26 @@ cmd_gapps_status() {
   if (( enabled )); then
     accepted=$(sed -n 's/^accepted=//p' "$GAPPS_STATE/enabled" 2>/dev/null | tail -1)
     user=$(sed -n 's/^user=//p' "$GAPPS_STATE/enabled" 2>/dev/null | tail -1)
-    log "gapps        : enabled (terms accepted ${accepted:-at an unrecorded time} by ${user:-an unrecorded user})"
+    log "gapps=enabled accepted=${accepted:--} user=${user:--}"
   else
-    log "gapps        : off"
+    log "gapps=off"
   fi
-  log "release      : $release"
-  log "payload      : $payload ($dir)"
+  log "release=$release"
+  log "payload=$payload ($dir)"
   if android_running; then
     if (( ! enabled )); then
       left=$(listed_packages "${GAPPS_PACKAGES[@]}" | paste -sd' ')
       [[ -z "$left" ]] || {
-        log "leftover     : $left in Android's data, from before Google's apps were turned off;" \
-            "'sudo rhizo gapps disable' removes them"
+        log "leftover=$left"
         echo "RHIZO_GAPPS_LEFTOVER packages=${left// /,}"
       }
     fi
     read_gsf_id 0; rc=$?
     if (( rc == 0 )); then
       gsf=$GSF_ID_DEC
-      log "GSF ID       : $GSF_ID_DEC (hex $GSF_ID_HEX)"
+      log "gsf_id=$GSF_ID_DEC hex=$GSF_ID_HEX"
     elif (( rc == 3 )); then
-      log "GSF ID       : unreadable from the host ($GSF_READ_WHY)"
+      log "gsf_id=unreadable ($GSF_READ_WHY)"
     fi
   fi
   echo "RHIZO_GAPPS enabled=$enabled release=$release payload=$payload gsf_id=$gsf"
@@ -3264,21 +3202,19 @@ cmd_aurora_on() {
   write_policy_key apps aurora on
   log "apps.aurora = on"
   run_fetch_app aurora \
-    || aurora_fail "fetch-$(fetch_field reason)" "could not fetch Aurora Store from F-Droid ($FETCH_LINE): run" \
-                                                 "'sudo rhizo aurora on' again; see $VAR_LOG/gapps.log"
+    || aurora_fail "fetch-$(fetch_field reason)" "fetch-app.sh aurora failed ($FETCH_LINE)"
   dir=$(fetch_field dir)
   if android_running; then
-    log "restarting Android to stage Aurora Store"
-    restart_android || aurora_fail boot "Android did not come back with Aurora Store staged: $ANDROID_BOOT_WHY"
+    restart_android || aurora_fail boot "restart_android failed ($ANDROID_BOOT_WHY)"
     [[ -n "$(listed_packages "$AURORA_PACKAGE")" ]] \
-      || aurora_fail not-installed "Android booted and pm does not list $AURORA_PACKAGE"
+      || aurora_fail not-installed "pm list packages has no $AURORA_PACKAGE"
   else
-    log "Android stages Aurora Store at its next start"
+    log "Android is not running"
   fi
   echo "RHIZO_AURORA policy=on staged=${dir:--}"
 }
 
-# remove Aurora Store and its payload
+# remove Aurora Store and the Aurora Store payload
 cmd_aurora_off() {
   local out rc
   cli_root_ok || die "aurora off must run as root"
@@ -3286,15 +3222,13 @@ cmd_aurora_off() {
   log "apps.aurora = off"
   if android_running; then
     out=$(android_sh "cmd package uninstall-system-updates $AURORA_PACKAGE" 120); rc=$?
-    log "cmd package uninstall-system-updates $AURORA_PACKAGE (exit $rc): ${out:0:200}"
-    log "restarting Android to unstage Aurora Store"
-    restart_android || aurora_fail boot "Android did not come back without Aurora Store: $ANDROID_BOOT_WHY"
-    out=$(listed_packages "$AURORA_PACKAGE") || aurora_fail probe "cannot list Android's packages"
+    log "cmd package uninstall-system-updates $AURORA_PACKAGE exit=$rc (${out:0:200})"
+    restart_android || aurora_fail boot "restart_android failed ($ANDROID_BOOT_WHY)"
+    out=$(listed_packages "$AURORA_PACKAGE") || aurora_fail probe "listed_packages failed"
     [[ -z "$out" ]] \
-      || aurora_fail still-installed "Android booted without Aurora Store staged and pm still lists $AURORA_PACKAGE:" \
-                                     "run 'rhizo app remove $AURORA_PACKAGE'"
+      || aurora_fail still-installed "pm list packages still has $AURORA_PACKAGE"
   fi
-  remove_state_subtree aurora || aurora_fail state "could not remove $AURORA_STATE; see the line above"
+  remove_state_subtree aurora || aurora_fail state "failed to remove $AURORA_STATE"
   echo "RHIZO_AURORA policy=off staged=-"
 }
 
@@ -3306,7 +3240,7 @@ cmd_aurora_status() {
   if android_running && [[ -r "$PROBE_CLIENT" ]] && listed=$(listed_packages "$AURORA_PACKAGE" 2>/dev/null); then
     if [[ -n "$listed" ]]; then installed=1; else installed=0; fi
   fi
-  log "aurora       : apps.aurora = $policy, $([[ -n "$dir" ]] && echo "staged from $dir" || echo "not fetched")"
+  log "apps.aurora = $policy, $([[ -n "$dir" ]] && echo "staged from $dir" || echo "not fetched")"
   echo "RHIZO_AURORA policy=$policy staged=${dir:--} installed=$installed"
 }
 
@@ -3330,9 +3264,9 @@ gapps_status_line() {
   [[ -e "$GAPPS_STATE/enabled" ]] || { echo off; return 0; }
   release=$(configured_release)
   if [[ -e "$GAPPS_STATE/$release/current" ]]; then
-    echo "enabled for $release, payload present"
+    echo "enabled for $release with a payload"
   else
-    echo "enabled, and no payload for $release: every start is refused until 'sudo rhizo gapps enable' or 'sudo rhizo gapps disable'"
+    echo "enabled with no payload for $release"
   fi
 }
 
@@ -3342,9 +3276,9 @@ aurora_status_line() {
   policy=$(aurora_policy)
   dir=$(aurora_staged_dir)
   case "$policy" in
-    on)  if [[ -n "$dir" ]]; then echo "on, staged ${dir##*/}"; else echo "on, not fetched: run 'sudo rhizo aurora on'"; fi ;;
+    on)  if [[ -n "$dir" ]]; then echo "on, staged ${dir##*/}"; else echo "on, not fetched"; fi ;;
     off) echo "off (apps.aurora = off)" ;;
-    *)   echo "unknown: apps.aurora unreadable${dir:+, staged ${dir##*/}}" ;;
+    *)   echo "unknown, apps.aurora unreadable${dir:+, staged ${dir##*/}}" ;;
   esac
 }
 
@@ -3354,7 +3288,7 @@ require_device_dir() {
   [[ -L "$DEVICE_DIR" ]] \
     && die "RHIZO_DEVICE_STATE_DIR=$DEVICE_DIR is a symlink"
   real=$(realpath -m -- "$DEVICE_DIR") && root=$(realpath -m -- "$STATE_DIR") \
-    || die "cannot resolve RHIZO_DEVICE_STATE_DIR=$DEVICE_DIR or $STATE_DIR"
+    || die "realpath failed for RHIZO_DEVICE_STATE_DIR=$DEVICE_DIR or $STATE_DIR"
   [[ "${real%/*}" == "$root" && "${real##*/}" =~ ^device-state(-[0-9]+)?$ ]] \
     || die "RHIZO_DEVICE_STATE_DIR=$DEVICE_DIR is not a device-state directory directly under $STATE_DIR"
 }
@@ -3372,11 +3306,11 @@ set_device_state() {
   done
   for key in "${!newkv[@]}"; do [[ -n "${newkv[$key]}" ]] && out+=("$key=${newkv[$key]}"); done
   require_device_dir
-  mkdir -p "$DEVICE_DIR" || die "cannot create $DEVICE_DIR"
-  local tmp; tmp=$(mktemp "$DEVICE_DIR/.device-state.XXXXXX") || die "cannot create a temp file under $DEVICE_DIR"
-  printf '%s\n' "${out[@]}" > "$tmp" || die "cannot write $tmp"
-  label_android_file "$tmp" "$DEVICE_STATE_LABEL" || { rm -f "$tmp"; die "cannot label $tmp $DEVICE_STATE_LABEL"; }
-  chmod 0644 "$tmp" && mv -f "$tmp" "$state" || die "cannot install $tmp as $state"
+  mkdir -p "$DEVICE_DIR" || die "failed to create $DEVICE_DIR"
+  local tmp; tmp=$(mktemp "$DEVICE_DIR/.device-state.XXXXXX") || die "mktemp failed"
+  printf '%s\n' "${out[@]}" > "$tmp" || die "failed to write $tmp"
+  label_android_file "$tmp" "$DEVICE_STATE_LABEL" || { rm -f "$tmp"; die "failed to label $tmp $DEVICE_STATE_LABEL"; }
+  chmod 0644 "$tmp" && mv -f "$tmp" "$state" || die "failed to move $tmp to $state"
 }
 # check a value against a number range
 require_float_range() {
@@ -3392,12 +3326,12 @@ sys.exit(0 if float(sys.argv[2]) <= v <= float(sys.argv[3]) else 1)
 # write a device reading file
 device_bridge_write() {
   require_device_dir
-  mkdir -p "$DEVICE_DIR" || die "cannot create $DEVICE_DIR"
+  mkdir -p "$DEVICE_DIR" || die "failed to create $DEVICE_DIR"
   local tmp
-  tmp=$(mktemp "$DEVICE_DIR/.$1.XXXXXX") || die "cannot create a temp file under $DEVICE_DIR"
-  printf '%s' "$2" > "$tmp" || { rm -f "$tmp"; die "cannot write $DEVICE_DIR/$1"; }
-  label_android_file "$tmp" "$DEVICE_STATE_LABEL" || { rm -f "$tmp"; die "cannot label $tmp $DEVICE_STATE_LABEL"; }
-  chmod 0644 "$tmp" && mv -f "$tmp" "$DEVICE_DIR/$1" || { rm -f "$tmp"; die "cannot install $DEVICE_DIR/$1"; }
+  tmp=$(mktemp "$DEVICE_DIR/.$1.XXXXXX") || die "mktemp failed"
+  printf '%s' "$2" > "$tmp" || { rm -f "$tmp"; die "failed to write $tmp"; }
+  label_android_file "$tmp" "$DEVICE_STATE_LABEL" || { rm -f "$tmp"; die "failed to label $tmp $DEVICE_STATE_LABEL"; }
+  chmod 0644 "$tmp" && mv -f "$tmp" "$DEVICE_DIR/$1" || { rm -f "$tmp"; die "failed to move $tmp to $DEVICE_DIR/$1"; }
 }
 # write a sensor reading
 cmd_device_set_sensor() {
@@ -3428,14 +3362,14 @@ z=$z
 # install an image as the device camera frame
 cmd_device_set_camera() {
   local image="${1:?device set camera requires a path to an image file}"
-  [[ -r "$image" ]] || die "cannot read $image"
+  [[ -r "$image" ]] || die "failed to read $image"
   require_device_dir
-  mkdir -p "$DEVICE_DIR" || die "cannot create $DEVICE_DIR"
+  mkdir -p "$DEVICE_DIR" || die "failed to create $DEVICE_DIR"
   local tmp
-  tmp=$(mktemp "$DEVICE_DIR/.camera.frame.XXXXXX") || die "cannot create a temp file under $DEVICE_DIR"
-  cp -- "$image" "$tmp" || { rm -f "$tmp"; die "cannot copy $image"; }
-  label_android_file "$tmp" "$DEVICE_STATE_LABEL" || { rm -f "$tmp"; die "cannot label $tmp $DEVICE_STATE_LABEL"; }
-  chmod 0644 "$tmp" && mv -f "$tmp" "$DEVICE_DIR/camera.frame" || { rm -f "$tmp"; die "cannot install $DEVICE_DIR/camera.frame"; }
+  tmp=$(mktemp "$DEVICE_DIR/.camera.frame.XXXXXX") || die "mktemp failed"
+  cp -- "$image" "$tmp" || { rm -f "$tmp"; die "failed to copy $image to $tmp"; }
+  label_android_file "$tmp" "$DEVICE_STATE_LABEL" || { rm -f "$tmp"; die "failed to label $tmp $DEVICE_STATE_LABEL"; }
+  chmod 0644 "$tmp" && mv -f "$tmp" "$DEVICE_DIR/camera.frame" || { rm -f "$tmp"; die "failed to move $tmp to $DEVICE_DIR/camera.frame"; }
   log "camera frame $image written to $DEVICE_DIR/camera.frame"
 }
 # set a device reading
@@ -3505,27 +3439,27 @@ cmd_adbkey_add() {
   local src="${1:-}" tmp added=0 line key
   [[ -n "$src" ]] || app_fail "adb-key add takes a file path or -"
   if [[ "$src" == "-" ]]; then
-    tmp=$(mktemp) || app_fail "cannot create a temp file to read stdin into"
-    cat > "$tmp" || app_fail "cannot read stdin"
+    tmp=$(mktemp) || app_fail "mktemp failed"
+    cat > "$tmp" || app_fail "failed to read stdin"
   else
-    [[ -r "$src" ]] || app_fail "cannot read $src"
+    [[ -r "$src" ]] || app_fail "failed to read $src"
     tmp="$src"
   fi
-  mkdir -p "$ETC_RHIZO" || app_fail "cannot create $ETC_RHIZO"
+  mkdir -p "$ETC_RHIZO" || app_fail "failed to create $ETC_RHIZO"
   if [[ ! -f "$ADB_KEYS_FILE" ]]; then
-    : > "$ADB_KEYS_FILE" || app_fail "cannot create $ADB_KEYS_FILE"
+    : > "$ADB_KEYS_FILE" || app_fail "failed to create $ADB_KEYS_FILE"
     chown root:root "$ADB_KEYS_FILE" 2>/dev/null
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "${line// }" ]] || continue
     is_valid_adb_pubkey_line "$line" \
-      || app_fail "not an adb public key (expected a QAAA... base64 blob, optionally followed by a comment): ${line:0:40}"
+      || app_fail "not an adb public key (${line:0:40})"
     key=$(awk '{print $1}' <<<"$line")
     if grep -qF "$key" "$ADB_KEYS_FILE" 2>/dev/null; then
-      log "already registered, skipping $(fingerprint_adb_key "$key")"
+      log "$(fingerprint_adb_key "$key") is already in $ADB_KEYS_FILE"
       continue
     fi
-    printf '%s\n' "$line" >> "$ADB_KEYS_FILE" || app_fail "cannot write to $ADB_KEYS_FILE"
+    printf '%s\n' "$line" >> "$ADB_KEYS_FILE" || app_fail "failed to write $ADB_KEYS_FILE"
     added=$((added + 1))
     log "registered $(fingerprint_adb_key "$key")"
   done < "$tmp"
@@ -3553,8 +3487,8 @@ cmd_adbkey_list() {
 cmd_adbkey_remove() {
   local target="${1:-}" line key removed=0 tmp
   [[ -n "$target" ]] || app_fail "adb-key remove takes a fingerprint"
-  [[ -r "$ADB_KEYS_FILE" ]] || app_fail "no $ADB_KEYS_FILE: no key registered"
-  tmp=$(mktemp) || app_fail "cannot create a temp file"
+  [[ -r "$ADB_KEYS_FILE" ]] || app_fail "no $ADB_KEYS_FILE"
+  tmp=$(mktemp) || app_fail "mktemp failed"
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "${line// }" ]] || continue
     key=$(awk '{print $1}' <<<"$line")
@@ -3568,7 +3502,7 @@ cmd_adbkey_remove() {
     rm -f "$tmp"
     app_fail "no registered key has fingerprint $target"
   fi
-  cat "$tmp" > "$ADB_KEYS_FILE" || app_fail "cannot write to $ADB_KEYS_FILE"
+  cat "$tmp" > "$ADB_KEYS_FILE" || app_fail "failed to write $ADB_KEYS_FILE"
   rm -f "$tmp"
   chmod 0640 "$ADB_KEYS_FILE"
   revoke_live_adb_key "$target"
@@ -3589,7 +3523,7 @@ revoke_system_adb_key() {
   [[ -n "$init" ]] || return 0
   live="$PROC_ROOT/$init/root/adb_keys"
   [[ -f "$live" ]] || return 0
-  tmp=$(mktemp) || { log "no temp file: the running sandbox accepts $target until its next start"; return 1; }
+  tmp=$(mktemp) || { log "mktemp failed"; return 1; }
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "${line// }" ]] || continue
     key=$(awk '{print $1}' <<<"$line")
@@ -3605,7 +3539,7 @@ revoke_system_adb_key() {
   fi
   if ! cat "$tmp" > "$live"; then
     rm -f "$tmp"
-    log "could not rewrite $live: the running sandbox accepts $target until its next start"
+    log "failed to write $live"
     return 1
   fi
   rm -f "$tmp"
@@ -3615,10 +3549,10 @@ revoke_system_adb_key() {
     kill -KILL "${p##*/}" && killed=$((killed + 1))
   done
   if (( killed == 0 )); then
-    log "revoked $target from the running sandbox's /adb_keys; no adbd to restart"
+    log "revoked $target from $live, no adbd process"
     return 1
   fi
-  log "revoked $target from the running sandbox's /adb_keys and restarted adbd"
+  log "revoked $target from $live and killed adbd"
 }
 
 # remove a key from /data/misc/adb/adb_keys
@@ -3627,7 +3561,7 @@ revoke_live_adb_key() {
   dir=$(dirname "$LIVE_ADB_KEYS")
   [[ -d "$dir" ]] || return 0
   if ! chown 0:0 "$dir" || ! chmod 0700 "$dir"; then
-    log "cannot open $dir: the running sandbox accepts $target until its next start"
+    log "failed to open $dir"
     return 1
   fi
   if [[ ! -f "$LIVE_ADB_KEYS" ]]; then
@@ -3637,7 +3571,7 @@ revoke_live_adb_key() {
   if ! chown 0:0 "$LIVE_ADB_KEYS" || ! chmod 0600 "$LIVE_ADB_KEYS" \
      || ! live_tmp=$(mktemp); then
     lock_live_adb_keys "$dir"
-    log "cannot open $LIVE_ADB_KEYS: the running sandbox accepts $target until its next start"
+    log "failed to open $LIVE_ADB_KEYS"
     return 1
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -3651,9 +3585,9 @@ revoke_live_adb_key() {
   done < "$LIVE_ADB_KEYS"
   if (( stripped > 0 )); then
     if cat "$live_tmp" > "$LIVE_ADB_KEYS"; then
-      log "revoked $target from the running sandbox's /data/misc/adb/adb_keys"
+      log "revoked $target from $LIVE_ADB_KEYS"
     else
-      log "could not rewrite $LIVE_ADB_KEYS: the running sandbox accepts $target until its next start"
+      log "failed to write $LIVE_ADB_KEYS"
     fi
   fi
   rm -f "$live_tmp"
@@ -3700,11 +3634,11 @@ translate_share() {
     || app_fail "no $TOOLS_DIR/hostfs.py"
   json=$(/usr/bin/python3 "$TOOLS_DIR/hostfs.py" status --json --config /etc/rhizo/hostfs.conf)
   [[ -n "$json" ]] \
-    || app_fail "hostfs.py status --json printed nothing: no folder is shared or the sandbox is down"
+    || app_fail "hostfs.py status --json printed nothing"
   row=$(share_row "$json" "$1")
   case "$row" in
     ERR\ *) app_fail "${row#ERR }" ;;
-    "")     app_fail "$1 is not inside any shared folder; add it in /etc/rhizo/hostfs.conf" ;;
+    "")     app_fail "$1 is not under a folder in /etc/rhizo/hostfs.conf" ;;
   esac
   VIEW_URI=$(cut -f3 <<<"$row")
 }
@@ -3715,7 +3649,7 @@ resolve_host_file() {
   [[ "${raw,,}" == file://* ]] && raw="${raw:7}"
   path=$(urldecode "$raw")
   path=$(realpath -- "$path")
-  [[ -n "$path" && -e "$path" ]] || app_fail "$1 does not name a file on this host"
+  [[ -n "$path" && -e "$path" ]] || app_fail "$1 does not exist"
   translate_share "$path"
   VIEW_MIME=""
   if command -v xdg-mime >/dev/null 2>&1; then
@@ -3728,7 +3662,7 @@ resolve_host_file() {
     VIEW_MIME="${VIEW_MIME//[[:space:]]/}"
   fi
   [[ -n "$VIEW_MIME" ]] \
-    || app_fail "neither xdg-mime nor python's mimetypes named a type for $path"
+    || app_fail "xdg-mime and mimetypes printed no type for $path"
 }
 
 VIEW_ACT=""
@@ -3753,9 +3687,9 @@ resolve_view_activity() {
   local pkg="$1" out rc comp
   require_probe_client
   out=$(android_sh "$(resolve_activity_body "$@")" 60); rc=$?
-  (( rc == 0 )) || app_fail "cmd package resolve-activity exited $rc over $PROBE_SOCK: ${out:0:300}"
+  (( rc == 0 )) || app_fail "cmd package resolve-activity failed with exit status $rc (${out:0:300})"
   comp=$(grep -oE "^${pkg//./\\.}/[^[:space:]]+" <<<"$out" | head -1)
-  [[ -n "$comp" ]] || app_fail "$pkg declares no activity for ${3:-$2} (resolve-activity: ${out:0:200})"
+  [[ -n "$comp" ]] || app_fail "$pkg has no activity for ${3:-$2} (${out:0:200})"
   VIEW_ACT="${comp#*/}"
 }
 
@@ -3764,9 +3698,9 @@ resolve_launcher_activity() {
   local pkg="$1" out rc comp
   require_probe_client
   out=$(android_sh "cmd package resolve-activity --brief --user 0 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p $pkg" 60); rc=$?
-  (( rc == 0 )) || app_fail "cmd package resolve-activity exited $rc over $PROBE_SOCK: ${out:0:300}"
+  (( rc == 0 )) || app_fail "cmd package resolve-activity failed with exit status $rc (${out:0:300})"
   comp=$(grep -oE "^${pkg//./\\.}/[^[:space:]]+" <<<"$out" | head -1)
-  [[ -n "$comp" ]] || app_fail "$pkg has no launcher activity, or is not installed (resolve-activity: ${out:0:200})"
+  [[ -n "$comp" ]] || app_fail "$pkg has no launcher activity (${out:0:200})"
   VIEW_ACT="${comp#*/}"
 }
 
@@ -3808,11 +3742,11 @@ cmd_launch() {
       || app_fail "$desktop has no X-Rhizo-Activity= line"
     act=$(sed -n 's/^X-Rhizo-Activity=//p' "$desktop" | head -1)
     [[ -n "$act" || -n "$arg" ]] \
-      || app_fail "$pkg has no launcher activity; it opens files and links only"
+      || app_fail "$pkg has no launcher activity"
   elif [[ "$(read_capability rhizo.profile 2>/dev/null)" == server ]]; then
     ask_android=1
   else
-    app_fail "no rhizo-$pkg.desktop under $ENTRY_DIR or \${XDG_DATA_HOME:-\$HOME/.local/share}/applications: run appsync.py, or install '$pkg'"
+    app_fail "no rhizo-$pkg.desktop under $ENTRY_DIR or \${XDG_DATA_HOME:-\$HOME/.local/share}/applications"
   fi
   [[ -x "$TOOLS_DIR/rhizo-launch.sh" ]] || app_fail "no $TOOLS_DIR/rhizo-launch.sh"
 
@@ -3843,38 +3777,37 @@ cmd_launch() {
   "$TOOLS_DIR/rhizo-launch.sh" "$pkg" "$act" "$VIEW_URI" "$VIEW_MIME" &
   local child=$! rc
   wait "$child"; rc=$?
-  (( rc == 3 )) && app_fail "reason=not-on-top pkg=$pkg -- $act is not the resumed activity on its display; see $LAUNCH_LOG"
-  (( rc == 4 )) && app_fail "reason=launch-error pkg=$pkg -- am start failed for $act; see $LAUNCH_LOG"
-  (( rc == 5 )) && app_fail "reason=process-died pkg=$pkg -- the process died before $act reached the top; see $LAUNCH_LOG"
-  (( rc == 0 )) || app_fail "rhizo-launch.sh exited $rc for $pkg: see $LAUNCH_LOG"
+  (( rc == 3 )) && app_fail "reason=not-on-top pkg=$pkg activity=$act"
+  (( rc == 4 )) && app_fail "reason=launch-error pkg=$pkg activity=$act"
+  (( rc == 5 )) && app_fail "reason=process-died pkg=$pkg activity=$act"
+  (( rc == 0 )) || app_fail "rhizo-launch.sh $pkg failed with exit status $rc"
   local line
   line=$(tail -c "+$((before + 1))" "$LAUNCH_LOG" \
          | grep -F "event=am_start_return pid=$child " | tail -1)
   [[ -n "$line" ]] \
-    || app_fail "rhizo-launch.sh exited 0 but appended no am_start_return line for pid $child to $LAUNCH_LOG"
+    || app_fail "$LAUNCH_LOG has no event=am_start_return line for pid $child"
   echo "RHIZO_LAUNCHED pkg=$pkg display=$(sed -n 's/.* display=\([0-9]*\).*/\1/p' <<<"$line") cdisplay=$(sed -n 's/.* cdisplay=\([0-9]*\).*/\1/p' <<<"$line")"
   [[ "$pkg" != com.android.vending ]] || gapps_signin_hint
 }
 
-# print the sign-in hint while Android has no Google account
+# print RHIZO_GAPPS_SIGNIN when dumpsys account has no com.google account
 gapps_signin_hint() {
   local out rc
   [[ -e "$GAPPS_STATE/enabled" ]] || return 0
   out=$(android_sh "dumpsys account" 30); rc=$?
   if (( rc != 0 )) || ! grep -q 'Accounts:' <<<"$out"; then
-    log "could not read Android's accounts (exit $rc): ${out:0:200}"
+    log "dumpsys account failed with exit status $rc (${out:0:200})"
     return 0
   fi
   # dumpsys account's authenticator line also contains type=com.google}
   grep -qE '^[[:space:]]*Account \{name=.*, type=com\.google\}' <<<"$out" && return 0
   read_gsf_id 0 || GSF_ID_DEC=""
-  log "no Google account on this device yet: register ${GSF_ID_DEC:-its ID, once Google assigns one,} at" \
-      "$GAPPS_REGISTER_URL, then sign in to Google Play"
+  log "no com.google account in dumpsys account"
   echo "RHIZO_GAPPS_SIGNIN id=${GSF_ID_DEC:--} url=$GAPPS_REGISTER_URL"
 }
 
 check_template_name() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "'$1' is not a valid template name (letters, digits, '.', '_', '-' only, starting with a letter or digit)"
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "'$1' does not match ^[A-Za-z0-9][A-Za-z0-9._-]*\$"
 }
 check_instance_id() {
   [[ "$1" =~ ^[0-9]+$ ]] || die "instance id must be a number, got '$1'"
@@ -3899,11 +3832,11 @@ cmd_snapshot() {
   local name=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -*) die "snapshot: unknown option '$1'" ;;
-      *) [[ -z "$name" ]] || die "snapshot takes a name, got an extra argument '$1'"; name="$1"; shift ;;
+      -*) die "unknown snapshot option '$1'" ;;
+      *) [[ -z "$name" ]] || die "snapshot takes one name, extra argument '$1'"; name="$1"; shift ;;
     esac
   done
-  [[ -n "$name" ]] || die "snapshot needs a template name: rhizo snapshot -i <id> <name>"
+  [[ -n "$name" ]] || die "snapshot takes -i <id> <name>"
   check_template_name "$name"
   do_snapshot "$id" "$name"
 }
@@ -3916,14 +3849,14 @@ restore_snapshot_state() {
     return 0
   fi
   systemctl start "$unit" \
-    || die "systemctl start $unit failed after the snapshot"
+    || die "systemctl start $unit failed"
   if (( was_frozen )); then
     wait_probe_socket "$id" 120 \
-      || die "$unit restarted after the snapshot with no probe socket within 120s: see systemctl status $unit"
+      || die "no probe socket for $unit within 120s"
     wait_boot_completed "$id" 300 \
-      || die "$unit restarted after the snapshot with no sys.boot_completed=1 within 300s: see systemctl status $unit"
+      || die "$unit restarted after the snapshot with no sys.boot_completed=1 within 300s"
     systemctl freeze "$unit" \
-      || die "systemctl freeze $unit failed after the snapshot"
+      || die "systemctl freeze $unit failed"
   fi
   (( was_member )) && pool_member_add "$id"
   return 0
@@ -3935,7 +3868,7 @@ snapshot_restore_trap() {
   (( ${#SNAPSHOT_RESTORE_ARGS[@]} )) || return 0
   local args=("${SNAPSHOT_RESTORE_ARGS[@]}")
   SNAPSHOT_RESTORE_ARGS=()
-  log "restoring instance ${args[0]} to its state before the snapshot"
+  log "restoring instance ${args[0]} to the pre-snapshot state"
   restore_snapshot_state "${args[@]}"
 }
 
@@ -3966,27 +3899,26 @@ do_snapshot() {
     if [[ "$freezer" == frozen ]]; then
       was_frozen=1
       SNAPSHOT_RESTORE_ARGS=("$id" "$unit" "$was_active" 1 "$was_member")
-      log "unfreezing pool member $unit"
-      systemctl thaw "$unit" || die "systemctl thaw $unit failed: data.img not copied"
+      systemctl thaw "$unit" || die "systemctl thaw $unit failed"
     fi
     log "stopping $unit (state $state)"
-    systemctl stop "$unit" || die "systemctl stop $unit failed: data.img not copied"
+    systemctl stop "$unit" || die "systemctl stop $unit failed"
   fi
-  sync -f -- "$img" || die "sync -f $img failed: data.img not copied"
+  sync -f -- "$img" || die "sync -f $img failed"
 
   local key key12 out meta rc=0
   key=$(sha256sum "$img" | cut -d' ' -f1) || rc=$?
   (( rc == 0 )) || die "sha256sum $img failed"
   key12="${key:0:12}"
-  mkdir -p "$TEMPLATES_ROOT" || die "cannot create $TEMPLATES_ROOT"
+  mkdir -p "$TEMPLATES_ROOT" || die "failed to create $TEMPLATES_ROOT"
   out="$TEMPLATES_ROOT/data-template.$name.$key12.img"
   meta="$out.meta"
 
   if [[ -s "$out" && -f "$meta" ]] && grep -q "\"key\": \"$key12\"" "$meta"; then
     log "$out exists with a matching .meta"
   else
-    cp --remove-destination --reflink=auto "$img" "$out.part" || die "cannot copy $img to $out.part"
-    mv "$out.part" "$out" || die "cannot install $out"
+    cp --remove-destination --reflink=auto "$img" "$out.part" || die "failed to copy $img to $out.part"
+    mv "$out.part" "$out" || die "failed to move $out.part to $out"
     local release=a16 variant=user
     if [[ -s "$img.meta" ]]; then
       local m; m=$(sed -n 's/^release=//p' "$img.meta" | tail -1); [[ -n "$m" ]] && release="$m"
@@ -3994,7 +3926,7 @@ do_snapshot() {
     fi
     printf '{"key": "%s", "name": "%s", "source_instance": "%s", "release": "%s", "variant": "%s"}\n' \
       "$key12" "$name" "$id" "$release" "$variant" > "$meta.part"
-    mv "$meta.part" "$meta" || die "cannot install $meta"
+    mv "$meta.part" "$meta" || die "failed to move $meta.part to $meta"
     log "wrote $out (key=$key12)"
   fi
 
@@ -4008,14 +3940,14 @@ check_server_profile_for_instance() {
   (( $(canon_id "$1") == 0 )) && return 0
   local profile
   profile=$(read_capability rhizo.profile) \
-    || profile="unreadable ($POLICY_CONF, or rhizo.profile is not a registered capability)"
+    || profile=unreadable
   [[ "$profile" == server ]] && return 0
-  die "instance add $1 refused: rhizo.profile is $profile, not server; the server profile masks ${SERVER_MASKED_UNITS[*]}; run 'rhizo profile server' first"
+  die "rhizo.profile is $profile, not server"
 }
 
 cmd_instance_add() {
   cli_root_ok || die "instance add must run as root"
-  [[ $# -ge 1 ]] || die "instance add needs an instance id: rhizo instance add <id> [--from <name>]"
+  [[ $# -ge 1 ]] || die "instance add takes <id> [--from <name>]"
   local id from=""
   check_instance_id "$1"
   id=$(canon_id "$1")
@@ -4024,7 +3956,7 @@ cmd_instance_add() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --from) from="${2:-}"; [[ -n "$from" ]] || die "--from needs a template name"; shift 2 ;;
-      *) die "instance add: unknown argument '$1'" ;;
+      *) die "unknown instance add argument '$1'" ;;
     esac
   done
   [[ -z "$from" ]] || check_template_name "$from"
@@ -4037,25 +3969,24 @@ do_instance_add() {
   id=$(canon_id "$1")
   env_file="$ETC_RHIZO/instances/$id.env"
   img=$(instance_data_img "$id")
-  [[ -s "$env_file" ]] && die "instance $id is already configured: $env_file exists"
+  [[ -s "$env_file" ]] && die "$env_file exists"
 
   src=""
   if [[ -n "$from" ]]; then
     src=$(find_template "$from")
-    [[ -n "$src" ]] || die "no snapshot template '$from' under $TEMPLATES_ROOT: run 'rhizo snapshot -i <source-id> $from' first"
+    [[ -n "$src" ]] || die "no snapshot template '$from' under $TEMPLATES_ROOT"
   fi
 
-  mkdir -p "$ETC_RHIZO/instances" "$(dirname "$img")" || die "cannot create instance $id's directories"
+  mkdir -p "$ETC_RHIZO/instances" "$(dirname "$img")" || die "failed to create $ETC_RHIZO/instances or $(dirname "$img")"
 
   if [[ -n "$src" ]]; then
-    log "copying $src to $img"
-    cp --remove-destination --reflink=auto "$src" "$img.part" || die "cannot copy $src to $img.part"
-    mv "$img.part" "$img" || die "cannot install $img"
+    cp --remove-destination --reflink=auto "$src" "$img.part" || die "failed to copy $src to $img.part"
+    mv "$img.part" "$img" || die "failed to move $img.part to $img"
     [[ -f "$src.meta" ]] && cp "$src.meta" "$img.meta"
   fi
 
-  printf 'RHIZO_SANDBOX_ID=%s\n' "$id" > "$env_file.part" || die "cannot write $env_file.part"
-  mv "$env_file.part" "$env_file" || die "cannot install $env_file"
+  printf 'RHIZO_SANDBOX_ID=%s\n' "$id" > "$env_file.part" || die "failed to write $env_file.part"
+  mv "$env_file.part" "$env_file" || die "failed to move $env_file.part to $env_file"
   chmod 0644 "$env_file"
 
   echo "RHIZO_INSTANCE_ADDED id=$id env=$env_file data=$img from=${from:-none}"
@@ -4064,7 +3995,7 @@ do_instance_add() {
 # dispatch the instance subcommands
 cmd_instance() {
   local sub="${1:-}"
-  [[ -n "$sub" ]] || die "instance needs a subcommand: add, remove, allocate, release"
+  [[ -n "$sub" ]] || die "instance takes add, remove, allocate or release"
   shift
   case "$sub" in
     add)      cmd_instance_add "$@" ;;
@@ -4077,7 +4008,7 @@ cmd_instance() {
 
 cmd_instance_remove() {
   cli_root_ok || die "instance remove must run as root"
-  [[ $# -ge 1 ]] || die "instance remove needs an instance id: rhizo instance remove <id> [--keep-data]"
+  [[ $# -ge 1 ]] || die "instance remove takes <id> [--keep-data]"
   local id keep_data=0
   check_instance_id "$1"
   id=$(canon_id "$1")
@@ -4085,7 +4016,7 @@ cmd_instance_remove() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --keep-data) keep_data=1; shift ;;
-      *) die "instance remove: unknown argument '$1'" ;;
+      *) die "unknown instance remove argument '$1'" ;;
     esac
   done
   do_instance_remove "$id" "$keep_data"
@@ -4129,34 +4060,33 @@ do_instance_remove() {
 
   pool_member_claim "$id" && log "removed instance $id from $POOL_MEMBERS"
 
-  log "stopping $unit"
   systemctl thaw "$unit" 2>/dev/null
-  systemctl stop "$unit" || die "systemctl stop $unit failed: instance $id not removed"
+  systemctl stop "$unit" || die "systemctl stop $unit failed"
 
   if [[ -e "$env_file" ]]; then
-    rm -f "$env_file" || die "cannot remove $env_file"
+    rm -f "$env_file" || die "failed to remove $env_file"
     env_state=removed
   fi
   if (( keep_data )); then
     [[ -e "$img" ]] && data=kept
   elif [[ -e "$img" ]]; then
-    rm -f "$img" "$img.meta" || die "cannot remove $img"
+    rm -f "$img" "$img.meta" || die "failed to remove $img"
     data=removed
   fi
   if [[ -n "$dir" && -d "$dir" ]]; then
     while read -r m; do
       [[ -n "$m" ]] || continue
       python3 "${RHIZO_HOSTOPS:-$LIB_DIR/hostops.py}" umount -b "$m" \
-        || die "cannot unmount $m under instance $id's directory: instance $id not removed"
-      log "unmounted $m under instance $id's directory"
+        || die "failed to unmount $m"
+      log "unmounted $m"
     done < <(mounts_reaching "$dir")
   fi
   if [[ -n "$dir" && -e "$dir" ]]; then
     [[ -e "$dir/vendor" || -e "$dir/apex_override" ]] && staged=removed
     if (( keep_data )); then
-      rm -rf "$dir/vendor" "$dir/apex_override" || die "cannot remove instance $id's staged trees under $dir"
+      rm -rf "$dir/vendor" "$dir/apex_override" || die "failed to remove $dir/vendor and $dir/apex_override"
     else
-      rm -rf "$dir" || die "cannot remove $dir"
+      rm -rf "$dir" || die "failed to remove $dir"
     fi
   fi
 
@@ -4180,7 +4110,7 @@ pool_refusal() {
   local k="$1" headroom="$2" need
   need=$(( k * POOL_INSTANCE_FLOOR_BYTES ))
   if (( need > headroom )); then
-    printf 'pool size %d needs %d MB (footprint.deep-asleep-floor x %d) and this host has %d MB of headroom' \
+    printf 'pool size %d needs %d MB (footprint.deep-asleep-floor x %d), headroom is %d MB' \
       "$k" $(( need / 1024 / 1024 )) "$k" $(( headroom / 1024 / 1024 ))
   fi
 }
@@ -4244,7 +4174,7 @@ pool_pending_drop() {
 # dispatch the pool subcommands
 cmd_pool() {
   local sub="${1:-}"
-  [[ -n "$sub" ]] || die "pool needs a subcommand: set, status, reconcile"
+  [[ -n "$sub" ]] || die "pool takes set, status or reconcile"
   shift
   case "$sub" in
     set)       cmd_pool_set "$@" ;;
@@ -4254,7 +4184,7 @@ cmd_pool() {
   esac
 }
 
-# resize the pool to its configured size
+# resize the pool to pool_target_k
 cmd_pool_reconcile() {
   cli_root_ok || die "pool reconcile must run as root"
   [[ $# -eq 0 ]] || die "pool reconcile takes no arguments"
@@ -4274,7 +4204,7 @@ pool_target_k() {
 # set the pool size
 cmd_pool_set() {
   cli_root_ok || die "pool set must run as root"
-  [[ $# -eq 1 ]] || die "pool set takes exactly one argument: the target pool size"
+  [[ $# -eq 1 ]] || die "pool set takes one pool size"
   local k="$1"
   [[ "$k" =~ ^[0-9]+$ ]] || die "pool size must be a non-negative integer, got '$k'"
   do_pool_set "$k"
@@ -4288,20 +4218,20 @@ cmd_pool_status() {
 
 # create the etc and state dirs
 ensure_pool_state_dirs() {
-  mkdir -p "$ETC_RHIZO" "$STATE_DIR" || die "cannot create $ETC_RHIZO or $STATE_DIR"
+  mkdir -p "$ETC_RHIZO" "$STATE_DIR" || die "failed to create $ETC_RHIZO or $STATE_DIR"
 }
 
 # apply a pool size
 do_pool_set() {
   local k="$1" headroom reason
   headroom=$(pool_host_headroom_bytes)
-  [[ "$headroom" =~ ^[0-9]+$ ]] || die "could not measure host memory headroom: got '$headroom'"
+  [[ "$headroom" =~ ^[0-9]+$ ]] || die "pool_host_headroom_bytes printed '$headroom'"
   reason=$(pool_refusal "$k" "$headroom")
   [[ -z "$reason" ]] || die "$reason"
 
   ensure_pool_state_dirs
-  printf 'K=%s\n' "$k" > "$POOL_CONF.part" || die "cannot write $POOL_CONF.part"
-  mv "$POOL_CONF.part" "$POOL_CONF" || die "cannot install $POOL_CONF"
+  printf 'K=%s\n' "$k" > "$POOL_CONF.part" || die "failed to write $POOL_CONF.part"
+  mv "$POOL_CONF.part" "$POOL_CONF" || die "failed to move $POOL_CONF.part to $POOL_CONF"
   [[ -f "$POOL_MEMBERS" ]] || : > "$POOL_MEMBERS"
   [[ -f "$POOL_PENDING" ]] || : > "$POOL_PENDING"
 
@@ -4324,8 +4254,8 @@ wait_probe_socket() {
 # take the pool lock on fd 9
 pool_lock() {
   ensure_pool_state_dirs
-  exec 9>"$POOL_LOCK_FILE" || die "cannot open $POOL_LOCK_FILE"
-  flock 9 || die "cannot lock $POOL_LOCK_FILE"
+  exec 9>"$POOL_LOCK_FILE" || die "failed to open $POOL_LOCK_FILE"
+  flock 9 || die "flock $POOL_LOCK_FILE failed"
 }
 pool_unlock() {
   flock -u 9 2>/dev/null
@@ -4342,7 +4272,7 @@ reconcile_pool() {
     id=$(pool_next_free_id)
     if [[ -z "$id" ]]; then
       pool_unlock
-      log "no free instance id 1-99: pool at $have of $target"
+      log "no free instance id 1-99, pool has $have of $target"
       break
     fi
     check_server_profile_for_instance "$id"
@@ -4353,21 +4283,21 @@ reconcile_pool() {
     pool_unlock
 
     if ! systemctl start "$unit"; then
-      log "instance $id failed to start: left out of the pool"
+      log "systemctl start $unit failed"
       pool_reservation_drop "$id"; break
     fi
     if ! wait_probe_socket "$id" 120; then
-      log "instance $id has no probe socket: stopped, left out of the pool"
+      log "no probe socket for instance $id within 120s"
       systemctl stop "$unit"
       pool_reservation_drop "$id"; break
     fi
     if ! wait_boot_completed "$id" 300; then
-      log "instance $id reported no sys.boot_completed=1: stopped, left out of the pool"
+      log "no sys.boot_completed=1 from instance $id within 300s"
       systemctl stop "$unit"
       pool_reservation_drop "$id"; break
     fi
     if ! systemctl freeze "$unit"; then
-      log "instance $id did not freeze: left running, out of the pool"
+      log "systemctl freeze $unit failed"
       pool_reservation_drop "$id"; break
     fi
     pool_lock
@@ -4385,9 +4315,8 @@ reconcile_pool() {
     sed -i "\%^$id\$%d" "$POOL_MEMBERS"
     pool_unlock
     unit=$(instance_unit "$id")
-    log "releasing instance $id from the pool (target $target)"
     systemctl thaw "$unit" 2>/dev/null
-    systemctl stop "$unit" || log "instance $id did not stop cleanly"
+    systemctl stop "$unit" || log "systemctl stop $unit failed"
   done
 }
 pool_reservation_drop() {
@@ -4410,25 +4339,24 @@ do_instance_allocate() {
   id=$(head -1 "$POOL_MEMBERS" 2>/dev/null)
   if [[ -z "$id" ]]; then
     pool_unlock
-    die "the instance pool is empty: nothing to allocate"
+    die "$POOL_MEMBERS is empty"
   fi
   sed -i "\%^$id\$%d" "$POOL_MEMBERS"
   pool_unlock
 
   unit=$(instance_unit "$id")
-  log "unfreezing $unit"
   systemctl thaw "$unit" || die "systemctl thaw $unit failed"
-  wait_probe_socket "$id" 60 || die "instance $id unfrozen with no probe socket within 60s"
+  wait_probe_socket "$id" 60 || die "no probe socket for instance $id within 60s"
   addr=$(sandbox_adb_endpoint "$id")
   [[ -n "$addr" ]] \
-    || log "instance $id allocated with no address over $(instance_probe_sock "$id"): no endpoint printed"
+    || log "no adb endpoint for instance $id"
 
   mkdir -p "$VAR_LOG"
   if ! systemd-run --collect --quiet --unit="rhizo-pool-replace-$id" \
-        --description="rhizo instance-pool replacement after allocating instance $id" \
+        --description="rhizo pool reconcile after instance allocate $id" \
         --setenv=RHIZO_LIB_DIR="$LIB_DIR" --setenv=RHIZO_STATE_DIR="$STATE_DIR" \
         /bin/bash "$SELF" pool reconcile; then
-    log "could not start the pool refill unit: run 'rhizo pool reconcile'"
+    log "systemd-run rhizo-pool-replace-$id failed"
   fi
 
   echo "RHIZO_ALLOCATED id=$id adb=$addr"
@@ -4436,7 +4364,7 @@ do_instance_allocate() {
 
 cmd_instance_release() {
   cli_root_ok || die "instance release must run as root"
-  [[ $# -eq 1 ]] || die "instance release takes exactly one instance id"
+  [[ $# -eq 1 ]] || die "instance release takes one instance id"
   check_instance_id "$1"
   do_instance_release "$(canon_id "$1")"
 }
@@ -4446,7 +4374,6 @@ do_instance_release() {
   local id unit
   id=$(canon_id "$1")
   unit=$(instance_unit "$id")
-  log "stopping $unit"
   systemctl stop "$unit" || die "systemctl stop $unit failed"
   reconcile_pool "$(pool_target_k)"
   echo "RHIZO_RELEASED id=$id"
@@ -4499,5 +4426,5 @@ case "$CMD" in
   snapshot)       cmd_snapshot "$@" ;;
   instance)       cmd_instance "$@" ;;
   pool)           cmd_pool "$@" ;;
-  *) echo "[$PROG] FAIL: unknown command '$CMD': run 'rhizo --help'" >&2; exit 2 ;;
+  *) echo "[$PROG] unknown command '$CMD'" >&2; exit 2 ;;
 esac

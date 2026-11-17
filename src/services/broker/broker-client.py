@@ -49,7 +49,7 @@ def fail(reason):
 
 
 def rhizo_membership(uid=None):
-    """return the account name and its rhizo group state"""
+    """return pw_name, rhizo group membership and whether the process gids include rhizo"""
     uid = os.getuid() if uid is None else uid
     try:
         user = pwd.getpwuid(uid)
@@ -64,11 +64,11 @@ def rhizo_membership(uid=None):
 
 
 def unreachable_reason(err, user, member, holds):
-    """explain why the broker socket refused this process"""
+    """return the connect failure text for SOCKET_PATH"""
     if err.errno == errno.EACCES and member and not holds:
-        return ("cannot reach %s: %s joined group rhizo after this login began -- reboot to finish the install, "
-                "or log in again if Rhizo was already set up" % (SOCKET_PATH, user))
-    return "cannot reach %s: %s -- this account may not be in group rhizo" % (SOCKET_PATH, err)
+        return ("connect to %s failed with EACCES for %s in group rhizo with rhizo absent from getgroups()"
+                % (SOCKET_PATH, user))
+    return "failed to connect to %s (%s)" % (SOCKET_PATH, err)
 
 
 class Unusable(Exception):
@@ -81,11 +81,11 @@ def request_instance(env=None):
     if not raw:
         return 0
     if not SANDBOX_ID_RE.match(raw):
-        raise Unusable("RHIZO_SANDBOX_ID=%r is not an instance id -- 0 to %d, digits only"
+        raise Unusable("RHIZO_SANDBOX_ID=%r is not an integer in 0..%d"
                        % (raw, MAX_SANDBOX_ID))
     inst_id = int(raw, 10)
     if inst_id > MAX_SANDBOX_ID:
-        raise Unusable("RHIZO_SANDBOX_ID=%r is out of range -- 0 to %d"
+        raise Unusable("RHIZO_SANDBOX_ID=%r is outside 0..%d"
                        % (raw, MAX_SANDBOX_ID))
     return inst_id
 
@@ -96,8 +96,7 @@ def activation_token(verb, env=None):
     if verb != "launch" or not token:
         return None
     if not ACTIVATION_TOKEN_RE.fullmatch(token):
-        print("rhizo: XDG_ACTIVATION_TOKEN %r is not one word of [A-Za-z0-9_.:/+=@-], "
-              "so the app's window opens without it" % token[:80], file=sys.stderr)
+        print("XDG_ACTIVATION_TOKEN %r does not match [A-Za-z0-9_.:/+=@-]{1,255}" % token[:80], file=sys.stderr)
         return None
     return token
 
@@ -114,7 +113,7 @@ def resolve_launch_file(arg):
     raw = arg[len("file://"):] if arg.lower().startswith("file://") else arg
     path = os.path.realpath(urllib.parse.unquote(raw))
     if not (os.path.isfile(path) and os.access(path, os.R_OK)):
-        raise Unusable("%s does not name a readable file" % path)
+        raise Unusable("%s is not a readable file" % path)
     return path
 
 
@@ -124,12 +123,12 @@ def file_mime(path):
         out = subprocess.run(["xdg-mime", "query", "filetype", path],
                              stdout=subprocess.PIPE).stdout
     except FileNotFoundError:
-        raise Unusable("no xdg-mime on this host to read %s's type -- install xdg-utils" % path)
+        raise Unusable("failed to run xdg-mime query filetype %s" % path)
     mime = "".join(out.decode("utf-8", "replace").split(";", 1)[0].split())
     if not mime:
         mime = "".join((mimetypes.guess_type(path)[0] or "").split())
     if not mime:
-        raise Unusable("neither xdg-mime nor python's mimetypes named a type for %s" % path)
+        raise Unusable("xdg-mime and mimetypes.guess_type returned no type for %s" % path)
     return mime
 
 
@@ -157,29 +156,29 @@ class Notifier:
         self.unavailable = None
 
     def give_up(self, reason):
-        """record why notifications are unavailable and print it"""
+        """store reason in unavailable and print reason"""
         self.unavailable = reason
-        print("rhizo: %s, so no desktop notification was raised" % reason, file=sys.stderr)
+        print("%s" % reason, file=sys.stderr)
 
     def connect(self):
         """connect to the session bus"""
         if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
-            self.give_up("no session bus (DBUS_SESSION_BUS_ADDRESS is unset)")
+            self.give_up("DBUS_SESSION_BUS_ADDRESS is unset")
             return
         self.dbus_min = load_dbus_min()
         if self.dbus_min is None:
-            self.give_up("no dbus_min.py at " + ", nor at ".join(DBUS_MIN_CANDIDATES))
+            self.give_up("no dbus_min.py at " + ", ".join(DBUS_MIN_CANDIDATES))
             return
         try:
             self.bus = self.dbus_min.Connection.connect()
             self.bus.hello()
         except (self.dbus_min.DBusError, TimeoutError, ConnectionError, OSError) as e:
             self.bus = None
-            self.give_up("the session bus at %s refused this client: %s"
+            self.give_up("failed to connect to the session bus at %s (%s)"
                          % (os.environ["DBUS_SESSION_BUS_ADDRESS"], e))
 
     def post(self, summary):
-        """send a desktop notification at normal urgency"""
+        """call org.freedesktop.Notifications.Notify with summary"""
         if self.bus is None and self.unavailable is None:
             self.connect()
         if self.bus is None:
@@ -189,7 +188,7 @@ class Notifier:
                           "org.freedesktop.Notifications", "Notify", "susssasa{sv}i",
                           ["Rhizo", 0, "", summary, "", [], {}, -1])
         except (self.dbus_min.DBusError, TimeoutError, ConnectionError, OSError) as e:
-            print("rhizo: the desktop refused the notification %r: %s" % (summary, e),
+            print("Notify %r failed (%s)" % (summary, e),
                   file=sys.stderr)
 
     def handle(self, line):
@@ -203,20 +202,20 @@ class Notifier:
 
 
 def copy_to_clipboard(text, env=None):
-    """copy text to the session's clipboard and return success"""
+    """write text to wl-copy or xclip and return whether the exit status is 0"""
     env = os.environ if env is None else env
     if env.get("WAYLAND_DISPLAY"):
         argv = ["wl-copy"]
     elif env.get("DISPLAY"):
         argv = ["xclip", "-selection", "clipboard"]
     else:
-        print("rhizo: no WAYLAND_DISPLAY or DISPLAY, so the clipboard was not set", file=sys.stderr)
+        print("WAYLAND_DISPLAY and DISPLAY are unset", file=sys.stderr)
         return False
     try:
         rc = subprocess.run(argv, input=text.encode(), stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, timeout=10).returncode
     except (OSError, subprocess.TimeoutExpired) as e:
-        print("rhizo: %s did not take the text: %s" % (argv[0], e), file=sys.stderr)
+        print("failed to run %s (%s)" % (argv[0], e), file=sys.stderr)
         return False
     return rc == 0
 
@@ -226,17 +225,17 @@ def open_signin(line):
     fields = dict(f.split("=", 1) for f in line.split()[1:] if "=" in f)
     url, gsf_id = fields.get("url"), fields.get("id", "-")
     if url != SIGNIN_URL:
-        print("rhizo: %r names %r, not %s, so nothing was opened" % (line, url, SIGNIN_URL), file=sys.stderr)
+        print("%r has url=%r, expected %s" % (line, url, SIGNIN_URL), file=sys.stderr)
         return
     if GSF_ID_RE.match(gsf_id):
         copy_to_clipboard(gsf_id)
     else:
-        print("rhizo: Google has not given this device an ID to register yet", file=sys.stderr)
+        print("RHIZO_GAPPS_SIGNIN id does not match GSF_ID_RE", file=sys.stderr)
     try:
         subprocess.Popen(["xdg-open", url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError as e:
-        print("rhizo: could not run xdg-open %s: %s" % (url, e), file=sys.stderr)
+        print("failed to run xdg-open %s (%s)" % (url, e), file=sys.stderr)
 
 
 def sentinel_label(line):
@@ -246,7 +245,7 @@ def sentinel_label(line):
         try:
             return base64.b64decode(fields["label"], validate=True).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as e:
-            print("rhizo: %r carries an undecodable label: %s" % (line, e), file=sys.stderr)
+            print("failed to decode the label in %r (%s)" % (line, e), file=sys.stderr)
     pkg = fields.get("installed")
     return entry_label(pkg) or pkg if pkg else None
 
@@ -265,7 +264,7 @@ def entry_label(pkg):
 
 
 def send_request(sock, verb, args, fd, inst_id=0, token=None):
-    """send the JSON request to the socket"""
+    """write the JSON line to sock with fd as SCM_RIGHTS"""
     request = {"v": 1, "verb": verb,
                "args": [base64.b64encode(a.encode()).decode() for a in args]}
     if token:
@@ -281,12 +280,12 @@ def send_request(sock, verb, args, fd, inst_id=0, token=None):
 
 
 def stream_reply(sock, notifier, idle_timeout=300):
-    """print the reply and return the trailer status"""
+    """print the broker lines and return the RHIZO_BROKER_RC value"""
     rc = None
     buf = b""
     while True:
         if not select.select([sock], [], [], idle_timeout)[0]:
-            print("rhizo: broker went quiet for %ds" % idle_timeout, file=sys.stderr)
+            print("no broker output for %ds" % idle_timeout, file=sys.stderr)
             break
         chunk = sock.recv(65536)
         if not chunk:
@@ -300,7 +299,7 @@ def stream_reply(sock, notifier, idle_timeout=300):
                 try:
                     rc = int(line[len("RHIZO_BROKER_RC="):])
                 except ValueError:
-                    print("rhizo: broker sent an unreadable trailer %r" % line, file=sys.stderr)
+                    print("failed to parse %r" % line, file=sys.stderr)
                 continue
             if line.startswith("E "):
                 print(line[2:], file=sys.stderr, flush=True)
@@ -315,15 +314,14 @@ def stream_reply(sock, notifier, idle_timeout=300):
 
 
 def main(argv):
-    """send a request to rhizo-brokerd"""
+    """write argv as a JSON line to rhizo-brokerd and return RHIZO_BROKER_RC"""
     verb = None
     for shape, wire in CLI_VERBS.items():
         if tuple(argv[:len(shape)]) == shape:
             verb, rest = wire, argv[len(shape):]
             break
     if verb is None:
-        return fail("%r is not a verb this account can ask for -- launch, app list, "
-                    "app install, app remove, start and status are" % " ".join(argv))
+        return fail("%r is not launch, app list, app install, app remove, start or status" % " ".join(argv))
 
     try:
         inst_id = request_instance()
@@ -337,7 +335,7 @@ def main(argv):
         try:
             fd = os.open(rest[0], os.O_RDONLY)
         except OSError as e:
-            return fail("cannot read %s: %s" % (rest[0], e))
+            return fail("failed to open %s (%s)" % (rest[0], e))
         rest = []
 
     if verb == "launch" and len(rest) == 2 and launch_arg_kind(rest[1]) == "path":
@@ -363,8 +361,8 @@ def main(argv):
     sock.shutdown(socket.SHUT_WR)
     rc = stream_reply(sock, notifier)
     if rc is None:
-        notifier.handle("RHIZO_FAIL the broker closed the connection with no RHIZO_BROKER_RC trailer")
-        return fail("the broker closed the connection with no RHIZO_BROKER_RC trailer")
+        notifier.handle("RHIZO_FAIL recv returned 0 bytes before RHIZO_BROKER_RC")
+        return fail("recv returned 0 bytes before RHIZO_BROKER_RC")
     return rc
 
 

@@ -10,8 +10,8 @@ Package: rhizo
 Architecture: amd64
 Depends: ${misc:Depends},
          ${shlibs:Depends},
-         linux-image-rhizo (>= 7.1.0-rc1-rhizo-47),
-         linux-headers-rhizo (>= 7.1.0-rc1-rhizo-47),
+         linux-image-rhizo (>= 7.3.1-rhizo-49),
+         linux-headers-rhizo (>= 7.3.1-rhizo-49),
          python3 (>= 3.12),
          systemd,
          grub2-common,

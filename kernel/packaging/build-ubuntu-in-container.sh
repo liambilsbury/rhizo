@@ -1,9 +1,9 @@
 #!/bin/bash
-# build the Ubuntu kernel debs in an Ubuntu container
+# Ubuntu kernel deb build in an Ubuntu container
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd)
 cache=$(cd "${RHIZO_KERNEL_CACHE:-$HOME/.cache/rhizo/kernel}" && pwd)
-out=${1:?usage: build-ubuntu-in-container.sh <outdir> [distro-config]} cfg=${2:-$cache/config-ubuntu}
+out=${1:?build-ubuntu-in-container.sh <outdir> [distro-config]} cfg=${2:-$cache/config-ubuntu}
 cfg=$(cd "$(dirname "$cfg")" && pwd)/$(basename "$cfg")
 mkdir -p "$out"; out=$(cd "$out" && pwd)
 mounts=(-v "$root:$root:ro" -v "$cache:$cache" -v "$out:$out")

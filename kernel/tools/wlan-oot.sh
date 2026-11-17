@@ -1,5 +1,5 @@
 #!/bin/bash
-# build rhizo_wlan.ko and the patched cfg80211.ko out of tree
+# out-of-tree rhizo_wlan.ko and patched cfg80211.ko build
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cache=${RHIZO_KERNEL_CACHE:-$HOME/.cache/rhizo/kernel}
@@ -15,14 +15,14 @@ declare -A paths=(
 order=(0026-cfg80211-wiphy-no-rfkill 0027-nl80211-regulatory-init-net 0028-cfg80211-self-managed-idle
   0029-rhizo-wlan)
 
-die() { echo "wlan-oot.sh: $*" >&2; exit 1; }
+die() { echo "$*" >&2; exit 1; }
 
 # lay out the patched base tree in <dir>/src
 make_tree() {
   local src=$1/src p
-  [[ ! -e "$src" ]] || die "$src exists -- move it away first"
+  [[ ! -e "$src" ]] || die "$src exists"
   git -C "$cache/linux" cat-file -e "$base:net/wireless/core.c" 2>/dev/null \
-    || die "no $base tree in $cache/linux (run make kernel-inputs)"
+    || die "no $base:net/wireless/core.c in $cache/linux"
   mkdir -p "$src"
   # shellcheck disable=SC2086
   git -C "$cache/linux" archive "$base" net/wireless include/net/cfg80211.h \
@@ -31,7 +31,7 @@ make_tree() {
   git -C "$src" add -A
   git -C "$src" -c user.name=rhizo-kernel -c user.email=kernel@localhost commit -q -m "$base"
   for p in "${order[@]}"; do
-    git -C "$src" apply "$root/kernel/patches/$p.patch" || die "$p.patch does not apply to $base"
+    git -C "$src" apply "$root/kernel/patches/$p.patch" || die "git apply $p.patch failed on $base"
   done
   echo "$src"
 }
@@ -39,8 +39,8 @@ make_tree() {
 # build <dir>/src's modules in the build container
 build() {
   local dir=$1 hdr=$2 out=$1/build image
-  [[ -f "$hdr/Module.symvers" && -f "$hdr/include/config/auto.conf" ]] || die "$hdr is not a kernel headers tree"
-  [[ -d "$dir/src/net/wireless" ]] || die "no $dir/src -- run: wlan-oot.sh tree $dir"
+  [[ -f "$hdr/Module.symvers" && -f "$hdr/include/config/auto.conf" ]] || die "no $hdr/Module.symvers or $hdr/include/config/auto.conf"
+  [[ -d "$dir/src/net/wireless" ]] || die "no $dir/src/net/wireless"
   mkdir -p "$out/cfg80211" "$out/rhizo" "$out/include/net" "$out/include/uapi/linux"
   cp -r "$dir"/src/net/wireless/*.[ch] "$dir/src/net/wireless/certs" "$out/cfg80211/"
   cp "$dir"/src/drivers/net/wireless/rhizo/*.c "$out/rhizo/"
@@ -70,8 +70,8 @@ export_patches() {
 }
 
 case "${1:-}" in
-  tree) (( $# == 2 )) || die "usage: wlan-oot.sh tree <dir>"; make_tree "$2" ;;
-  build) (( $# == 3 )) || die "usage: wlan-oot.sh build <dir> <headers>"; build "$2" "$(cd "$3" && pwd)" ;;
-  export) (( $# == 2 )) || die "usage: wlan-oot.sh export <dir>"; export_patches "$2" ;;
-  *) die "usage: wlan-oot.sh tree <dir> | build <dir> <headers> | export <dir>" ;;
+  tree) (( $# == 2 )) || die "wlan-oot.sh tree <dir>"; make_tree "$2" ;;
+  build) (( $# == 3 )) || die "wlan-oot.sh build <dir> <headers>"; build "$2" "$(cd "$3" && pwd)" ;;
+  export) (( $# == 2 )) || die "wlan-oot.sh export <dir>"; export_patches "$2" ;;
+  *) die "wlan-oot.sh tree <dir> | build <dir> <headers> | export <dir>" ;;
 esac

@@ -152,7 +152,7 @@ static void put_int_annotation(struct hd_buf* te, const char* name, int64_t v) {
   put_msg(te, F_TE_DEBUG, &da);
 }
 
-// build a slice begin packet with held time and work period
+// build a slice begin packet with held_us and work_period annotations
 void hd_pb_slice_begin(struct hd_buf* b, uint64_t ts, uint64_t uuid, const char* name,
                        int64_t held_us, int64_t work_period) {
   SUB(te, 192);

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- MediaProfiles reads these camcorder profiles' attributes by position -->
+<!-- camcorder profiles in MediaProfiles attribute order -->
 <MediaSettings>
     <CamcorderProfiles cameraId="0">
         <EncoderProfile quality="qcif" fileFormat="mp4" duration="30">

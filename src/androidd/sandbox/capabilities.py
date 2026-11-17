@@ -123,7 +123,7 @@ def config_path():
 # resolved capability values
 class Policy:
     def __init__(self, values, source):
-        """store the resolved capability values and their source"""
+        """store values and source"""
         self._values = values
         self.source = source
 
@@ -141,7 +141,7 @@ class Policy:
         return self._values[capability]
 
     def __eq__(self, other):
-        """compare two policies by their capability values"""
+        """return whether other is a Policy with equal _values"""
         return isinstance(other, Policy) and self._values == other._values
 
 
@@ -152,7 +152,7 @@ def defaults():
 
 
 def deny_all():
-    """return the policy that turns every optional capability off"""
+    """return the deny-all Policy"""
     values = {}
     for name, spec in CAPABILITIES.items():
         if spec["kind"] == "bool":
@@ -213,10 +213,10 @@ def _parse_display(raw):
     """parse a WxH@fps/dpi value into a normalized string and an error"""
     m = _DISPLAY_RE.match(raw.strip())
     if not m:
-        return None, "expected WxH@fps/dpi, e.g. 1280x800@60/400"
+        return None, "expected WxH@fps/dpi"
     w, h, fps, dpi = (int(g) for g in m.groups())
     if w <= 0 or h <= 0 or fps <= 0 or dpi <= 0:
-        return None, "expected WxH@fps/dpi with every value positive"
+        return None, "expected WxH@fps/dpi with W, H, fps and dpi > 0"
     return "%dx%d@%d/%d" % (w, h, fps, dpi), None
 
 
@@ -230,10 +230,10 @@ def _parse_cgroup_cpu_max(raw):
         return "max", None
     m = _CGROUP_CPU_MAX_RE.match(stripped)
     if not m:
-        return None, 'expected "<quota> <period>" or the literal "max"'
+        return None, 'expected "<quota> <period>" or "max"'
     quota, period = int(m.group(1)), int(m.group(2))
     if quota <= 0 or period <= 0:
-        return None, 'expected "<quota> <period>" with both positive, or "max"'
+        return None, 'expected "<quota> <period>" with quota and period > 0, or "max"'
     return "%d %d" % (quota, period), None
 
 
@@ -249,7 +249,7 @@ def _parse_cgroup_mem_max(raw):
         return "max", None
     m = _CGROUP_MEM_MAX_RE.match(stripped)
     if not m:
-        return None, 'expected a byte count, optionally suffixed K/M/G, or the literal "max"'
+        return None, 'expected "<bytes>[K|M|G]" or "max"'
     value = int(m.group(1)) * _MEM_SUFFIX_BYTES[m.group(2)]
     if value <= 0:
         return None, 'expected a positive byte count, or "max"'
@@ -257,13 +257,13 @@ def _parse_cgroup_mem_max(raw):
 
 
 def _apply_overlay(values, parser, path):
-    """validate the parser's keys and copy them into values"""
+    """parse the parser keys into values and return the first error"""
     for section in parser.sections():
         for key in parser[section]:
             name = "%s.%s" % (section, key)
             spec = CAPABILITIES.get(name)
             if spec is None:
-                return "%s: [%s] %s is not a capability" % (path, section, key)
+                return "%s [%s] %s is not a capability" % (path, section, key)
             raw = parser[section][key]
             if spec["kind"] == "bool":
                 parsed, err = _parse_bool(raw)
@@ -282,7 +282,7 @@ def _apply_overlay(values, parser, path):
                 if parsed not in spec["choices"]:
                     parsed, err = None, "expected one of %s" % "/".join(spec["choices"])
             if err is not None:
-                return "%s: [%s] %s=%r, %s" % (path, section, key, raw, err)
+                return "%s [%s] %s=%r, %s" % (path, section, key, raw, err)
             values[name] = parsed
     return None
 
@@ -294,9 +294,9 @@ def _load_parser(path):
         with open(path, "r") as handle:
             parser.read_file(handle, source=path)
     except OSError as exc:
-        return None, "%s: cannot read: %s" % (path, exc)
+        return None, "failed to read %s (%s)" % (path, exc)
     except configparser.Error as exc:
-        return None, "%s: not a valid config file: %s" % (path, exc)
+        return None, "failed to parse %s (%s)" % (path, exc)
     return parser, None
 
 
@@ -330,7 +330,7 @@ def read_policy(path=None, overlay_path=None):
         for name in HOST_WIDE:
             section, key = name.split(".", 1)
             if overlay_parser.has_option(section, key):
-                return None, "%s: [%s] %s is host-wide, set it in %s" % (
+                return None, "%s [%s] %s is host-wide, valid only in %s" % (
                     overlay_path, section, key, path)
         err = _apply_overlay(values, overlay_parser, overlay_path)
         if err is not None:
@@ -345,7 +345,7 @@ def policy_or_deny(path=None, log=None, instance_id=None):
     policy, err = read_policy(path, overlay_path)
     if policy is None:
         if log is not None:
-            log("%s -- denying every optional capability" % err)
+            log("%s, returning deny_all()" % err)
         return deny_all()
     return policy
 
@@ -369,7 +369,7 @@ def is_adb_pubkey_line(line):
 
 
 def has_adb_key(paths):
-    """return true when any of the files holds an adb public key"""
+    """return true when a file in paths has an adb public key line"""
     for path in paths:
         try:
             with open(path) as handle:

@@ -19,7 +19,7 @@
 
 namespace rhizo::c2va {
 
-// a VA display, terminated with its last reference
+// a VA display, terminated with the last shared_ptr reference
 class Display {
  public:
   ~Display();
@@ -70,7 +70,7 @@ class VaDevice {
 enum class Codec { kAvc, kHevc, kVp9, kAv1 };
 enum class Kind { kDecoder, kEncoder };
 
-// a c2.rhizo.* component as the running driver offers it
+// a c2.rhizo.* component with the running driver's limits
 struct ComponentCaps {
   std::string name;
   std::string mime;
@@ -90,7 +90,7 @@ struct ComponentCaps {
   std::string functional = "unchecked";
 };
 
-// a dropped component, or its dropped 10-bit profiles
+// a dropped component, or the dropped 10-bit profiles of a component
 struct DroppedComponent {
   std::string name;
   std::vector<VAProfile> va_profiles;
@@ -98,7 +98,7 @@ struct DroppedComponent {
   std::string why;
 };
 
-// return the components with a VA config that creates
+// return the components whose vaCreateConfig succeeds
 std::vector<ComponentCaps> QueryComponents(VADisplay display);
 std::vector<ComponentCaps> QueryComponents(VaDevice& device, Status* status = nullptr);
 
@@ -109,7 +109,7 @@ bool CodecForProfile(VAProfile profile, Codec* codec);
 
 const char* ProfileName(VAProfile profile);
 
-// test once whether the driver's VPP draws NV12 to RGBA
+// return VppUsable(display)
 bool VppDraws(VADisplay display);
 // format the components as the probe's one-line JSON
 std::string ComponentsJson(const std::string& driver, int va_major, int va_minor,
@@ -117,7 +117,7 @@ std::string ComponentsJson(const std::string& driver, int va_major, int va_minor
                            const std::vector<DroppedComponent>& dropped = {},
                            const std::string& measurements = "");
 
-// a dmabuf-backed image as gralloc describes it
+// a dmabuf-backed image with gralloc's plane layout
 struct DmabufImage {
   int fd;
   uint32_t drm_fourcc;
@@ -191,7 +191,7 @@ struct DecodeCallbacks {
 
 using DecoderCoreFactory = std::function<std::unique_ptr<DecoderCore>(DecoderHost* host)>;
 
-// a VA decode session hosting a decoder core
+// a VA decode session, the DecoderHost of a decoder core
 class DecodeSession final : public DecoderHost {
  public:
   // create a session for the codec's linked core
@@ -204,7 +204,7 @@ class DecodeSession final : public DecoderHost {
 
   // decode an access unit framed per core.h
   Status Decode(const uint8_t* data, size_t size, uint64_t tag, bool codec_config);
-  // output the owed pictures
+  // output the pending pictures
   Status Drain();
   // skip the pending tags
   void Reset();
@@ -256,7 +256,7 @@ enum class RgbaPath {
   kUnsupported,
 };
 
-// a VA encode session hosting an encoder core
+// a VA encode session, the EncoderHost of an encoder core
 class EncodeSession final : public EncoderHost {
  public:
   // create a session with the config clamped to the driver's limits

@@ -1,5 +1,5 @@
 #!/bin/bash
-# select and cache an F-Droid test APK
+# var/share/rhizo-test-fixture.apk var/share/rhizo-test-fixture.json
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit
 SHARE="$(pwd)/var/share"
@@ -16,7 +16,7 @@ android_sdk_resolve || exit 1
 FORCE=0
 [[ "${1:-}" == "--force" ]] && FORCE=1
 
-# print a prefixed message to stderr
+# print a [fetch-test-apk] line to stderr
 log() { echo "[fetch-test-apk] $*" >&2; }
 
 if [[ "$FORCE" == 0 && -f "$APK_OUT" && -f "$META_OUT" ]]; then
@@ -24,11 +24,11 @@ if [[ "$FORCE" == 0 && -f "$APK_OUT" && -f "$META_OUT" ]]; then
   got_sha=$(sha256sum "$APK_OUT" 2>/dev/null | cut -d' ' -f1)
   if [[ -n "$want_sha" && "$want_sha" == "$got_sha" ]]; then
     pkg=$(python3 -c "import json; print(json.load(open('$META_OUT'))['package'])")
-    log "cache OK, no-op: $pkg (sha256=$got_sha) at $APK_OUT"
+    log "ok $APK_OUT package=$pkg sha256=$got_sha"
     cat "$META_OUT" >&2
     exit 0
   fi
-  log "cache present but sha256 mismatch or unreadable -- re-selecting"
+  log "sha256 of $APK_OUT does not match $META_OUT"
 fi
 
 need_fetch=1
@@ -37,18 +37,17 @@ if [[ -f "$INDEX_CACHE" ]]; then
   (( age < INDEX_MAX_AGE_S )) && need_fetch=0
 fi
 if (( need_fetch )); then
-  log "fetching index-v2.json (~56MB)..."
   curl -sS --max-time 90 -o "$INDEX_CACHE.tmp" \
-    https://f-droid.org/repo/index-v2.json || { log "FAIL: index fetch failed"; exit 1; }
+    https://f-droid.org/repo/index-v2.json || { log "curl https://f-droid.org/repo/index-v2.json failed"; exit 1; }
   mv "$INDEX_CACHE.tmp" "$INDEX_CACHE"
 else
-  log "reusing cached index-v2.json ($((age))s old)"
+  log "$INDEX_CACHE age_s=$((age))"
 fi
 
 CANDS=$(python3 tools/fetch/test-apk-candidates.py "$INDEX_CACHE")
 n=$(grep -c . <<<"$CANDS" || true)
-log "index metadata filter: $n candidate(s)"
-[[ "$n" -gt 0 ]] || { log "FAIL: no candidates passed the index metadata filter"; exit 1; }
+log "candidates=$n"
+[[ "$n" -gt 0 ]] || { log "test-apk-candidates.py printed no candidates"; exit 1; }
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -56,27 +55,27 @@ trap 'rm -rf "$WORK"' EXIT
 while IFS=$'\t' read -r size pkgname fname sha; do
   [[ -n "$pkgname" ]] || continue
   out="$WORK/cand.apk"
-  log "trying $pkgname (${size}B) <- $fname"
+  log "candidate $pkgname bytes=${size} file=$fname"
   if ! curl -sS --max-time 30 -o "$out" "https://f-droid.org/repo${fname}"; then
-    log "  skip: download failed"; continue
+    log "skip $pkgname curl failed"; continue
   fi
   gotsha=$(sha256sum "$out" | cut -d' ' -f1)
   if [[ "$gotsha" != "$sha" ]]; then
-    log "  skip: sha256 mismatch (index said $sha, got $gotsha)"; continue
+    log "skip $pkgname sha256 $gotsha, expected $sha"; continue
   fi
 
   badging=$("$AAPT2" dump badging "$out" 2>/dev/null)
-  if [[ -z "$badging" ]]; then log "  skip: aapt2 dump badging produced nothing"; continue; fi
+  if [[ -z "$badging" ]]; then log "skip $pkgname aapt2 dump badging printed nothing"; continue; fi
 
   if grep -q "^native-code:" <<<"$badging"; then
-    log "  skip: aapt2 shows native-code (index metadata missed it)"; continue
+    log "skip $pkgname native-code"; continue
   fi
   if grep -qi "testOnly='.*true.*'\|testOnly='1'" <<<"$badging"; then
-    log "  skip: testOnly per aapt2"; continue
+    log "skip $pkgname testOnly"; continue
   fi
   target=$(grep -m1 '^targetSdkVersion:' <<<"$badging" | grep -o "[0-9]\+")
   if [[ -z "$target" || "$target" -lt 26 ]]; then
-    log "  skip: aapt2 targetSdkVersion='$target' < 26"; continue
+    log "skip $pkgname targetSdkVersion='$target' < 26"; continue
   fi
   bad_perm=""
   while read -r p; do
@@ -92,17 +91,17 @@ while IFS=$'\t' read -r size pkgname fname sha; do
     esac
   done < <(grep "^uses-permission:" <<<"$badging" | grep -o "name='[^']*'" | sed "s/name='//;s/'//")
   if [[ -n "$bad_perm" ]]; then
-    log "  skip: aapt2 shows dangerous permission $bad_perm (index metadata missed it)"; continue
+    log "skip $pkgname permission $bad_perm"; continue
   fi
 
   la=$(grep -m1 "^launchable-activity:" <<<"$badging")
   if [[ -z "$la" ]]; then
-    log "  skip: no launchable-activity per aapt2 (widget/shortcut/IME-setup, not a real app)"; continue
+    log "skip $pkgname no launchable-activity"; continue
   fi
   act=$(echo "$la" | sed "s/.*name='\([^']*\)'.*/\1/")
 
   if ! "$ZIPALIGN" -c 4 "$out" >/tmp/rhizo-zipalign-check.log 2>&1; then
-    log "  skip: zipalign -c 4 FAILED (resources.arsc not aligned)"
+    log "skip $pkgname zipalign -c 4 failed"
     continue
   fi
 
@@ -121,10 +120,10 @@ while IFS=$'\t' read -r size pkgname fname sha; do
   "selected_at": "$(date -u +%FT%TZ)"
 }
 EOF
-  log "SELECTED: $pkgname/$act ('$label'), sha256=$gotsha, cached at $APK_OUT"
+  log "wrote $APK_OUT package=$pkgname activity=$act label='$label' sha256=$gotsha"
   cat "$META_OUT" >&2
   exit 0
 done <<< "$CANDS"
 
-log "FAIL: no candidate passed full re-verification (aapt2 + zipalign)"
+log "no candidate passed the aapt2 and zipalign checks"
 exit 1

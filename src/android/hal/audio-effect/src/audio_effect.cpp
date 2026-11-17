@@ -32,7 +32,7 @@ using ndk::ScopedAStatus;
 
 namespace {
 
-// write a message to the kernel log
+// write msg to /dev/kmsg
 void klog(const char* msg) {
   int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
   if (fd >= 0) {
@@ -42,7 +42,7 @@ void klog(const char* msg) {
 }
 
 void klogf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-// format a message and write it to the kernel log
+// write a formatted message to /dev/kmsg
 void klogf(const char* fmt, ...) {
   char msg[256];
   va_list ap;
@@ -176,7 +176,7 @@ class RhizoEffect : public BnEffect {
     return ScopedAStatus::ok();
   }
 
-  // open the effect, set up its queues and start the processing thread
+  // create the effect queues and start the processing thread
   ScopedAStatus open(const Parameter::Common& common,
                      const std::optional<Parameter::Specific>& specific,
                      IEffect::OpenEffectReturn* out) override {
@@ -195,7 +195,7 @@ class RhizoEffect : public BnEffect {
     return ScopedAStatus::ok();
   }
 
-  // close the effect and release its queues
+  // stop the processing thread and delete the effect queues
   ScopedAStatus close() override {
     {
       std::lock_guard<std::mutex> lock(mLock);
@@ -213,7 +213,7 @@ class RhizoEffect : public BnEffect {
     return ScopedAStatus::ok();
   }
 
-  // change the effect state
+  // set the effect state for id
   ScopedAStatus command(CommandId id) override {
     std::lock_guard<std::mutex> lock(mLock);
     if (mState == State::INIT) return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_STATE);
@@ -282,13 +282,13 @@ class RhizoEffect : public BnEffect {
     mInputMQ = std::make_unique<DataMQ>(inputCapacity);
     mOutputMQ = std::make_unique<DataMQ>(outputCapacity);
     if (!mStatusMQ->isValid() || !mInputMQ->isValid() || !mOutputMQ->isValid()) {
-      klogf("effect FMQ setup failed for %s", mDesc.common.name.c_str());
+      klogf("failed to create the effect FMQs for %s", mDesc.common.name.c_str());
       return false;
     }
     if (::android::OK != ::android::hardware::EventFlag::createEventFlag(
                               mStatusMQ->getEventFlagWord(), &mEfGroup) ||
         !mEfGroup) {
-      klogf("effect EventFlag setup failed for %s", mDesc.common.name.c_str());
+      klogf("failed to create the EventFlag for %s", mDesc.common.name.c_str());
       return false;
     }
     out->statusMQ = mStatusMQ->dupeDesc();
@@ -415,14 +415,14 @@ class RhizoEffectFactory : public BnFactory {
         if (effectVersion < kDestroyAnyStateSupportedVersion &&
             handle->getState(&state).getStatus() == EX_NONE && state != State::INIT) {
           return ScopedAStatus::fromExceptionCodeWithMessage(
-              EX_ILLEGAL_STATE, "effect must be closed before destroy on this HAL version");
+              EX_ILLEGAL_STATE, "effect state is not INIT and IEffect version is below 3");
         }
         mCreated.erase(it);
         return ScopedAStatus::ok();
       }
     }
     return ScopedAStatus::fromExceptionCodeWithMessage(EX_ILLEGAL_ARGUMENT,
-                                                         "not an effect this factory created");
+                                                         "unknown effect handle");
   }
 
  private:
@@ -435,20 +435,18 @@ class RhizoEffectFactory : public BnFactory {
 
 // register the effect factory and join the binder thread pool
 int main() {
-  klog("main() entered");
   auto factory = ndk::SharedRefBase::make<RhizoEffectFactory>();
   const std::string instance = std::string(RhizoEffectFactory::descriptor) + "/default";
   binder_status_t status =
       AServiceManager_addService(factory->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered IFactory/default with 4 real effect types, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

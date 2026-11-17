@@ -31,7 +31,7 @@ def parse_acl(blob):
     for tag in (ACL_USER_OBJ, ACL_GROUP_OBJ, ACL_OTHER):
         n = sum(1 for e in entries if e[0] == tag)
         if n != 1:
-            raise ValueError("ACL xattr carries tag 0x%02x %d times, not once" % (tag, n))
+            raise ValueError("ACL xattr has tag 0x%02x %d times, expected 1" % (tag, n))
     return entries
 
 
@@ -84,13 +84,13 @@ def read_acl(path, st):
 
 
 def is_vt(st):
-    """check for a VT device node"""
+    """return whether st is a tty major 4 node with minor 1 to MAX_VT"""
     return (stat.S_ISCHR(st.st_mode) and os.major(st.st_rdev) == TTY_MAJOR
             and 1 <= os.minor(st.st_rdev) <= MAX_VT)
 
 
 def grant_root(path, uid):
-    """add the root entry to a node"""
+    """add a uid 0 rw entry to the ACL of path when owned by uid"""
     st = os.lstat(path)
     if st.st_uid != uid:
         return "not-owner"
@@ -109,12 +109,12 @@ def grant_vt(path, uid):
 
 
 def root_keeps_rw(entries):
-    """check uid 0 for rw access"""
+    """return whether uid 0 has rw in entries"""
     return root_perm(entries, ACL_UNDEFINED_ID) & RW == RW
 
 
 def grant_root_named(path):
-    """add the root entry to a node"""
+    """add a uid 0 rw entry to the ACL of path"""
     st = os.lstat(path)
     entries = read_acl(path, st)
     if root_keeps_rw(entries):
@@ -133,11 +133,11 @@ def vt_path(vtnr):
 
 
 def session_vtnr(session_id):
-    """read a session's VTNr from loginctl"""
+    """return the loginctl show-session VTNr of session_id"""
     r = subprocess.run(["loginctl", "show-session", session_id, "-p", "VTNr", "--value"],
                        capture_output=True, text=True, timeout=5)
     if r.returncode != 0:
-        raise OSError("loginctl show-session %s exited %d: %s" % (session_id, r.returncode,
+        raise OSError("loginctl show-session %s failed with exit status %d (%s)" % (session_id, r.returncode,
                                                                   r.stderr.strip()))
     return r.stdout
 
@@ -159,25 +159,25 @@ def main_session(session_id):
     try:
         path, done = grant_session(session_id)
     except (OSError, ValueError, subprocess.SubprocessError) as e:
-        print("%s: could not give root access to the VT of session %s: %s" % (PROG, session_id, e),
+        print("%s failed to add a uid 0 ACL entry to the VT of session %s (%s)" % (PROG, session_id, e),
               file=sys.stderr)
         return 1
     if path is not None:
-        print("%s: %s of session %s: %s" % (PROG, path, session_id, done))
+        print("%s %s of session %s %s" % (PROG, path, session_id, done))
     return 1 if done == "not-a-vt" else 0
 
 
 def main(argv):
-    """open the console VT or session for root access and report failure"""
+    """grant root rw on a VT or on a session's VT"""
     if len(argv) == 3 and argv[1] == "--session":
         return main_session(argv[2])
     if len(argv) != 2 or argv[1].startswith("-"):
-        print("usage: %s /dev/ttyN | --session ID" % PROG, file=sys.stderr)
+        print("%s /dev/ttyN | --session ID" % PROG, file=sys.stderr)
         return 2
     try:
         grant_vt(argv[1], os.getuid())
     except (OSError, ValueError) as e:
-        print("%s: could not give root access to %s: %s" % (PROG, argv[1], e), file=sys.stderr)
+        print("%s failed to add a uid 0 ACL entry to %s (%s)" % (PROG, argv[1], e), file=sys.stderr)
         return 1
     return 0
 

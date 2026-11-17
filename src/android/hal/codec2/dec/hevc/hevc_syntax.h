@@ -77,7 +77,7 @@ inline bool IsSlnr(uint8_t t) { return t <= 14 && (t % 2) == 0; }
 // return true for a non-reserved VCL type
 inline bool IsHandledVcl(uint8_t t) { return t <= kRaslR || (t >= kBlaWLp && t <= kCraNut); }
 
-// NAL unit RBSP and its emulation prevention byte positions
+// NAL unit RBSP and the emulation prevention byte positions
 struct Rbsp {
   std::vector<uint8_t> bytes;
   std::vector<uint32_t> ep_before;
@@ -102,7 +102,7 @@ struct ScalingLists {
   uint8_t list[4][6][64];
   uint8_t dc[2][6];
 };
-// fill the default scaling lists (Tables 7-5, 7-6)
+// fill the Table 7-5 and 7-6 default scaling lists
 void DefaultScalingLists(ScalingLists* out);
 
 struct Vps {
@@ -208,7 +208,7 @@ struct Pps {
   bool slice_segment_header_extension_present;
 };
 
-// tile layout of a PPS resolved against its SPS
+// tile layout of a PPS resolved against the SPS
 struct PpsLayout {
   uint16_t column_width_minus1[kMaxTileCols];
   uint16_t row_height_minus1[kMaxTileRows];
@@ -276,7 +276,7 @@ struct SliceHeader {
   uint32_t header_bytes;
 };
 
-// read the first-segment flag and PPS id of a slice header
+// read first_slice_segment_in_pic_flag and slice_pic_parameter_set_id
 bool PeekSliceHeader(const Rbsp& rbsp, bool* first_slice_segment_in_pic, uint32_t* pps_id);
 
 Parse ParseVps(const Rbsp& rbsp, TraceSink* trace, Vps* out);

@@ -14,7 +14,7 @@
 
 namespace rhizo {
 
-// tell whether a seal set allows a zero-copy pool
+// return whether a seal set allows a zero-copy pool
 inline bool ShmSealsAllowZeroCopy(int seals) {
   return SealsHoldSize(seals) && (seals & F_SEAL_SEAL) != 0 && (seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) == 0;
 }
@@ -29,14 +29,14 @@ inline int32_t ShmBytesPerPixel(uint32_t drmFormat) {
   }
 }
 
-// tell whether a wl_shm pool over the frame's fd fits it
+// return whether a wl_shm pool over the frame's fd fits the frame
 inline bool ShmZeroCopyFits(uint32_t drmFormat, int32_t width, int32_t height, int32_t strideBytes, int64_t fileBytes) {
   const int64_t bpp = ShmBytesPerPixel(drmFormat);
   return bpp > 0 && width > 0 && height > 0 && strideBytes >= static_cast<int64_t>(width) * bpp &&
          static_cast<int64_t>(strideBytes) * height <= fileBytes;
 }
 
-// tell whether a frame of 4-byte pixels fits the copy path
+// return whether a frame of 4-byte pixels fits the copy path
 inline bool ShmCopyFits(int32_t width, int32_t height, int32_t strideBytes, int64_t fileBytes) {
   return width > 0 && height > 0 && strideBytes >= static_cast<int64_t>(width) * 4 &&
          static_cast<int64_t>(strideBytes) * height <= fileBytes;
@@ -58,12 +58,12 @@ inline uint32_t ShmCopyFormat(uint32_t drmFormat) {
   }
 }
 
-// tell whether wl_shm can present drmFormat
+// return whether drmFormat has an advertised or copy wl_shm format
 inline bool ShmPresentable(const std::set<uint32_t>& advertised, uint32_t drmFormat) {
   return advertised.count(ShmFormatOf(drmFormat)) != 0 || ShmCopyFormat(drmFormat) != 0xffffffffu;
 }
 
-// name the wayland globals a connection presents through
+// return "zwp_linux_dmabuf_v1", "wl_shm", both or "nothing"
 inline const char* PresentPathsName(bool dmabuf, bool shm) {
   if (dmabuf && shm) return "zwp_linux_dmabuf_v1 and wl_shm";
   if (dmabuf) return "zwp_linux_dmabuf_v1";

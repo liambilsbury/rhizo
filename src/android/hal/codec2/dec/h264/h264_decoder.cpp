@@ -147,7 +147,7 @@ void H264Decoder::Note(Status s) {
   if (status_ == Status::kOk) status_ = s;
 }
 
-// output a store's tag once and drop its holder
+// call host_->Output unless the tag is done, and decrement the tag's holders
 void H264Decoder::OutputStore(const FrameStore& fs) {
   auto it = tags_.find(fs.tag);
   if (it == tags_.end()) return;
@@ -295,7 +295,7 @@ const Pps* H264Decoder::GetPps(uint32_t pps_id) {
   return pps_[pps_id].get();
 }
 
-// return true when a slice starts a new primary coded picture
+// return whether a and b differ in a field compared in 7.4.1.2.4
 bool H264Decoder::IsNewPicture(const PicKey& a, const PicKey& b) const {
   if (a.frame_num != b.frame_num || a.pps_id != b.pps_id || a.field != b.field) return true;
   if (a.field && a.bottom != b.bottom) return true;

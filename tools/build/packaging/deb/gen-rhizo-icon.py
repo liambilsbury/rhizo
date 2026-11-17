@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the generic Rhizo app icon, the Android robot's head, as a PNG
+"""rhizo.png writer for the generic Rhizo app icon, the Android robot head
 
 The Android robot is reproduced or modified from work created and shared by Google and used according
 to terms described in the Creative Commons 3.0 Attribution License."""
@@ -12,7 +12,7 @@ import zlib
 SIZE = 256
 GREEN = (61, 220, 132)
 
-USAGE = """Usage: gen-rhizo-icon.py <out.png>"""
+USAGE = """gen-rhizo-icon.py <out.png>"""
 HEAD_CX, HEAD_CY, HEAD_R = 128.0, 190.0, 100.0
 EYE_R = 10.0
 EYES = ((88.0, 150.0), (168.0, 150.0))
@@ -23,7 +23,7 @@ ANTENNAE = ((84.0, 108.0, 62.0, 70.0), (172.0, 108.0, 194.0, 70.0))
 def encode_png(width, height, rows):
     """return the PNG bytes of RGBA rows"""
     def chunk(tag, data):
-        """build a PNG chunk from a tag and data"""
+        """return a PNG chunk of a tag and data"""
         body = tag + data
         return (struct.pack(">I", len(data)) + body
                 + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
@@ -55,7 +55,7 @@ def _segment_d(px, py, ax, ay, bx, by):
 
 @functools.lru_cache(maxsize=1)
 def mark_png():
-    """render the Android robot's head to a PNG"""
+    """return the PNG bytes of the Android robot head"""
     rows = []
     for y in range(SIZE):
         py = y + 0.5
@@ -74,7 +74,7 @@ def mark_png():
 
 
 def main(argv):
-    """write the icon PNG to the path given"""
+    """write the icon PNG to argv[1]"""
     if len(argv) != 2:
         print(USAGE, file=sys.stderr)
         return 2

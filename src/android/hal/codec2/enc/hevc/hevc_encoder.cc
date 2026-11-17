@@ -79,11 +79,11 @@ Status HevcEncoder::Init() {
   Status s = Probe();
   if (s != Status::kOk) return s;
   if (driver_.virgl && !driver_.virgl_host_radeonsi) {
-    EncLog("hevc encoder: virgl host is not radeonsi, refused");
+    EncLog("hevc encoder unsupported on virgl without radeonsi");
     return Status::kUnsupported;
   }
   if (driver_.virgl && bit_depth_minus8) {
-    EncLog("hevc encoder: 10-bit behind virgl refused (the host's reference surfaces are 8-bit)");
+    EncLog("hevc encoder 10-bit unsupported on virgl");
     return Status::kUnsupported;
   }
   s = ChooseRateControl();
@@ -106,18 +106,18 @@ Status HevcEncoder::Init() {
   const uint32_t cw = coded.width;
   const uint32_t ch = coded.height;
   if (cw > ((config_.width + 63) & ~63u) || ch > ((config_.height + 15) & ~15u))
-    EncLog("hevc encoder: %ux%u coded as %ux%u, the driver's smallest picture being %ux%u", config_.width,
+    EncLog("hevc encoder %ux%u coded=%ux%u min_coded=%ux%u", config_.width,
            config_.height, cw, ch, config_.min_coded_width, config_.min_coded_height);
   ctus_ = ((cw + 63) / 64) * ((ch + 63) / 64);
   const double fps = static_cast<double>(config_.framerate_num) / config_.framerate_den;
   const uint32_t rc_bitrate = config_.rate_control == EncoderConfig::RateControl::kCq ? 0 : config_.bitrate;
   const uint32_t level = hevcenc::ChooseLevel(config_.level, cw, ch, fps, rc_bitrate);
   if (level == 0) {
-    EncLog("hevc encoder: %ux%u at %.2f fps and %u bit/s fits no Main tier level", config_.width, config_.height,
+    EncLog("%ux%u at %.2f fps and %u bit/s fits no hevc Main tier level", config_.width, config_.height,
            fps, config_.bitrate);
     return Status::kUnsupported;
   }
-  if (level != config_.level) EncLog("hevc encoder: level %u asked, %u signalled", config_.level, level);
+  if (level != config_.level) EncLog("hevc config_.level=%u signalled=%u", config_.level, level);
   max_bitrate_ = static_cast<uint32_t>(1100ull * hevcenc::FindLevel(level)->max_br);
 
   hevcenc::ProfileTierLevel ptl;

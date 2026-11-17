@@ -40,19 +40,20 @@ Ubuntu 24.04:
 sudo apt install ./rhizo_*.deb ./linux-image-*rhizo*.deb ./linux-headers-*rhizo*.deb
 ```
 
-Then:
+Reboot into the Rhizo kernel, then:
 
 ```bash
 rhizo start
 ```
 
-Android 16 is the default. To switch to Android 17:
+Android 16 is the default. Android 17 is newer and recommended — its security patch level is 2026-06-05,
+against Android 16's 2025-12-05 — and switching to it is one command:
 
 ```bash
 sudo rhizo gsi update --release a17
 ```
 
-Android 15 uses Google's GSI, licensed by Google for app testing only. Setup erases Android's data:
+Android 15 is not officially supported, as it uses Google's GSI (which is licensed by Google for app testing only).
 
 ```bash
 printf 'a15\t%s\t%s\t%s\n' \
@@ -75,7 +76,7 @@ make kernel-inputs kernel-deb   # -> var/kernel/ubuntu/
 
 ### GSI
 
-The install downloads the prebuilt `gsi_x86_64` GSI from [Releases](https://github.com/liambilsbury/rhizo/releases). To build it from AOSP:
+The install downloads the prebuilt `gsi_x86_64` GSI from [Releases](https://github.com/liambilsbury/rhizo/releases). You can also build it yourself:
 
 ```bash
 make gsi                        # Android 16 -> var/gsi-build/

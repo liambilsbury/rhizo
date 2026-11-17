@@ -1,5 +1,5 @@
 #!/bin/bash
-# build rhizo-composer and stage it
+# var/share/gfx_hal/rhizo-composer RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT="$(cd "." && pwd)"
@@ -35,4 +35,4 @@ install -D -m 0755 "$ROOT/toolchain/out/${OUT_SUB}rhizo-composer" "$ROOT/var/sha
 if [[ -z "${RHIZO_HAL_ABI:-}" ]]; then
   (cd "$ROOT" && python3 tools/build/stamps.py stamp gfx_hal/rhizo-composer) || exit 1
 fi
-echo "[build-composer] staged -> var/share/$STAGE/rhizo-composer"
+echo "staged var/share/$STAGE/rhizo-composer"

@@ -38,7 +38,7 @@ using ndk::ScopedAStatus;
 
 namespace {
 
-// write a message to the kernel log
+// write msg to the kernel log
 void klog(const char* msg) { rhizo_device::Klog("rhizo-gnss", msg); }
 
 // operator-set position
@@ -55,7 +55,7 @@ bool parseFix(const std::map<std::string, std::string>& state, Fix* fix) {
   auto lo = state.find("gnss_lon");
   if (la == state.end() && lo == state.end()) return false;
   if (la == state.end() || lo == state.end()) {
-    klog("device-state.conf: gnss_lat and gnss_lon must both be set, ignoring");
+    klog("only one of gnss_lat and gnss_lon is set in device-state.conf");
     return false;
   }
   char* end = nullptr;
@@ -67,14 +67,13 @@ bool parseFix(const std::map<std::string, std::string>& state, Fix* fix) {
   if (!okLat || !okLon) {
     char buf[224];
     snprintf(buf, sizeof(buf),
-             "device-state.conf: bad gnss fix lat='%s' lon='%s' (want -90..90 / -180..180), ignoring",
+             "gnss_lat '%s' or gnss_lon '%s' in device-state.conf is not a number in -90..90 or -180..180",
              la->second.c_str(), lo->second.c_str());
     klog(buf);
     return false;
   }
   if (vlat == 0.0 && vlon == 0.0) {
-    klog("device-state.conf: gnss fix 0,0 is refused by the framework as the null "
-         "island; set a real gnss_lat/gnss_lon, ignoring");
+    klog("gnss_lat and gnss_lon in device-state.conf are 0,0");
     return false;
   }
   fix->latitudeDegrees = vlat;
@@ -87,7 +86,7 @@ bool parseFix(const std::map<std::string, std::string>& state, Fix* fix) {
   if (end == al->second.c_str() || *end != '\0' || !std::isfinite(valt) || valt < -1000.0 ||
       valt > 30000.0) {
     char buf[160];
-    snprintf(buf, sizeof(buf), "device-state.conf: bad gnss_alt='%s' (want -1000..30000), no altitude",
+    snprintf(buf, sizeof(buf), "gnss_alt '%s' in device-state.conf is not a number in -1000..30000",
              al->second.c_str());
     klog(buf);
     return true;
@@ -138,7 +137,7 @@ IGnssCallback::GnssSystemInfo systemInfo(bool host) {
   return info;
 }
 
-// software receiver reporting the operator's fix
+// software receiver for the operator's fix
 class Receiver {
  public:
   // start the scheduling thread
@@ -163,7 +162,7 @@ class Receiver {
     std::lock_guard<std::mutex> lg(mutex_);
     return gnssCallback_;
   }
-  // store the requested time between locations
+  // set positionIntervalMs_ to intervalMs, at least kMinPositionIntervalMs
   void setPositionIntervalMs(int64_t intervalMs) {
     {
       std::lock_guard<std::mutex> lg(mutex_);
@@ -282,7 +281,7 @@ class Receiver {
     return stream.emitted ? stream.last + std::chrono::milliseconds(intervalMs) : stream.firstAt;
   }
 
-  // send reports at each stream's interval
+  // call sendReports at each stream's interval
   void run() {
     std::unique_lock<std::mutex> lk(mutex_);
     while (!quit_) {
@@ -329,7 +328,7 @@ class Receiver {
     }
   }
 
-  // send the reports that are due
+  // call gnssLocationCb, gnssSvStatusCb and gnssMeasurementCb for the due streams
   void sendReports(const std::shared_ptr<IGnssCallback>& locationCallback,
                    const std::shared_ptr<IGnssCallback>& svStatusCallback,
                    const std::shared_ptr<IGnssMeasurementCallback>& measurementCallback,
@@ -456,7 +455,7 @@ class RhizoGnssConfiguration : public BnGnssConfiguration {
 
 class RhizoGnssMeasurement : public BnGnssMeasurementInterface {
  public:
-  // share the receiver
+  // store the receiver
   explicit RhizoGnssMeasurement(std::shared_ptr<Receiver> receiver) : receiver_(std::move(receiver)) {}
   // start measurements at the default interval
   ScopedAStatus setCallback(const std::shared_ptr<IGnssMeasurementCallback>& callback,
@@ -470,7 +469,7 @@ class RhizoGnssMeasurement : public BnGnssMeasurementInterface {
     receiver_->stopMeasurement();
     return ScopedAStatus::ok();
   }
-  // start measurements at the requested interval
+  // start measurements at options.intervalMs
   ScopedAStatus setCallbackWithOptions(const std::shared_ptr<IGnssMeasurementCallback>& callback,
                                         const IGnssMeasurementInterface::Options& options) override {
     if (!callback) return ScopedAStatus::fromServiceSpecificError(IGnss::ERROR_INVALID_ARGUMENT);
@@ -484,12 +483,12 @@ class RhizoGnssMeasurement : public BnGnssMeasurementInterface {
 
 class RhizoGnssPowerIndication : public BnGnssPowerIndication {
  public:
-  // report that no power statistics are supported
+  // call setCapabilitiesCb(0)
   ScopedAStatus setCallback(const std::shared_ptr<IGnssPowerIndicationCallback>& callback) override {
     if (!callback) return ScopedAStatus::fromServiceSpecificError(IGnss::ERROR_INVALID_ARGUMENT);
     return callback->setCapabilitiesCb(0);
   }
-  // accept the power stats request
+  // return ok
   ScopedAStatus requestGnssPowerStats() override {
     return ScopedAStatus::ok();
   }
@@ -523,7 +522,7 @@ class RhizoAGnssRil : public BnAGnssRil {
   ScopedAStatus setSetId(IAGnssRil::SetIdType, const std::string&) override { return ScopedAStatus::ok(); }
   // ignore the network state
   ScopedAStatus updateNetworkState(const IAGnssRil::NetworkAttributes&) override { return ScopedAStatus::ok(); }
-  // reject an empty NI SUPL message
+  // return ERROR_INVALID_ARGUMENT for an empty NI SUPL message
   ScopedAStatus injectNiSuplMessageData(const std::vector<uint8_t>& message, int32_t) override {
     if (message.empty()) return ScopedAStatus::fromServiceSpecificError(IGnss::ERROR_INVALID_ARGUMENT);
     return ScopedAStatus::ok();
@@ -532,7 +531,7 @@ class RhizoAGnssRil : public BnAGnssRil {
 
 class RhizoGnssDebug : public BnGnssDebug {
  public:
-  // share the receiver
+  // store the receiver
   explicit RhizoGnssDebug(std::shared_ptr<Receiver> receiver) : receiver_(std::move(receiver)) {}
   // return debug data for the operator's fix
   ScopedAStatus getDebugData(IGnssDebug::DebugData* out) override {
@@ -569,7 +568,7 @@ class RhizoGnssVisibilityControl : public visibility_control::BnGnssVisibilityCo
 
 class RhizoGnssAssistance : public gnss_assistance::BnGnssAssistanceInterface {
  public:
-  // reject assistance data without GPS ephemeris
+  // return ERROR_INVALID_ARGUMENT for assistance with no GPS ephemeris
   ScopedAStatus injectGnssAssistance(const gnss_assistance::GnssAssistance& assistance) override {
     if (!assistance.gpsAssistance || assistance.gpsAssistance->satelliteEphemeris.empty())
       return ScopedAStatus::fromServiceSpecificError(IGnss::ERROR_INVALID_ARGUMENT);
@@ -587,7 +586,7 @@ class RhizoGnssPsds : public BnGnssPsds {
   ScopedAStatus setCallback(const std::shared_ptr<IGnssPsdsCallback>&) override {
     return ScopedAStatus::ok();
   }
-  // reject empty PSDS data
+  // return ERROR_INVALID_ARGUMENT for empty PSDS data
   ScopedAStatus injectPsdsData(PsdsType, const std::vector<uint8_t>& data) override {
     if (data.empty()) return ScopedAStatus::fromServiceSpecificError(IGnss::ERROR_INVALID_ARGUMENT);
     return ScopedAStatus::ok();
@@ -617,11 +616,11 @@ class RhizoGnssBatching : public BnGnssBatching {
 
 class RhizoGnssGeofence : public BnGnssGeofence {
  public:
-  // accept the geofence callback
+  // ignore the geofence callback
   ScopedAStatus setCallback(const std::shared_ptr<IGnssGeofenceCallback>&) override {
     return ScopedAStatus::ok();
   }
-  // accept the geofence
+  // ignore the geofence
   ScopedAStatus addGeofence(int32_t, double, double, double, int32_t, int32_t, int32_t,
                             int32_t) override {
     return ScopedAStatus::ok();
@@ -636,7 +635,7 @@ class RhizoGnssGeofence : public BnGnssGeofence {
 
 class RhizoGnssNavigationMessage : public BnGnssNavigationMessageInterface {
  public:
-  // accept the navigation message callback
+  // ignore the navigation message callback
   ScopedAStatus setCallback(const std::shared_ptr<IGnssNavigationMessageCallback>&) override {
     return ScopedAStatus::ok();
   }
@@ -647,7 +646,7 @@ class RhizoGnssNavigationMessage : public BnGnssNavigationMessageInterface {
 class RhizoMeasurementCorrections
     : public measurement_corrections::BnMeasurementCorrectionsInterface {
  public:
-  // accept the measurement corrections
+  // ignore the measurement corrections
   ScopedAStatus setCorrections(
       const measurement_corrections::MeasurementCorrections&) override {
     return ScopedAStatus::ok();
@@ -662,10 +661,10 @@ class RhizoMeasurementCorrections
 
 class RhizoGnss : public BnGnss {
  public:
-  // use the host source or the operator's receiver
+  // store host or create a Receiver
   explicit RhizoGnss(std::shared_ptr<rhizo_gnss_host::HostSource> host)
       : host_(std::move(host)), receiver_(host_ ? nullptr : std::make_shared<Receiver>()) {}
-  // store the callback and report capabilities
+  // store the callback and call gnssSetCapabilitiesCb
   ScopedAStatus setCallback(const std::shared_ptr<IGnssCallback>& callback) override {
     if (!callback) return ScopedAStatus::fromServiceSpecificError(IGnss::ERROR_INVALID_ARGUMENT);
     if (host_) {
@@ -841,26 +840,24 @@ bool parseSource(int argc, char** argv, std::shared_ptr<rhizo_gnss_host::HostSou
 
 // register the GNSS service and join the binder thread pool
 int main(int argc, char** argv) {
-  klog("main() entered");
   std::shared_ptr<rhizo_gnss_host::HostSource> host;
   if (!parseSource(argc, argv, &host)) {
-    klog("usage: rhizo-gnss-service [--source host:<absolute socket path>], refusing to start");
+    klog("rhizo-gnss-service [--source host:<absolute socket path>]");
     return 2;
   }
-  klog(host ? "source: host (the desktop's location through rhizo-locationd)"
-            : "source: operator (device-state.conf)");
+  klog(host ? "source=rhizo-locationd"
+            : "source=device-state.conf");
   auto device = ndk::SharedRefBase::make<RhizoGnss>(host);
   const std::string instance = std::string(RhizoGnss::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(device->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

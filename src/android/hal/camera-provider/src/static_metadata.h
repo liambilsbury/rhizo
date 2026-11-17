@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_STATIC_METADATA_H
 #define RHIZO_CAMERA_STATIC_METADATA_H
 
-// build a host camera's characteristics, request templates and results
+// characteristics, RequestTemplate defaults and result metadata of a host camera
 
 #include <stddef.h>
 #include <stdint.h>
@@ -43,7 +43,7 @@ struct CameraShape {
   int64_t maxFrameDurationNs = 0;
 };
 
-// the JPEG settings of a request
+// the JPEG settings of a CaptureRequest
 struct JpegSettings {
   int32_t quality = kDefaultJpegQuality;
   int32_t thumbnailQuality = kDefaultJpegQuality;
@@ -76,7 +76,7 @@ class MetadataBuilder {
   std::map<uint32_t, Entry> entries_;
 };
 
-// deleter of owned request settings
+// deleter that calls free on a camera_metadata_t
 struct MetadataDeleter {
   void operator()(camera_metadata_t* m) const;
 };

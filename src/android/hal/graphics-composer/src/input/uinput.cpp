@@ -25,7 +25,7 @@
 namespace rhizo {
 namespace {
 
-// format a message and write it to the Android log
+// write the formatted message to the Android log
 void klogf(const char* fmt, ...) {
   char buf[320];
   va_list ap;
@@ -58,7 +58,7 @@ bool Emit(int fd, uint16_t type, uint16_t code, int32_t value) {
   ev.value = value;
   ssize_t n = write(fd, &ev, sizeof(ev));
   if (n != sizeof(ev)) {
-    klogf("Emit(type=%u code=%u value=%d) write FAILED n=%zd errno=%d (%s)", type, code, value, n,
+    klogf("Emit(type=%u code=%u value=%d) write failed n=%zd errno=%d (%s)", type, code, value, n,
           errno, strerror(errno));
     return false;
   }
@@ -94,14 +94,14 @@ bool WaitInDir(const std::string& dir, const std::function<bool()>& present, int
 std::string PublishNode(int fd) {
   char sysname[64] = {0};
   if (ioctl(fd, UI_GET_SYSNAME(sizeof(sysname) - 1), sysname) < 0) {
-    klogf("UI_GET_SYSNAME FAILED errno=%d (%s)", errno, strerror(errno));
+    klogf("UI_GET_SYSNAME failed errno=%d (%s)", errno, strerror(errno));
     return {};
   }
   char classDir[128];
   snprintf(classDir, sizeof(classDir), "/sys/class/input/%s", sysname);
   DIR* d = opendir(classDir);
   if (!d) {
-    klogf("opendir(%s) FAILED errno=%d (%s)", classDir, errno, strerror(errno));
+    klogf("opendir(%s) failed errno=%d (%s)", classDir, errno, strerror(errno));
     return {};
   }
   std::string eventName;
@@ -121,7 +121,7 @@ std::string PublishNode(int fd) {
   snprintf(devAttr, sizeof(devAttr), "%s/%s/dev", classDir, eventName.c_str());
   int af = open(devAttr, O_RDONLY | O_CLOEXEC);
   if (af < 0) {
-    klogf("open(%s) FAILED errno=%d (%s)", devAttr, errno, strerror(errno));
+    klogf("open(%s) failed errno=%d (%s)", devAttr, errno, strerror(errno));
     return {};
   }
   char devbuf[32] = {0};
@@ -129,7 +129,7 @@ std::string PublishNode(int fd) {
   close(af);
   unsigned major = 0, minor = 0;
   if (got <= 0 || sscanf(devbuf, "%u:%u", &major, &minor) != 2) {
-    klogf("unparseable %s contents '%s'", devAttr, devbuf);
+    klogf("failed to parse %s contents '%s'", devAttr, devbuf);
     return {};
   }
 
@@ -143,7 +143,7 @@ std::string PublishNode(int fd) {
   bool arrived = WaitInDir(kInputDir, published, fence_missed ? 0 : 1000);
   fence_missed = !arrived;
   if (!arrived) {
-    klogf("no node %s (%u:%u) for sysfs %s: the input fence did not publish it", node.c_str(), major,
+    klogf("no node %s (%u:%u) for sysfs %s", node.c_str(), major,
           minor, sysname);
     return {};
   }
@@ -155,7 +155,7 @@ std::string PublishNode(int fd) {
 int OpenUinput() {
   int fd = open(kUinputPath, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) {
-    klogf("open(%s) FAILED errno=%d (%s)", kUinputPath, errno, strerror(errno));
+    klogf("open(%s) failed errno=%d (%s)", kUinputPath, errno, strerror(errno));
   }
   return fd;
 }
@@ -163,7 +163,7 @@ int OpenUinput() {
 // set the phys string and device identity
 bool SetupCommon(int fd, const std::string& name, const std::string& phys, uint16_t product) {
   if (ioctl(fd, UI_SET_PHYS, phys.c_str()) < 0) {
-    klogf("UI_SET_PHYS(%s) FAILED errno=%d (%s)", phys.c_str(), errno, strerror(errno));
+    klogf("UI_SET_PHYS(%s) failed errno=%d (%s)", phys.c_str(), errno, strerror(errno));
     return false;
   }
   struct uinput_setup us {};
@@ -173,7 +173,7 @@ bool SetupCommon(int fd, const std::string& name, const std::string& phys, uint1
   us.id.version = 1;
   snprintf(us.name, sizeof(us.name), "%s", name.c_str());
   if (ioctl(fd, UI_DEV_SETUP, &us) < 0) {
-    klogf("UI_DEV_SETUP(%s) FAILED errno=%d (%s)", name.c_str(), errno, strerror(errno));
+    klogf("UI_DEV_SETUP(%s) failed errno=%d (%s)", name.c_str(), errno, strerror(errno));
     return false;
   }
   return true;
@@ -186,7 +186,7 @@ bool SetAbs(int fd, uint16_t code, int32_t min, int32_t max) {
   as.absinfo.minimum = min;
   as.absinfo.maximum = max;
   if (ioctl(fd, UI_ABS_SETUP, &as) < 0) {
-    klogf("UI_ABS_SETUP(code=%u) FAILED errno=%d (%s)", code, errno, strerror(errno));
+    klogf("UI_ABS_SETUP(code=%u) failed errno=%d (%s)", code, errno, strerror(errno));
     return false;
   }
   return true;
@@ -204,7 +204,7 @@ bool SetupMouse(int fd, int32_t port) {
   };
   for (const auto& [request, bit] : bits) {
     if (ioctl(fd, request, bit) < 0) {
-      klogf("mouse setup, port %d: ioctl(0x%lx, %d) FAILED errno=%d (%s)", port, request, bit, errno,
+      klogf("port %d mouse ioctl(0x%lx, %d) failed errno=%d (%s)", port, request, bit, errno,
             strerror(errno));
       return false;
     }
@@ -215,7 +215,7 @@ bool SetupMouse(int fd, int32_t port) {
 
 }
 
-// destroy and close all of the pool devices and unlink their nodes
+// destroy and close the pool devices and unlink the device nodes
 UinputDevices::~UinputDevices() {
   std::lock_guard<std::mutex> lg(mutex_);
   for (auto& kv : pool_) {
@@ -235,7 +235,7 @@ void UinputDevices::PreCreatePool() {
   std::lock_guard<std::mutex> lg(mutex_);
   for (int32_t port = kMinPort; port <= kMaxPort; ++port) {
     if (!CreatePoolDeviceLocked(port)) {
-      klogf("PreCreatePool: port %d never got a working input device", port);
+      klogf("CreatePoolDeviceLocked failed for port %d", port);
     }
   }
 }
@@ -273,7 +273,7 @@ bool UinputDevices::CreatePoolDeviceLocked(int32_t port) {
   SetAbs(t, ABS_X, 0, kAxisMax);
   SetAbs(t, ABS_Y, 0, kAxisMax);
   if (ioctl(t, UI_DEV_CREATE) < 0) {
-    klogf("UI_DEV_CREATE (touch, port %d) FAILED errno=%d (%s)", port, errno, strerror(errno));
+    klogf("UI_DEV_CREATE (touch, port %d) failed errno=%d (%s)", port, errno, strerror(errno));
     close(t);
     return false;
   }
@@ -290,7 +290,7 @@ bool UinputDevices::CreatePoolDeviceLocked(int32_t port) {
         ioctl(k, UI_DEV_CREATE) == 0) {
       pd.keyboard.node = PublishNode(k);
     } else {
-      klogf("UI_DEV_CREATE (keyboard, port %d) FAILED errno=%d (%s)", port, errno, strerror(errno));
+      klogf("UI_DEV_CREATE (keyboard, port %d) failed errno=%d (%s)", port, errno, strerror(errno));
       close(k);
       pd.keyboard.fd = -1;
     }
@@ -306,30 +306,30 @@ bool UinputDevices::CreatePoolDeviceLocked(int32_t port) {
         pd.mouse.created = true;
         pd.mouse.node = PublishNode(pd.mouse.fd);
       } else {
-        klogf("UI_DEV_CREATE (mouse, port %d) FAILED errno=%d (%s)", port, errno, strerror(errno));
+        klogf("UI_DEV_CREATE (mouse, port %d) failed errno=%d (%s)", port, errno, strerror(errno));
         close(pd.mouse.fd);
         pd.mouse.fd = -1;
       }
     }
   }
 
-  klogf("port %d: touch=%s keyboard=%s mouse=%s phys=%s", port,
+  klogf("port %d touch=%s keyboard=%s mouse=%s phys=%s", port,
         pd.touch.node.empty() ? "(unpublished)" : pd.touch.node.c_str(),
         pd.keyboard.node.empty() ? "(unpublished)" : pd.keyboard.node.c_str(),
         !pd.mouse.node.empty() ? pd.mouse.node.c_str()
-        : pd.mouse.fd >= 0     ? "(created with its display)"
+        : pd.mouse.fd >= 0     ? "(created with the display)"
                                : "(unpublished)",
         phys.c_str());
   pool_[port] = std::move(pd);
   return true;
 }
 
-// bind a display to a port's pool devices with its size
+// bind a display and the display size to a port's pool devices
 bool UinputDevices::BindLocked(int64_t displayId, int32_t port, int32_t width, int32_t height) {
   if (width <= 0 || height <= 0) return false;
   auto it = pool_.find(port);
   if (it == pool_.end()) {
-    klogf("bind display %lld -> port %d FAILED: no pool device for that port",
+    klogf("failed to bind display %lld to port %d with no pool device",
           static_cast<long long>(displayId), port);
     return false;
   }
@@ -346,7 +346,7 @@ bool UinputDevices::Create(int64_t displayId, int32_t port, int32_t width, int32
   return BindLocked(displayId, port, width, height);
 }
 
-// unbind the display from its input port
+// unbind the display from the display's input port
 void UinputDevices::Destroy(int64_t displayId) {
   std::lock_guard<std::mutex> lg(mutex_);
   auto dit = displayToPort_.find(displayId);
@@ -356,7 +356,7 @@ void UinputDevices::Destroy(int64_t displayId) {
     Device& mouse = pit->second.mouse;
     if (dit->second != kMinPort && mouse.created) {
       if (ioctl(mouse.fd, UI_DEV_DESTROY) != 0) {
-        klogf("UI_DEV_DESTROY (mouse, port %d) FAILED errno=%d (%s)", dit->second, errno, strerror(errno));
+        klogf("UI_DEV_DESTROY (mouse, port %d) failed errno=%d (%s)", dit->second, errno, strerror(errno));
       } else {
         mouse.created = false;
         if (!SetupMouse(mouse.fd, dit->second)) {
@@ -367,7 +367,7 @@ void UinputDevices::Destroy(int64_t displayId) {
     }
   }
   displayToPort_.erase(dit);
-  klogf("display %lld: unbound from its input port", static_cast<long long>(displayId));
+  klogf("display %lld unbound from the input port", static_cast<long long>(displayId));
 }
 
 // create the mouse device of a display's port
@@ -380,15 +380,15 @@ void UinputDevices::PublishMouse(int64_t displayId) {
   Device& mouse = pit->second.mouse;
   if (mouse.fd < 0 || mouse.created) return;
   if (ioctl(mouse.fd, UI_DEV_CREATE) != 0) {
-    klogf("display %lld: UI_DEV_CREATE (mouse, port %d) FAILED errno=%d (%s)",
+    klogf("display %lld UI_DEV_CREATE (mouse, port %d) failed errno=%d (%s)",
           static_cast<long long>(displayId), dit->second, errno, strerror(errno));
     return;
   }
   mouse.created = true;
-  klogf("display %lld: created mouse for port %d", static_cast<long long>(displayId), dit->second);
+  klogf("display %lld mouse created for port %d", static_cast<long long>(displayId), dit->second);
 }
 
-// rebind a display to its port with a new size under the lock
+// bind a display and the display size to a port's pool devices under the lock
 bool UinputDevices::Resize(int64_t displayId, int32_t port, int32_t width, int32_t height) {
   std::lock_guard<std::mutex> lg(mutex_);
   return BindLocked(displayId, port, width, height);
@@ -409,7 +409,7 @@ int32_t ScaleToAxis(int32_t v, int32_t extentMinusOne, int32_t axisMax) {
 }
 }
 
-// send a touch event to the display
+// write a touch event to the display's touchscreen
 bool UinputDevices::Touch(int64_t displayId, int32_t x, int32_t y, bool down) {
   std::lock_guard<std::mutex> lg(mutex_);
   auto dit = displayToPort_.find(displayId);
@@ -444,7 +444,7 @@ bool UinputDevices::Touch(int64_t displayId, int32_t x, int32_t y, bool down) {
   return Sync(fd);
 }
 
-// send a scroll event to the display
+// write a scroll event to the display's mouse
 bool UinputDevices::Scroll(int64_t displayId, bool horizontal, int32_t value120) {
   std::lock_guard<std::mutex> lg(mutex_);
   auto dit = displayToPort_.find(displayId);
@@ -463,7 +463,7 @@ bool UinputDevices::Scroll(int64_t displayId, bool horizontal, int32_t value120)
   return Sync(fd);
 }
 
-// send a relative mouse motion to a display's mouse
+// write a relative mouse motion to a display's mouse
 bool UinputDevices::Move(int64_t displayId, int32_t dx, int32_t dy) {
   std::lock_guard<std::mutex> lg(mutex_);
   auto dit = displayToPort_.find(displayId);
@@ -476,7 +476,7 @@ bool UinputDevices::Move(int64_t displayId, int32_t dx, int32_t dy) {
   return Sync(fd);
 }
 
-// move a display's mouse to its top-left corner
+// move a display's mouse to the display's top-left corner
 bool UinputDevices::MoveHome(int64_t displayId) {
   std::lock_guard<std::mutex> lg(mutex_);
   auto dit = displayToPort_.find(displayId);
@@ -506,7 +506,7 @@ bool UinputDevices::MoveTo(int64_t displayId, int32_t x, int32_t y) {
   return Sync(fd);
 }
 
-// send a key press or release to a display's keyboard
+// write a key press or release to a display's keyboard
 bool UinputDevices::Key(int64_t displayId, uint32_t evdevCode, bool pressed) {
   std::lock_guard<std::mutex> lg(mutex_);
   auto dit = displayToPort_.find(displayId);

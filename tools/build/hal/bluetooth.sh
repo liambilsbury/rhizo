@@ -1,5 +1,5 @@
 #!/bin/bash
-# build rhizo-bluetooth-service into gfx_hal
+# var/share/gfx_hal/rhizo-bluetooth-service RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ABI_ARGS=(); [[ -n "${RHIZO_HAL_ABI:-}" ]] && ABI_ARGS=(--abi "$RHIZO_HAL_ABI")

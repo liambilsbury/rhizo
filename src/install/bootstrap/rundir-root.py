@@ -27,7 +27,7 @@ def parse_acl(blob):
     for tag in (ACL_USER_OBJ, ACL_GROUP_OBJ, ACL_OTHER):
         n = sum(1 for e in entries if e[0] == tag)
         if n != 1:
-            raise ValueError("ACL xattr carries tag 0x%02x %d times, not once" % (tag, n))
+            raise ValueError("ACL xattr has tag 0x%02x %d times, expected 1" % (tag, n))
     return entries
 
 
@@ -101,12 +101,12 @@ def grant(path, uid, perm=RWX):
 
 
 def own_runtime_dir():
-    """return the runtime directory of this uid"""
+    """return /run/user/<getuid()>"""
     return "/run/user/%d" % os.getuid()
 
 
 def own_portal_doc():
-    """create the document portal mountpoint directory"""
+    """create /run/user/<getuid()>/doc and return the path"""
     path = os.path.join(own_runtime_dir(), "doc")
     try:
         os.mkdir(path, 0o700)
@@ -118,24 +118,24 @@ def own_portal_doc():
 def main(argv):
     """grant uid 0 access to a directory"""
     if len(argv) != 2:
-        print("usage: %s DIR|--own-runtime-dir|--own-portal-doc" % PROG, file=sys.stderr)
+        print("%s DIR|--own-runtime-dir|--own-portal-doc" % PROG, file=sys.stderr)
         return 2
-    perm, why = RWX, "the unit's stop leaves it behind"
+    perm, why = RWX, "rmdir"
     try:
         if argv[1] == "--own-runtime-dir":
             argv = [argv[0], own_runtime_dir()]
         elif argv[1] == "--own-portal-doc":
-            perm, why = X, "fusermount3 cannot mount the document portal there"
+            perm, why = X, "fusermount3"
             argv = [argv[0], own_portal_doc()]
         done = grant(argv[1], os.getuid(), perm)
     except (OSError, ValueError) as e:
-        print("%s: could not give root access to %s, so %s: %s" % (PROG, argv[1], why, e), file=sys.stderr)
+        print("%s failed to add a uid 0 ACL entry to %s for %s (%s)" % (PROG, argv[1], why, e), file=sys.stderr)
         return 1
     if done not in ("granted", "already"):
-        print("%s: %s is %s for uid %d, so root gets no entry on it" % (PROG, argv[1], done, os.getuid()),
+        print("%s %s is %s for uid %d" % (PROG, argv[1], done, os.getuid()),
               file=sys.stderr)
         return 1
-    print("%s: %s: %s" % (PROG, argv[1], done))
+    print("%s %s %s" % (PROG, argv[1], done))
     return 0
 
 

@@ -13,13 +13,13 @@ _IFNAME = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.-]{0,14}")
 
 
 def valid_ifname(name):
-    """return whether this instance may NAT out of name"""
+    """return whether name matches _IFNAME and is not ., .., lo or vethrhz*"""
     return (bool(_IFNAME.fullmatch(name)) and name not in (".", "..", "lo")
             and not name.startswith("vethrhz"))
 
 
 def default_route_ifaces(family, run=subprocess.run):
-    """return the interfaces carrying a default route for a family"""
+    """return the dev fields of ip family route show default"""
     r = run(["ip", family, "route", "show", "default"], capture_output=True, text=True)
     found = []
     for line in (r.stdout or "").splitlines():
@@ -31,12 +31,12 @@ def default_route_ifaces(family, run=subprocess.run):
 
 
 def state_path():
-    """return the file netbridged writes the current uplinks to"""
+    """return the netbridged uplinks state file path"""
     return f"/run/{core.NETBRIDGED_RUNTIME_DIR}/{STATE_NAME}"
 
 
 def ensure_chains(run, binary):
-    """create this instance's forward and NAT chains if missing"""
+    """create FWD_CHAIN and NAT_CHAIN if missing"""
     for table, chain in ((None, FWD_CHAIN), ("nat", NAT_CHAIN)):
         args = [binary] + (["-t", table] if table else [])
         if run(*args, "-S", chain, check=False).returncode != 0:
@@ -44,7 +44,7 @@ def ensure_chains(run, binary):
 
 
 def fill_chains(run, binary, ifaces):
-    """point the chains at ifaces alone"""
+    """flush FWD_CHAIN and NAT_CHAIN and add ACCEPT and MASQUERADE rules for ifaces"""
     run(binary, "-F", FWD_CHAIN, check=False)
     run(binary, "-t", "nat", "-F", NAT_CHAIN, check=False)
     run(binary, "-A", FWD_CHAIN, "-j", "DROP", check=False)
@@ -54,7 +54,7 @@ def fill_chains(run, binary, ifaces):
 
 
 def stale_nat_rule(rule, host_if, source):
-    """return whether a rule is this instance's stale rule"""
+    """return whether rule is a stale FORWARD or POSTROUTING rule for host_if and source"""
     if len(rule) < 2 or rule[0] != "-A":
         return False
     chain, rest = rule[1], rule[2:]
@@ -77,7 +77,7 @@ def stale_nat_rule(rule, host_if, source):
 
 
 def _same_net(a, b):
-    """return whether two CIDR strings name the same network"""
+    """return whether ip_network(a) == ip_network(b)"""
     import ipaddress
     try:
         return ipaddress.ip_network(a, strict=False) == ipaddress.ip_network(b, strict=False)
@@ -86,19 +86,19 @@ def _same_net(a, b):
 
 
 def unit_argv():
-    """return the uplinks helper's command line"""
+    """return the rhizo-nat-uplinks argv"""
     return [beside(SCRIPT), str(SANDBOX_ID), state_path()]
 
 
 def stop_unit(run, block=True):
-    """stop a previous launch's uplinks unit"""
+    """stop the NAT_UPLINKS_UNIT path and service"""
     units = [f"{core.NAT_UPLINKS_UNIT}.path", f"{core.NAT_UPLINKS_UNIT}.service"]
     run("systemctl", "stop", *(() if block else ("--no-block",)), *units, check=False)
     run("systemctl", "reset-failed", *units, check=False)
 
 
 def start_unit(run):
-    """start the path-activated rewrite of the chains"""
+    """start NAT_UPLINKS_UNIT as a path unit on state_path()"""
     run("systemd-run", f"--unit={core.NAT_UPLINKS_UNIT}", "--collect",
         f"--path-property=PathModified={state_path()}",
         "-p", "Type=oneshot",
@@ -111,15 +111,14 @@ def start_unit(run):
         "-p", f"StandardError=append:{core.NAT_UPLINKS_LOG}",
         *unit_argv(),
         check=True)
-    # a file written before the path unit existed triggers nothing
     run("systemctl", "start", "--no-block", f"{core.NAT_UPLINKS_UNIT}.service", check=False)
     kmsg(f"RHIZO_MARKER nat_uplinks={core.NAT_UPLINKS_UNIT} path={state_path()}")
 
 
 def release(host_if, sources, log=kmsg):
-    """remove this instance's jumps and chains and stop its unit"""
+    """delete the FWD_CHAIN and NAT_CHAIN jumps and chains and stop NAT_UPLINKS_UNIT"""
     def run(*args, check=False):
-        """run a command and return its result"""
+        """run a command and return the CompletedProcess"""
         return subprocess.run(list(args), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
     stop_unit(run, block=False)
     for binary, source in zip(("iptables", "ip6tables"), sources):
@@ -134,5 +133,5 @@ def release(host_if, sources, log=kmsg):
             run(*args, "-F", chain)
             r = run(*args, "-X", chain)
             if r.returncode != 0 and "No chain" not in r.stderr and "does not exist" not in r.stderr:
-                log(f"{' '.join(args)} -X {chain} -> rc={r.returncode} {r.stderr.strip()[:200]}")
+                log(f"{' '.join(args)} -X {chain} failed with exit status {r.returncode} ({r.stderr.strip()[:200]})")
     log(f"RHIZO_MARKER nat_uplinks=released chains={FWD_CHAIN},{NAT_CHAIN}")

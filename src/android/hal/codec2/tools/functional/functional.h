@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2VA_FUNCTIONAL_H
 #define RHIZO_C2VA_FUNCTIONAL_H
 
-// check that each decoder decodes its clip to the reference frames
+// functional check of each decoder against the reference frame MD5s of a clip
 
 #include <stdint.h>
 

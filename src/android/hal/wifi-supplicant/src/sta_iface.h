@@ -16,7 +16,7 @@ namespace rhizo_supplicant {
 
 using Clock = std::chrono::steady_clock;
 
-// STA netdev with its networks and association state machine
+// STA netdev, networks and association state machine
 class StaIface : public BnSupplicantStaIface {
  public:
   StaIface(std::string name, uint32_t ifindex);
@@ -148,7 +148,7 @@ class StaIface : public BnSupplicantStaIface {
   ScopedAStatus Invalid() const { return Status(SupplicantStatusCode::FAILURE_IFACE_INVALID); }
   ScopedAStatus Fail(SupplicantStatusCode c) const { return valid_ ? Status(c) : Invalid(); }
   ScopedAStatus Unsupported() const { return Fail(SupplicantStatusCode::FAILURE_UNSUPPORTED); }
-  // store a hint under the lock
+  // store a setting under the lock
   template <typename F>
   ScopedAStatus Record(F f) {
     if (!valid_) return Invalid();
@@ -206,7 +206,7 @@ class StaIface : public BnSupplicantStaIface {
   WpsSettings wps_;
 };
 
-// nl80211 sockets and the thread that drives the interfaces
+// nl80211 sockets and the interface event thread
 class Engine {
  public:
   static Engine& Get();

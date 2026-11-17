@@ -77,7 +77,7 @@ struct EncodeSession::State {
     fmt.value.value.i = static_cast<int>(fourcc);
     VAStatus st = vaCreateSurfaces(dpy, rt_format, surf_w, surf_h, id, 1, &fmt, 1);
     if (st != VA_STATUS_SUCCESS) {
-      LogErrorf("encoder surface %ux%u: %s", surf_w, surf_h, vaErrorStr(st));
+      LogErrorf("failed to create encoder surface %ux%u (%s)", surf_w, surf_h, vaErrorStr(st));
       return Status::kNoMemory;
     }
     return Status::kOk;
@@ -134,7 +134,7 @@ struct EncodeSession::State {
       fmt.bits_per_pixel = ten_bit ? 24 : 12;
       VAStatus st = vaCreateImage(dpy, &fmt, static_cast<int>(surf_w), static_cast<int>(surf_h), &upload);
       if (st != VA_STATUS_SUCCESS) {
-        LogErrorf("upload image %ux%u: %s", surf_w, surf_h, vaErrorStr(st));
+        LogErrorf("failed to create upload image %ux%u (%s)", surf_w, surf_h, vaErrorStr(st));
         return Status::kNoMemory;
       }
       upload_valid = true;
@@ -142,7 +142,7 @@ struct EncodeSession::State {
     void* map = nullptr;
     VAStatus st = vaMapBuffer(dpy, upload.buf, &map);
     if (st != VA_STATUS_SUCCESS || !map) {
-      LogErrorf("map of the upload image: %s", vaErrorStr(st));
+      LogErrorf("failed to map the upload image (%s)", vaErrorStr(st));
       return Status::kVaError;
     }
     uint8_t* base = static_cast<uint8_t*>(map);
@@ -156,7 +156,7 @@ struct EncodeSession::State {
     vaUnmapBuffer(dpy, upload.buf);
     VAStatus st = vaPutImage(dpy, surface, upload.image_id, 0, 0, surf_w, surf_h, 0, 0, surf_w, surf_h);
     if (st != VA_STATUS_SUCCESS) {
-      LogErrorf("vaPutImage into encoder surface %u: %s", surface, vaErrorStr(st));
+      LogErrorf("vaPutImage into encoder surface %u failed (%s)", surface, vaErrorStr(st));
       return Status::kVaError;
     }
     return Status::kOk;
@@ -170,7 +170,7 @@ std::unique_ptr<EncodeSession> EncodeSession::Create(Codec codec, const EncoderC
                                                      EncodeCallbacks callbacks, Status* status, VaDevice& device) {
   EncoderCoreFactory factory = CoreFactoryFor(codec);
   if (!factory) {
-    LogErrorf("no encoder core for codec %d is linked into this build", static_cast<int>(codec));
+    LogErrorf("no encoder core linked for codec %d", static_cast<int>(codec));
     if (status) *status = Status::kUnsupported;
     return nullptr;
   }
@@ -194,12 +194,12 @@ std::unique_ptr<EncodeSession> EncodeSession::CreateWithCore(const EncoderCoreFa
   const ComponentCaps* caps = &found;
   EncoderConfig cfg = config;
   if (std::find(caps->va_profiles.begin(), caps->va_profiles.end(), cfg.profile) == caps->va_profiles.end()) {
-    LogErrorf("encoder profile %s is not offered", ProfileName(cfg.profile));
+    LogErrorf("encoder profile %s is not in va_profiles", ProfileName(cfg.profile));
     return fail(Status::kUnsupported);
   }
   if (cfg.width < caps->min_width || cfg.height < caps->min_height || cfg.width > caps->max_width ||
       cfg.height > caps->max_height) {
-    LogErrorf("encoder size %ux%u outside %ux%u..%ux%u", cfg.width, cfg.height, caps->min_width, caps->min_height,
+    LogErrorf("encoder size %ux%u is outside %ux%u..%ux%u", cfg.width, cfg.height, caps->min_width, caps->min_height,
               caps->max_width, caps->max_height);
     return fail(Status::kUnsupported);
   }
@@ -262,14 +262,14 @@ Status EncodeSession::Configure(const EncoderConfig& config, VAConfigAttrib* att
                                 uint32_t align_width, uint32_t align_height, VAContextID* context) {
   State& s = *s_;
   if (!s.in_flight.empty()) {
-    LogErrorf("encoder reconfigured with %zu pictures in flight", s.in_flight.size());
+    LogErrorf("%zu pictures are still in flight at encoder Configure", s.in_flight.size());
     return Status::kUnsupported;
   }
   ComponentCaps caps;
   if (ComponentLimits(s.dpy, s.codec, Kind::kEncoder, &caps) &&
       (config.width < caps.min_width || config.height < caps.min_height || config.width > caps.max_width ||
        config.height > caps.max_height)) {
-    LogErrorf("%s: size %ux%u is outside %ux%u..%ux%u, refused", caps.name.c_str(), config.width, config.height,
+    LogErrorf("%s size %ux%u is outside %ux%u..%ux%u", caps.name.c_str(), config.width, config.height,
               caps.min_width, caps.min_height, caps.max_width, caps.max_height);
     return Status::kUnsupported;
   }
@@ -281,7 +281,7 @@ Status EncodeSession::Configure(const EncoderConfig& config, VAConfigAttrib* att
   VAStatus st = vaCreateConfig(s.dpy, config.profile, VAEntrypointEncSlice, attrs.data(),
                                static_cast<int>(attrs.size()), &s.va_config);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("encode config %s: %s", ProfileName(config.profile), vaErrorStr(st));
+    LogErrorf("vaCreateConfig %s for encode failed (%s)", ProfileName(config.profile), vaErrorStr(st));
     s.va_config = VA_INVALID_ID;
     return Status::kVaError;
   }
@@ -301,7 +301,7 @@ Status EncodeSession::Configure(const EncoderConfig& config, VAConfigAttrib* att
   s.surf_w = AlignUp(AlignUp(config.width, align_width), drv_w);
   s.surf_h = AlignUp(AlignUp(config.height, align_height), drv_h);
   if (s.surf_w < caps.coded_min_width || s.surf_h < caps.coded_min_height) {
-    LogErrorf("%s: coded %ux%u is below the driver's %ux%u, refused", caps.name.c_str(), s.surf_w, s.surf_h,
+    LogErrorf("%s coded %ux%u is below the driver's %ux%u", caps.name.c_str(), s.surf_w, s.surf_h,
               caps.coded_min_width, caps.coded_min_height);
     vaDestroyConfig(s.dpy, s.va_config);
     s.va_config = VA_INVALID_ID;
@@ -310,7 +310,7 @@ Status EncodeSession::Configure(const EncoderConfig& config, VAConfigAttrib* att
   st = vaCreateContext(s.dpy, s.va_config, static_cast<int>(s.surf_w), static_cast<int>(s.surf_h), VA_PROGRESSIVE,
                        nullptr, 0, &s.context);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("encode context %ux%u: %s", s.surf_w, s.surf_h, vaErrorStr(st));
+    LogErrorf("vaCreateContext %ux%u for encode failed (%s)", s.surf_w, s.surf_h, vaErrorStr(st));
     vaDestroyConfig(s.dpy, s.va_config);
     s.va_config = VA_INVALID_ID;
     s.context = VA_INVALID_ID;
@@ -318,7 +318,7 @@ Status EncodeSession::Configure(const EncoderConfig& config, VAConfigAttrib* att
   }
   s.configured = true;
   *context = s.context;
-  Logf("encoder configured: %s %ux%u in %ux%u surfaces, %u bit/s", ProfileName(config.profile), config.width,
+  Logf("configured encoder %s %ux%u in %ux%u surfaces, %u bit/s", ProfileName(config.profile), config.width,
        config.height, s.surf_w, s.surf_h, config.bitrate);
   return Status::kOk;
 }
@@ -373,7 +373,7 @@ Status EncodeSession::Encode(const YuvSrc& src, uint64_t tag, int64_t pts, bool 
   State& s = *s_;
   if (s.failed) return Status::kVaError;
   if (!s.configured) {
-    LogErrorf("encode before the core configured the session");
+    LogErrorf("Encode called before Configure");
     return Status::kVaError;
   }
   VASurfaceID surface;
@@ -396,7 +396,7 @@ Status EncodeSession::Encode(const RgbaSrc& src, uint64_t tag, int64_t pts, bool
   State& s = *s_;
   if (s.failed) return Status::kVaError;
   if (!s.configured) {
-    LogErrorf("encode before the core configured the session");
+    LogErrorf("Encode called before Configure");
     return Status::kVaError;
   }
   VASurfaceID surface;
@@ -416,14 +416,14 @@ Status EncodeSession::Encode(const RgbaSrc& src, uint64_t tag, int64_t pts, bool
   return Submit(s, s.core.get(), surface, tag, pts, keyframe);
 }
 
-// return whether a YUV dmabuf imports safely
+// return !IsVirgl(display)
 bool EncodeSession::ImportsYuvDmabuf(VADisplay display) { return !IsVirgl(display); }
 
 Status EncodeSession::Encode(const DmabufImage& src, uint64_t tag, int64_t pts, bool keyframe) {
   State& s = *s_;
   if (s.failed) return Status::kVaError;
   if (!s.configured) {
-    LogErrorf("encode before the core configured the session");
+    LogErrorf("Encode called before Configure");
     return Status::kVaError;
   }
   bool rgb = IsRgbFourcc(src.drm_fourcc);
@@ -457,7 +457,7 @@ Status EncodeSession::Encode(const DmabufImage& src, uint64_t tag, int64_t pts, 
     if (st == Status::kOk) {
       if (rgb && s.rgba_path == RgbaPath::kUnknown) {
         s.rgba_path = RgbaPath::kVpp;
-        Logf("RGBA encoder input: VPP from the imported dmabuf");
+        Logf("RGBA encoder input converted by VPP from the imported dmabuf");
       }
       return Submit(s, s.core.get(), surface, tag, pts, keyframe);
     }
@@ -468,7 +468,7 @@ Status EncodeSession::Encode(const DmabufImage& src, uint64_t tag, int64_t pts, 
   }
   if (s.rgba_path != RgbaPath::kCpu) {
     s.rgba_path = RgbaPath::kCpu;
-    Logf("RGBA encoder input: vaGetImage and CPU conversion");
+    Logf("RGBA encoder input read by vaGetImage and converted on the CPU");
   }
   if (s.rgba_readback_valid && (s.rgba_readback_w != src.width || s.rgba_readback_h != src.height ||
                                 s.rgba_readback.format.fourcc != in.va_fourcc())) {
@@ -490,7 +490,7 @@ Status EncodeSession::Encode(const DmabufImage& src, uint64_t tag, int64_t pts, 
   void* map = nullptr;
   if (vs == VA_STATUS_SUCCESS) vs = vaMapBuffer(s.dpy, s.rgba_readback.buf, &map);
   if (vs != VA_STATUS_SUCCESS || !map) {
-    LogErrorf("readback of the imported RGBA: %s", vaErrorStr(vs));
+    LogErrorf("failed to read back the imported RGBA (%s)", vaErrorStr(vs));
     State::Give(&s.inputs, surface);
     s.rgba_path = RgbaPath::kUnsupported;
     return Status::kUnsupported;
@@ -527,7 +527,7 @@ Status Submit(EncodeSession::State& s, EncoderCore* core, VASurfaceID surface, u
   Status st = core->Encode(surface, tag, pts, keyframe);
   if (st != Status::kOk) {
     s.failed = true;
-    LogErrorf("the encoder core failed (status %d): the session takes no more pictures", static_cast<int>(st));
+    LogErrorf("EncoderCore::Encode failed with status %d", static_cast<int>(st));
     auto it = s.in_flight.find(tag);
     if (it != s.in_flight.end() && it->second == surface) {
       EncodeSession::State::Give(&s.inputs, surface);

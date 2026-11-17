@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""write the launch probe's functional clips and frame MD5s to clips_data.cpp"""
+"""functional clip and frame MD5 generator for clips_data.cpp"""
 import argparse
 import hashlib
 import os
@@ -40,15 +40,15 @@ CLIPS = [
 
 
 def run(argv):
-    """run a command and return its stdout"""
+    """run a command and return the command's stdout"""
     r = subprocess.run(argv, capture_output=True)
     if r.returncode != 0:
-        sys.exit(f"gen_clips: {' '.join(argv)} failed: {r.stderr.decode(errors='replace')[-800:]}")
+        sys.exit(f"{' '.join(argv)} failed ({r.stderr.decode(errors='replace')[-800:]})")
     return r.stdout
 
 
 def make(name, depth, args, tmp):
-    """encode a clip and return its bytes and frame MD5s"""
+    """encode a clip and return the clip's bytes and frame MD5s"""
     path = os.path.join(tmp, name)
     run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", SOURCE, "-frames:v", str(FRAMES)]
         + args + [path])
@@ -57,12 +57,12 @@ def make(name, depth, args, tmp):
                  "-of", "csv=p=0", path]).decode().split()
     types = [t.split(",")[0] for t in types]
     if types != ["I"] + ["P"] * (FRAMES - 1):
-        sys.exit(f"gen_clips: {name} decodes as {types}, want I then {FRAMES - 1} P frames")
+        sys.exit(f"{name} decodes as {types}, expected I then {FRAMES - 1} P frames")
     pix = "yuv420p10le" if depth == 10 else "yuv420p"
     raw = run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", pix, "-"])
     frame = WIDTH * HEIGHT * 3 // 2 * (2 if depth == 10 else 1)
     if len(raw) != frame * FRAMES:
-        sys.exit(f"gen_clips: {name} decodes to {len(raw)} bytes, want {FRAMES} frames of {frame}")
+        sys.exit(f"{name} decodes to {len(raw)} bytes, expected {FRAMES} frames of {frame}")
     return data, [hashlib.md5(raw[i * frame:(i + 1) * frame]).hexdigest() for i in range(FRAMES)]
 
 
@@ -117,16 +117,15 @@ def main():
         for name, codec, profile, depth, framing, args in CLIPS:
             data, md5s = make(name, depth, args, tmp)
             results.append((name, codec, profile, depth, framing, data, md5s))
-            print(f"gen_clips: {name}: {len(data)} bytes, md5 {md5s[0][:8]}..", file=sys.stderr)
+            print(f"{name} bytes={len(data)} md5={md5s[0][:8]}..", file=sys.stderr)
     text = render(results, ver)
     if a.check:
         same = os.path.exists(a.out) and open(a.out).read() == text
-        print("gen_clips: %s %s" % (a.out, "matches" if same else "differs (encoder versions move bytes; the "
-                                    "committed file stands as long as its own digests check)"))
+        print("%s %s" % (a.out, "matches" if same else "differs"))
         return 0 if same else 1
     with open(a.out, "w") as f:
         f.write(text)
-    print(f"gen_clips: wrote {a.out}", file=sys.stderr)
+    print(f"wrote {a.out}", file=sys.stderr)
     return 0
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# check the current prepared tree against its manifest
+# compare the current prepared tree with manifest.json
 import hashlib, json, os, subprocess, sys
 
 root = sys.argv[1]
@@ -7,14 +7,14 @@ current = os.path.join(root, "current")
 try:
     key = os.readlink(current)
 except OSError as e:
-    print(f"BAD: no readable 'current' symlink at {current}: {e}")
+    print(f"failed to read the current symlink {current} ({e})")
     sys.exit(1)
 tree = os.path.join(root, key)
 manifest_path = os.path.join(tree, "manifest.json")
 try:
     manifest = json.load(open(manifest_path))
 except (OSError, ValueError) as e:
-    print(f"BAD: cannot read {manifest_path}: {e}")
+    print(f"failed to read {manifest_path} ({e})")
     sys.exit(1)
 
 
@@ -29,7 +29,7 @@ def sha256_of(path):
     return h.hexdigest()
 
 
-# return a file's selinux label
+# return the security.selinux xattr of path
 def label_of(path):
     try:
         out = subprocess.run(["getfattr", "-n", "security.selinux", "--only-values", path],
@@ -45,13 +45,13 @@ outputs = manifest.get("outputs", {})
 for src, meta in inputs.items():
     got = sha256_of(src)
     if got != meta.get("sha256"):
-        print(f"BAD: input changed since prepare: {src}")
+        print(f"sha256 of input {src} differs from the manifest")
         bad = 1
 for rel, meta in outputs.items():
     full = os.path.join(tree, rel)
     if meta.get("kind") == "dir":
         if not os.path.isdir(full):
-            print(f"BAD: output directory missing: {rel}")
+            print(f"no output directory {rel}")
             bad = 1
         continue
     if "sha256" not in meta:
@@ -61,19 +61,19 @@ for rel, meta in outputs.items():
             st = None
         if (st is None or not os.path.islink(full) or st.st_size != meta.get("size")
                 or st.st_ino != meta.get("ino")):
-            print(f"BAD: output changed since prepare: {rel}")
+            print(f"output symlink {rel} differs from the manifest")
             bad = 1
         continue
     got = sha256_of(full)
     if got != meta.get("sha256"):
-        print(f"BAD: output changed since prepare: {rel}")
+        print(f"sha256 of output {rel} differs from the manifest")
         bad = 1
         continue
     want_label = meta.get("label")
     if want_label:
         got_label = label_of(full)
         if got_label and got_label != want_label:
-            print(f"BAD: output relabeled since prepare: {rel} ({got_label} != {want_label})")
+            print(f"label of output {rel} is {got_label}, expected {want_label}")
             bad = 1
 if not bad:
     print(f"OK key={manifest.get('key', '?')} inputs={len(inputs)} outputs={len(outputs)}")

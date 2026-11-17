@@ -3,10 +3,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MATERIALIZE="${CHECK_TEMPLATE_MATERIALIZE:-$HERE/materialize-data-template.py}"
 LAUNCHER="${RHIZO_LAUNCHER:-$HERE/launcher3.py}"
-# run a hostops.py operation in this script's domain
+# run a hostops.py operation in the caller's SELinux domain
 hostops() { python3 "${RHIZO_HOSTOPS:-$HERE/hostops.py}" "$@"; }
 
-# print prepare's SELinux mode, or the configured one
+# print RHIZO_SELINUX_MODE or the configured SELinux mode
 selinux_mode() {
   if [[ -n "${RHIZO_SELINUX_MODE:-}" ]]; then
     echo "$RHIZO_SELINUX_MODE"
@@ -16,13 +16,13 @@ selinux_mode() {
   fi
 }
 
-# check for a host policy in namespace mode
+# return whether a host policy is loaded in namespace mode
 host_policy() {
   local ctx mode
   ctx=$(tr -d '\0' < "${RHIZO_ATTR_CURRENT:-/proc/self/attr/current}" 2>/dev/null) || return 1
   [[ "$ctx" == *:* ]] || return 1
   if ! mode=$(selinux_mode); then
-    log "the configured SELinux mode in ${RHIZO_ANDROIDD_ENV:-/etc/rhizo/androidd.env} could not be read"
+    log "failed to read the configured SELinux mode in ${RHIZO_ANDROIDD_ENV:-/etc/rhizo/androidd.env}"
     echo "TEMPLATE_FAILED reason=selinux-mode-unreadable"
     exit 1
   fi
@@ -79,7 +79,7 @@ if [[ "${1:-}" == "--print-module-lines" ]]; then
   module_lines_of; exit 0
 fi
 if [[ "${1:-}" == "--print-builder-sha" ]]; then
-  [[ -r "$MATERIALIZE" ]] || { echo "rhizo-data-template: cannot read $MATERIALIZE" >&2; exit 1; }
+  [[ -r "$MATERIALIZE" ]] || { echo "failed to read $MATERIALIZE" >&2; exit 1; }
   builder_sha_of; exit 0
 fi
 PROG=rhizo-data-template
@@ -105,7 +105,7 @@ prune_superseded() {
 }
 
 usage() {
-  echo "usage: data-template.sh --apex-dir DIR --format quota|plain [--seed none|decompressed]" \
+  echo "data-template.sh --apex-dir DIR --format quota|plain [--seed none|decompressed]" \
        "[--exclude NAME] [--variant user|userdebug] [--size 4G] [--templates-dir DIR]" >&2
 }
 
@@ -137,35 +137,34 @@ fi
 GSI="$(dirname "$APEX_DIR")"
 if [[ ! -f "$MATERIALIZE" ]]; then
   echo "TEMPLATE_FAILED reason=no-materializer"
-  log "$MATERIALIZE not found beside this script"
+  log "no $MATERIALIZE"
   exit 1
 fi
 
 active=$(systemctl is-active androidd.service 2>/dev/null)
 if [[ "$active" == active ]]; then
   echo "TEMPLATE_REFUSED reason=androidd-active"
-  log "androidd.service is active -- stop it first (systemctl stop androidd.service)"
+  log "androidd.service is active"
   exit 1
 fi
 
 BUILDER_VERSION=$(sed -n 's/^BUILDER_VERSION = "\(.*\)"/\1/p' "$MATERIALIZE")
 if [[ -z "$BUILDER_VERSION" ]]; then
   echo "TEMPLATE_FAILED reason=no-builder-version"
-  log "could not read BUILDER_VERSION out of $MATERIALIZE"
+  log "failed to read BUILDER_VERSION from $MATERIALIZE"
   exit 1
 fi
 
 fp=$(grep -m1 -E '^ro\.(system\.)?build\.fingerprint=' "$GSI/build.prop" 2>/dev/null | cut -d= -f2-)
 if [[ -z "$fp" ]]; then
   echo "TEMPLATE_FAILED reason=no-gsi-fingerprint"
-  log "no ro.build.fingerprint / ro.system.build.fingerprint in $GSI/build.prop"
+  log "no ro.build.fingerprint or ro.system.build.fingerprint in $GSI/build.prop"
   exit 1
 fi
 
 exclude_flag=()
 [[ -n "$EXCLUDE_NAME" ]] && exclude_flag=(--exclude "$EXCLUDE_NAME")
 
-log "computing the content-address key (manifest-only pass, no write)"
 manifest_out=$(python3 "$MATERIALIZE" --apex-dir "$APEX_DIR" "${exclude_flag[@]}" --manifest-only 2>&1)
 if ! grep -q '^MATERIALIZE_OK' <<<"$manifest_out"; then
   echo "TEMPLATE_FAILED reason=manifest-pass-failed"
@@ -192,14 +191,13 @@ force=0
 [[ "${RHIZO_TEMPLATE_FORCE_REBUILD:-0}" == 1 ]] && force=1
 
 if [[ -s "$IMG" && -f "$META" ]] && grep -q "\"key\": \"$KEY12\"" "$META" && (( ! force )); then
-  log "$IMG already exists and its .meta agrees with the newly derived key -- no-op"
+  log "$META has key $KEY12"
   prune_superseded
   echo "TEMPLATE_OK key=$KEY12 path=$IMG new=0"
   exit 0
 fi
-[[ -s "$IMG" ]] && (( force )) && log "RHIZO_TEMPLATE_FORCE_REBUILD=1 -- rebuilding key=$KEY12 even though it already exists"
+[[ -s "$IMG" ]] && (( force )) && log "RHIZO_TEMPLATE_FORCE_REBUILD=1 key=$KEY12"
 
-log "building (mkfs + populate + label), format=$FORMAT size=$SIZE"
 materialize=(python3 "$MATERIALIZE")
 if host_policy; then
   materialize=(python3 "$LAUNCHER" in-android-policy materialize-data-template "$MATERIALIZE")
@@ -240,7 +238,7 @@ fi
 if ! systemd-run --wait --collect --quiet --unit "rhizo-template-mkfs-$$" /usr/sbin/mke2fs -t ext4 -q -F "${mkfs_opts[@]}" "$LOOP"; then
   hostops loop-detach "$LOOP"
   rm -f "$PART"
-  log "mke2fs on $LOOP failed -- journalctl -u rhizo-template-mkfs-$$ holds its output"
+  log "mke2fs on $LOOP failed in rhizo-template-mkfs-$$"
   echo "TEMPLATE_FAILED reason=mkfs-failed"
   exit 1
 fi
@@ -259,7 +257,7 @@ if ! hostops umount "$MOUNTPOINT"; then
   echo "TEMPLATE_FAILED reason=umount-failed"
   exit 1
 fi
-rmdir "$MOUNTPOINT" || log "could not remove the build mount point $MOUNTPOINT"
+rmdir "$MOUNTPOINT" || log "failed to remove $MOUNTPOINT"
 if ! hostops loop-detach "$LOOP"; then
   rm -f "$PART"
   echo "TEMPLATE_FAILED reason=loop-detach-failed"

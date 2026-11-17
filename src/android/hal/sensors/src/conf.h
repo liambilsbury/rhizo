@@ -1,4 +1,4 @@
-// parse /vendor/etc/rhizo-sensors.conf
+// /vendor/etc/rhizo-sensors.conf parser
 #ifndef RHIZO_SENSORS_CONF_H
 #define RHIZO_SENSORS_CONF_H
 
@@ -39,7 +39,7 @@ struct Conf {
   std::vector<SensorConf> sensors;
 };
 
-// a conf parse error and its line
+// conf parse error code, line and detail
 struct ConfError {
   std::string code;
   int line = 0;

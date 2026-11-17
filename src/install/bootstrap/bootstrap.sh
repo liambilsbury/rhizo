@@ -1,22 +1,22 @@
 #!/bin/bash
-# write the kernel cmdline tokens rhizo needs
+# kernel cmdline bootstrap for rhizo
 set -uo pipefail
 
 PROG=rhizo-host-bootstrap
 log() { echo "[$PROG] $*"; }
-die() { echo "[$PROG] FAIL: $*" >&2; exit 1; }
+die() { echo "[$PROG] $*" >&2; exit 1; }
 # print the usage text
 usage() {
   cat <<'EOF'
-usage: bootstrap.sh [--verify | --show] [--lsm-list] [--vbmeta-digest DIGEST] [-h | --help]
+bootstrap.sh [--verify | --show] [--lsm-list] [--vbmeta-digest DIGEST] [-h | --help]
 EOF
 }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=host-flavor.sh
-. "$HERE/../lib/host-flavor.sh" || die "cannot read $HERE/../lib/host-flavor.sh"
+. "$HERE/../lib/host-flavor.sh" || die "failed to source $HERE/../lib/host-flavor.sh"
 # shellcheck source=bootloader.sh
-. "$HERE/bootloader.sh" || die "cannot read $HERE/bootloader.sh"
+. "$HERE/bootloader.sh" || die "failed to source $HERE/bootloader.sh"
 FLAVOR=$(host_flavor)
 CMDLINE_FILE="${RHIZO_BOOTSTRAP_CMDLINE:-/proc/cmdline}"
 PROC_SWAPS="${RHIZO_BOOTSTRAP_SWAPS:-/proc/swaps}"
@@ -45,12 +45,12 @@ done
 SELINUX_MODE_HELPER="${RHIZO_SELINUX_MODE_HELPER:-/usr/lib/rhizo/rhizo-selinux-mode}"
 SELINUX_MODE_ENV=(--env-file "${RHIZO_ANDROIDD_ENV:-/etc/rhizo/androidd.env}")
 SELINUX_MODE=$("$SELINUX_MODE_HELPER" "${SELINUX_MODE_ENV[@]}" --configured) \
-  || die "cannot read the configured SELinux mode from $SELINUX_MODE_HELPER"
+  || die "$SELINUX_MODE_HELPER --configured failed"
 case "$SELINUX_MODE" in
   host) ;;
   namespace)
-    [[ "$LSM_STYLE" != list ]] || die "--lsm-list writes an lsm= list, which selinux namespace mode never writes" ;;
-  *) die "$SELINUX_MODE_HELPER --configured printed '$SELINUX_MODE', which is neither host nor namespace" ;;
+    [[ "$LSM_STYLE" != list ]] || die "--lsm-list with selinux mode namespace" ;;
+  *) die "$SELINUX_MODE_HELPER --configured printed '$SELINUX_MODE', expected host or namespace" ;;
 esac
 # shellcheck disable=SC2034
 BL_SAVED_DEFAULT=1
@@ -59,9 +59,8 @@ BL_SAVED_DEFAULT=1
 lsm_list_tokens() {
   if ! LSM_TOKENS=$(host_lsm_list_with_selinux 2>&1); then
     [[ "$LSM_STYLE" == list ]] \
-      && die "--lsm-list builds its list from the active one, but $RHIZO_LSM_FILE cannot be read: ${LSM_TOKENS##*: }"
-    die "off Ubuntu rhizo's lsm= list is the active one with selinux ahead of bpf, but $RHIZO_LSM_FILE cannot be read:" \
-        "${LSM_TOKENS##*: }"
+      && die "failed to read $RHIZO_LSM_FILE for --lsm-list (${LSM_TOKENS##*: })"
+    die "failed to read $RHIZO_LSM_FILE (${LSM_TOKENS##*: })"
   fi
 }
 LSM_FROM_HOST_LINE=0
@@ -129,14 +128,12 @@ if [[ "$MODE" == show ]]; then
     (( rc != 0 )) || { why=$(bl_host_lines "$show_kind" 2>&1 >/dev/null) || rc=$?; }
     if (( rc == 0 )); then
       host_lsm=$(host_line_lsm "$show_kind") \
-        || die "cannot read the host's own cmdline settings for $show_kind (see above)"
+        || die "failed to read the host cmdline settings for $show_kind"
       if [[ -n "$host_lsm" ]]; then LSM_TOKENS=$host_lsm; all_tokens; fi
     elif (( rc == 2 )); then
-      echo "[$PROG] the LSM token shown is the running cmdline's: the bootstrap, run as root, chooses it from this" \
-           "host's own configured line, which this caller cannot read (${why//$'\n'/; })" >&2
+      echo "[$PROG] failed to read the host bootloader lines, LSM token from $CMDLINE_FILE (${why//$'\n'/; })" >&2
     else
-      echo "[$PROG] the LSM token shown is the running cmdline's, as the bootstrap would stop on this host:" \
-           "${why//$'\n'/; }" >&2
+      echo "[$PROG] LSM token from $CMDLINE_FILE (${why//$'\n'/; })" >&2
     fi
   fi
   echo "$ALL_TOKENS"
@@ -149,7 +146,7 @@ selinux_present() { [[ -e "$SELINUXFS/enforce" ]]; }
 mount_selinuxfs() {
   [[ ",$(lsm_active)," == *",selinux,"* && -d "$SELINUXFS" ]] && ! selinux_present || return 0
   mount -t selinuxfs selinuxfs "$SELINUXFS" \
-    || die "selinux is an active LSM but selinuxfs cannot be mounted at $SELINUXFS"
+    || die "failed to mount selinuxfs at $SELINUXFS"
 }
 judges_overrides() { [[ "$FLAVOR" != ubuntu ]]; }
 # print the selinux LSM token from a cmdline
@@ -171,25 +168,25 @@ zswap_on() { [[ "$(cat "$ZSWAP_ENABLED" 2>/dev/null)" == "Y" ]]; }
 # print the active LSM list and SELinux state
 report_state() {
   local active; active="$(lsm_active)"
-  log "  $RHIZO_LSM_FILE : ${active:-<securityfs not mounted>}"
-  log "  $SELINUXFS          : $(selinux_present && echo present || echo absent)"
+  log "lsm=${active:-<securityfs not mounted>}"
+  log "selinuxfs=$(selinux_present && echo mounted || echo absent)"
   if selinux_present; then
-    log "  $SELINUXFS/enforce  : $(cat "$SELINUXFS/enforce" 2>/dev/null || echo '<unreadable>')"
+    log "enforce=$(cat "$SELINUXFS/enforce" 2>/dev/null || echo '<unreadable>')"
   fi
-  log "  $CMDLINE_FILE            : $(tr -s ' ' < "$CMDLINE_FILE")"
+  log "cmdline=$(tr -s ' ' < "$CMDLINE_FILE")"
 }
 
 # check zswap and swap after the reboot
 verify_swap() {
   ZSWAP_VERIFIED=0
   if [[ "$FLAVOR" == ubuntu ]] || cmdline_has "zswap.enabled=1 "; then
-    zswap_on || die "zswap.enabled=1 was written to the cmdline but $ZSWAP_ENABLED is not 'Y' after reboot"
-    log "  zswap                    : active"
+    zswap_on || die "$ZSWAP_ENABLED is not Y with zswap.enabled=1 on the cmdline"
+    log "zswap=active"
     ZSWAP_VERIFIED=1
   elif swap_on_zram; then
-    log "  zswap                    : not requested (swap is on zram)"
+    log "zswap=off swap=zram"
   else
-    log "  zswap                    : not on the cmdline, and no zram swap is active"
+    log "zswap=off"
   fi
   swap_up=0
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -197,70 +194,65 @@ verify_swap() {
     sleep 1
   done
   if [[ "$swap_up" == 1 ]]; then
-    log "  swap                     : active ($(grep ^SwapTotal "$MEMINFO" | tr -s ' '))"
+    log "swap=active ($(grep ^SwapTotal "$MEMINFO" | tr -s ' '))"
   else
-    log "  swap                     : NONE after a 10s wait for swap.target -- no swapfile was provisioned, or systemd failed to activate $(systemctl is-failed swapfile.swap 2>/dev/null || echo swapfile.swap)"
+    log "swap=none after 10s ($(systemctl is-failed swapfile.swap 2>/dev/null || echo swapfile.swap))"
   fi
 }
 
 if [[ "$MODE" == verify && "$SELINUX_MODE" == namespace ]]; then
-  log "post-reboot verification"
   report_state
   BL_KIND=$(bootloader_kind 2>&1) || die "$BL_KIND"
-  default_entry=$(bootloader_default_entry "$BL_KIND") || die "cannot read the default boot entry of $BL_KIND (see above)"
+  default_entry=$(bootloader_default_entry "$BL_KIND") || die "failed to read the default boot entry of $BL_KIND"
   bl_rhizo_entry "$default_entry" \
-    || die "the default boot entry is '${default_entry:-the first entry}', not the Rhizo kernel -- choose the Rhizo kernel in the boot menu, or run the bootstrap again"
-  log "  default boot entry       : $default_entry"
-  running_out=$("$SELINUX_MODE_HELPER" "${SELINUX_MODE_ENV[@]}" --mode-and-why) || die "$SELINUX_MODE_HELPER cannot tell the SELinux mode this boot starts Android in"
+    || die "the default boot entry is '${default_entry:-the first entry}', not the Rhizo kernel"
+  log "default_entry=$default_entry"
+  running_out=$("$SELINUX_MODE_HELPER" "${SELINUX_MODE_ENV[@]}" --mode-and-why) || die "$SELINUX_MODE_HELPER --mode-and-why failed"
   IFS=$'\t' read -r running_mode running_why <<<"$running_out"
   [[ "$running_mode" == namespace ]] \
-    || die "this boot cannot start Android in selinux namespace mode: ${running_why:-$SELINUX_MODE_HELPER named no reason} ($running_mode)"
-  log "  selinux mode             : namespace"
+    || die "selinux mode is $running_mode, expected namespace (${running_why:-$SELINUX_MODE_HELPER printed no reason})"
+  log "selinux_mode=namespace"
   verify_swap
-  verified="the Rhizo kernel is the default boot entry and runs Android in selinux namespace mode"
+  verified="the default boot entry is the Rhizo kernel and the selinux mode is namespace"
   (( ! ZSWAP_VERIFIED )) || verified+=", and zswap is active"
-  log "VERIFIED: $verified"
+  log "$verified"
   log "RHIZO_BOOTSTRAP_VERIFIED=1"
   exit 0
 fi
 
 if [[ "$MODE" == verify ]]; then
-  log "post-reboot verification"
   mount_selinuxfs
   report_state
   active="$(lsm_active)"
   if [[ ",$active," != *",selinux,"* ]] || { judges_overrides && bl_lsm_bpf_first "$active"; }; then
     head="selinux is not in the active LSM list"
     if [[ ",$active," == *",selinux,"* ]]; then
-      head="bpf comes before selinux in the active LSM list ($active), so /proc/<pid>/attr answers EINVAL and no"
-      head+=" SELinux context can be read or set"
+      head="bpf is ahead of selinux in the active LSM list ($active)"
     fi
     cmdline=$(cat "$CMDLINE_FILE")
     if judges_overrides && last=$(bl_last_setting lsm "$cmdline") && ! bl_lsm_selinux_usable "${last#lsm=}" \
        && rtok=$(rhizo_lsm_before_last "$cmdline"); then
       { IFS= read -r what; IFS= read -r fix; } <<<"$(bl_lsm_fault "${last#lsm=}")"
       if [[ "$rtok" == security=* ]]; then
-        why="$CMDLINE_FILE carries $last, which voids rhizo's $rtok, as the kernel ignores security= beside any"
-        why+=" lsm=, and"
+        why="$CMDLINE_FILE has $last with rhizo's $rtok, $last"
       else
-        why="$CMDLINE_FILE's last lsm=, $last, comes after rhizo's and"
+        why="$CMDLINE_FILE has $last after rhizo's $rtok, $last"
       fi
-      die "$head -- $why $what; remove that lsm= from the host's own line, or $fix, then run the bootstrap again"
+      die "$head, $why $what, $fix"
     fi
     [[ ",$active," != *",selinux,"* ]] \
-      || die "$head -- run the bootstrap again, which writes an lsm= list with selinux ahead of bpf, and reboot"
-    die "selinux is not in the active LSM list -- the reboot did not take effect, or the cmdline did not carry it"
+      || die "$head"
+    die "selinux is not in the active LSM list"
   fi
-  selinux_present || die "selinux is an active LSM but $SELINUXFS is not mounted"
-  [[ -r "$SELINUXFS/enforce" ]] || die "$SELINUXFS/enforce is not readable -- SELinux is not usable"
+  selinux_present || die "$SELINUXFS is not mounted"
+  [[ -r "$SELINUXFS/enforce" ]] || die "$SELINUXFS/enforce is not readable"
   if [[ ",$active," == *",apparmor,"* ]]; then
-    die "apparmor is ALSO active"
+    die "apparmor is active"
   fi
   if judges_overrides; then
     ctx=$(cat "$ATTR_CURRENT" 2>&1) \
-      || die "selinux is active but $ATTR_CURRENT cannot be read (${ctx##*: }), so no SELinux context can be read or" \
-             "set through /proc/<pid>/attr"
-    log "  $ATTR_CURRENT : $ctx"
+      || die "failed to read $ATTR_CURRENT (${ctx##*: })"
+    log "attr_current=$ctx"
   fi
   verify_swap
   if (( ZSWAP_VERIFIED )); then
@@ -268,18 +260,18 @@ if [[ "$MODE" == verify ]]; then
   else
     verified="SELinux is the active exclusive LSM and selinuxfs is mounted"
   fi
-  log "VERIFIED: $verified"
+  log "$verified"
   log "RHIZO_BOOTSTRAP_VERIFIED=1"
   exit 0
 fi
 
-[[ $EUID -eq 0 ]] || die "must run as root (it edits the bootloader configuration)"
+[[ $EUID -eq 0 ]] || die "EUID $EUID is not 0"
 
 [[ "$FLAVOR" == ubuntu || "$FLAVOR" == cachyos ]] \
-  || die "this host is '${FLAVOR#unsupported:}' -- Rhizo supports Ubuntu 24.04 and CachyOS"
+  || die "host flavor '${FLAVOR#unsupported:}' is unsupported"
 
 arch="$(uname -m)"
-[[ "$arch" == x86_64 || "$arch" == aarch64 ]] || die "this host is $arch, neither x86_64 nor aarch64 -- out of scope"
+[[ "$arch" == x86_64 || "$arch" == aarch64 ]] || die "uname -m is $arch, expected x86_64 or aarch64"
 
 # require CONFIG_<sym>=y in the kernel config
 need_kconfig() {
@@ -287,20 +279,20 @@ need_kconfig() {
   err=$(host_kconfig_has "$1" 2>&1) || rc=$?
   case $rc in
     0) return 0 ;;
-    1) die "$(host_kconfig_source) does not set CONFIG_$1=y -- $2" ;;
+    1) die "$(host_kconfig_source) does not set CONFIG_$1=y for $2" ;;
   esac
-  die "$err -- cannot confirm this kernel has CONFIG_$1=y"
+  die "failed to read CONFIG_$1 ($err)"
 }
 if [[ "$SELINUX_MODE" == host ]]; then
-  need_kconfig SECURITY_SELINUX "this kernel cannot do SELinux at all, and no cmdline can change that"
+  need_kconfig SECURITY_SELINUX "host mode"
   if [[ "$FLAVOR" != ubuntu ]]; then
-    need_kconfig SECURITY_SELINUX_DEVELOP "enforcing=0 has no effect on this kernel, so the host's own boot would run enforcing under a policy that is not loaded yet"
+    need_kconfig SECURITY_SELINUX_DEVELOP "enforcing=0"
   fi
 fi
 
 BL_KIND=$(bootloader_kind 2>&1) || die "$BL_KIND"
 if (( LSM_FROM_HOST_LINE )); then
-  host_lsm=$(host_line_lsm "$BL_KIND") || die "cannot read the host's own cmdline settings for $BL_KIND (see above)"
+  host_lsm=$(host_line_lsm "$BL_KIND") || die "failed to read the host cmdline settings for $BL_KIND"
   if [[ -n "$host_lsm" ]]; then LSM_TOKENS=$host_lsm; all_tokens; fi
 fi
 DROPIN=$(bootloader_config_file "$BL_KIND")
@@ -349,13 +341,13 @@ record_drop() {
 }
 
 if ! grep -q '^rhizo-kernel-default ' "$INSTALL_RECORD" 2>/dev/null; then
-  bootloader_rhizo_default_preflight "$BL_KIND" || die "cannot make the Rhizo kernel the default boot entry (see above)"
+  bootloader_rhizo_default_preflight "$BL_KIND" || die "failed to make the Rhizo kernel the default boot entry"
 fi
 if [[ "$SELINUX_MODE" == host ]]; then
-  record_drop "selinux-mode namespace" || die "cannot drop selinux-mode namespace from $INSTALL_RECORD"
+  record_drop "selinux-mode namespace" || die "failed to remove selinux-mode namespace from $INSTALL_RECORD"
 fi
 
-# check the swapfile id against the install record
+# return whether the install record lists the swapfile id
 swapfile_is_ours() {
   local id; id=$(swapfile_id)
   [[ -n "$id" ]] && record_has "swapfile:$id"
@@ -371,10 +363,10 @@ adopt_legacy_swap() {
   entries=$(swapfile_fstab_entries)
   grep -qxF "$SWAP_FSTAB_LINE" <<<"$entries" || return 0
   record_add swapfile-fstab || return 1
-  log "recorded $FSTAB's '$SWAP_FSTAB_LINE' as this install's own: Rhizo $from wrote it before installs recorded that"
+  log "wrote swapfile-fstab to $INSTALL_RECORD"
   if [[ "$entries" == "$SWAP_FSTAB_LINE" && -f "$SWAPFILE" ]] && id=$(swapfile_id); then
     record_add "swapfile:$id" || return 1
-    log "recorded $SWAPFILE ($id) as this install's own: that line is the only entry naming it"
+    log "wrote swapfile:$id to $INSTALL_RECORD"
   fi
 }
 
@@ -384,33 +376,33 @@ root_fstype() { stat -f -c %T /; }
 append_swap_fstab_line() {
   local lead=""
   [[ -s "$FSTAB" && -n "$(LC_ALL=C tail -c1 "$FSTAB")" ]] && lead=$'\n'
-  record_add swapfile-fstab || { log "WARNING: could not record the fstab line in $INSTALL_RECORD -- not writing it"; return 1; }
+  record_add swapfile-fstab || { log "failed to write swapfile-fstab to $INSTALL_RECORD"; return 1; }
   if [[ -n "$lead" ]]; then
-    record_add swapfile-fstab-eol || { log "WARNING: could not record the fstab newline in $INSTALL_RECORD -- not writing it"; return 1; }
+    record_add swapfile-fstab-eol || { log "failed to write swapfile-fstab-eol to $INSTALL_RECORD"; return 1; }
   fi
   printf '%s%s\n' "$lead" "$SWAP_FSTAB_LINE" >> "$FSTAB"
 }
 
 # create and enable the swapfile
 provision_swap() {
-  adopt_legacy_swap || log "WARNING: could not write $INSTALL_RECORD"
+  adopt_legacy_swap || log "failed to write $INSTALL_RECORD"
   if [[ "$(wc -l < "$PROC_SWAPS")" -ge 2 ]]; then
-    log "swap already configured: $(grep -v '^Filename' "$PROC_SWAPS" | tr -s ' ')"
+    log "swap active ($(grep -v '^Filename' "$PROC_SWAPS" | tr -s ' '))"
     return 0
   fi
   if [[ "$FLAVOR" != ubuntu && "$(root_fstype)" == btrfs ]]; then
-    log "no swap is active and / is btrfs -- provisioning no swapfile"
+    log "no active swap, / is btrfs"
     return 1
   fi
   local entries id
   entries=$(swapfile_fstab_entries)
   if [[ -e "$SWAPFILE" || -L "$SWAPFILE" ]]; then
     swapfile_is_ours || {
-      log "$SWAPFILE exists and this install did not make it -- leaving it, and swap, off"
+      log "$SWAPFILE exists and is not in $INSTALL_RECORD"
       return 1
     }
   elif [[ -n "$entries" ]] && ! record_has swapfile-fstab; then
-    log "$FSTAB already names $SWAPFILE ('$(head -1 <<<"$entries")') -- leaving it, and swap, off"
+    log "$FSTAB contains $SWAPFILE ('$(head -1 <<<"$entries")')"
     return 1
   fi
   local want_kb=$((2 * 1024 * 1024)) margin_kb=$((1024 * 1024)) free_kb
@@ -418,44 +410,43 @@ provision_swap() {
   if (( free_kb < want_kb + margin_kb )); then
     if (( free_kb > 512 * 1024 + margin_kb )); then
       want_kb=$(( free_kb - margin_kb ))
-      log "only ${free_kb}KB free on / -- sizing swap down to ${want_kb}KB instead of the usual 2G"
+      log "${free_kb}KB free on /, swapfile size ${want_kb}KB"
     else
-      log "WARNING: only ${free_kb}KB free on / -- skipping swap"
+      log "${free_kb}KB free on /, no swapfile"
       return 1
     fi
   fi
   if [[ ! -f "$SWAPFILE" ]]; then
-    log "provisioning $SWAPFILE (${want_kb}KB)"
     if ! fallocate -l "${want_kb}K" "$SWAPFILE" 2>/dev/null \
        && ! dd if=/dev/zero of="$SWAPFILE" bs=1M count=$((want_kb / 1024)) status=none; then
-      log "WARNING: could not allocate $SWAPFILE"
+      log "failed to allocate $SWAPFILE"
       rm -f "$SWAPFILE"
       return 1
     fi
     chmod 0600 "$SWAPFILE"
     if ! mkswap_out=$(mkswap "$SWAPFILE" 2>&1); then
-      log "WARNING: mkswap failed: $mkswap_out"
+      log "mkswap failed ($mkswap_out)"
       rm -f "$SWAPFILE"
       return 1
     fi
     if ! id=$(swapfile_id) || ! record_add "swapfile:$id"; then
-      log "WARNING: could not record $SWAPFILE in $INSTALL_RECORD -- removing it"
+      log "failed to write $SWAPFILE to $INSTALL_RECORD"
       rm -f "$SWAPFILE"
       return 1
     fi
   fi
   if ! swapon_out=$(swapon "$SWAPFILE" 2>&1); then
-    log "WARNING: swapon failed: $swapon_out"
+    log "swapon failed ($swapon_out)"
     return 1
   fi
-  log "swap active: $(grep ^SwapTotal "$MEMINFO" | tr -s ' ')"
+  log "swap active ($(grep ^SwapTotal "$MEMINFO" | tr -s ' '))"
   if [[ -z "$(swapfile_fstab_entries)" ]]; then
     append_swap_fstab_line || return 1
   fi
 }
 provision_swap || true
 
-# check the running zswap state
+# return whether zswap is on or not in the tokens
 zswap_live() { [[ -z "$ZSWAP_TOKENS" ]] || zswap_on; }
 # print the tokens missing from the running cmdline
 cmdline_lacks() {
@@ -467,7 +458,7 @@ cmdline_lacks() {
     [[ "$running" == *" $tok "* ]] || printf ' %s' "$tok"
   done
 }
-# return success when all of the bootstrap changes are live
+# return whether the running kernel has all bootstrap changes
 live_applied() {
   local active
   if [[ "$SELINUX_MODE" == namespace ]]; then
@@ -478,7 +469,7 @@ live_applied() {
   [[ "$(uname -r)" == *-rhizo ]] && [[ ",$active," == *",selinux,"* ]] && selinux_present && zswap_live && [[ -z "$(cmdline_lacks)" ]] \
     && ! { judges_overrides && bl_lsm_bpf_first "$active"; }
 }
-# check the cmdline and bootloader config
+# return whether the cmdline and bootloader config have all tokens
 bootstrap_already_applied() {
   local missing overridden
   live_applied && bootloader_config_current "$BL_KIND" "$ALL_TOKENS" || return 1
@@ -486,23 +477,22 @@ bootstrap_already_applied() {
   if [[ "$SELINUX_MODE" == namespace ]]; then
     record_has "selinux-mode namespace" || return 1
   fi
-  missing=$(bootloader_missing "$BL_KIND" "$ALL_TOKENS") || die "cannot check $GRUBCFG for the tokens"
+  missing=$(bootloader_missing "$BL_KIND" "$ALL_TOKENS") || die "failed to read $GRUBCFG"
   [[ -z "$missing" ]] || return 1
   judges_overrides || return 0
-  overridden=$(bootloader_overridden "$BL_KIND" "$ALL_TOKENS") || die "cannot check $GRUBCFG for the tokens"
+  overridden=$(bootloader_overridden "$BL_KIND" "$ALL_TOKENS") || die "failed to read $GRUBCFG"
   [[ -z "$overridden" ]]
 }
-if [[ -n "$ZSWAP_TOKENS" ]]; then LIVE_NAMES="selinux and zswap" LIVE_PRONOUN=them; else LIVE_NAMES=selinux LIVE_PRONOUN=it; fi
+if [[ -n "$ZSWAP_TOKENS" ]]; then LIVE_NAMES="selinux and zswap" LIVE_PRONOUN="selinux and zswap"; else LIVE_NAMES=selinux LIVE_PRONOUN=selinux; fi
 [[ "$SELINUX_MODE" == host ]] || LIVE_NAMES="the Rhizo kernel${ZSWAP_TOKENS:+ and zswap}"
 
 [[ "$SELINUX_MODE" == namespace ]] || mount_selinuxfs
-log "current state:"
 report_state
 
-APPLIED_STATE="selinux is already an active LSM, selinuxfs is mounted,"
-[[ "$SELINUX_MODE" == host ]] || APPLIED_STATE="the Rhizo kernel runs,"
+APPLIED_STATE="selinux is an active LSM, selinuxfs is mounted,"
+[[ "$SELINUX_MODE" == host ]] || APPLIED_STATE="the running kernel is the Rhizo kernel,"
 if bootstrap_already_applied; then
-  log "$APPLIED_STATE${ZSWAP_TOKENS:+ zswap is active,} and $DROPIN and $GRUBCFG carry every token -- nothing to do"
+  log "$APPLIED_STATE${ZSWAP_TOKENS:+ zswap is active,} and $DROPIN and $GRUBCFG contain all tokens"
   log "RHIZO_BOOTSTRAP_ALREADY_APPLIED=1"
   exit 0
 fi
@@ -510,31 +500,30 @@ fi
 next_boot_gap() {
   local missing over rtok eff
   if ! bootloader_config_current "$BL_KIND" "$ALL_TOKENS"; then echo "$DROPIN is absent or differs"; return; fi
-  missing=$(bootloader_missing "$BL_KIND" "$ALL_TOKENS") || die "cannot check $GRUBCFG for the tokens"
-  if [[ -n "$missing" ]]; then echo "$GRUBCFG lacks:$missing"; return; fi
-  over=$(bootloader_overridden "$BL_KIND" "$ALL_TOKENS") || die "cannot check $GRUBCFG for the tokens"
+  missing=$(bootloader_missing "$BL_KIND" "$ALL_TOKENS") || die "failed to read $GRUBCFG"
+  if [[ -n "$missing" ]]; then echo "$GRUBCFG has no$missing"; return; fi
+  over=$(bootloader_overridden "$BL_KIND" "$ALL_TOKENS") || die "failed to read $GRUBCFG"
   read -r rtok eff <<<"$over"
-  echo "the host's own $eff overrides rhizo's $rtok in $GRUBCFG"
+  echo "the host $eff overrides rhizo's $rtok in $GRUBCFG"
 }
 LIVE_APPLIED=0
 if live_applied; then
   LIVE_APPLIED=1
-  log "this boot already runs $LIVE_NAMES, but the next boot's configuration does not carry" \
-      "$LIVE_PRONOUN ($(next_boot_gap)) -- restoring it"
+  log "the running kernel has $LIVE_NAMES, the next boot configuration differs ($(next_boot_gap))"
 elif [[ "$SELINUX_MODE" == host && ",$(lsm_active)," == *",selinux,"* ]] && selinux_present; then
   if ! zswap_live; then
     part="the drop-in"
     [[ "$BL_KIND" == grub-dropin ]] || part="rhizo's block in $DROPIN"
-    log "selinux already applied, but zswap.enabled=1 is missing from a prior bootstrap -- rewriting $part to add it"
+    log "zswap.enabled=1 is missing from $part"
   fi
   lacks=$(cmdline_lacks)
-  [[ -z "$lacks" ]] || log "selinux already applied, but this boot's cmdline lacks:$lacks -- writing them, which take effect at the next boot"
+  [[ -z "$lacks" ]] || log "$CMDLINE_FILE has no$lacks"
   if judges_overrides && bl_lsm_bpf_first "$(lsm_active)"; then
-    log "selinux is active, but behind bpf ($(lsm_active)) -- the next boot takes the order in rhizo's lsm= list"
+    log "bpf is ahead of selinux ($(lsm_active))"
   fi
 fi
 
-# print the lines absent from <drop>
+# print the lines of $1 absent from $2
 lines_without() {
   local l
   while IFS= read -r l; do
@@ -544,49 +533,48 @@ lines_without() {
 
 umask 022
 if [[ "$BL_KIND" != grub-dropin ]]; then
-  BEFORE=$(bootloader_cmdline_tokens "$BL_KIND") || die "cannot read the cmdlines in $GRUBCFG"
-  OWN_TOKENS=$(bootloader_own_tokens "$BL_KIND") || die "cannot read rhizo's tokens in $DROPIN"
+  BEFORE=$(bootloader_cmdline_tokens "$BL_KIND") || die "failed to read the cmdlines in $GRUBCFG"
+  OWN_TOKENS=$(bootloader_own_tokens "$BL_KIND") || die "failed to read the rhizo tokens in $DROPIN"
   BEFORE=$(lines_without "$BEFORE" "$OWN_TOKENS")
 fi
-bootloader_write "$BL_KIND" "$ALL_TOKENS" || die "cannot write $DROPIN"
+bootloader_write "$BL_KIND" "$ALL_TOKENS" || die "failed to write $DROPIN"
 log "wrote $DROPIN"
-log "  tokens: $ALL_TOKENS"
+log "tokens $ALL_TOKENS"
 
 # restore the bootloader config and fail
 regen_failed() {
-  local out still now state=still
+  local out still now state=contains
   if [[ "$BL_KIND" == grub-dropin ]]; then
     if ! out=$(bootloader_restore "$BL_KIND" 2>&1); then
-      out="could not put $DROPIN back as it was before this run (${out//$'\n'/; }) -- it keeps this run's tokens"
+      out="failed to restore $DROPIN (${out//$'\n'/; })"
     elif (( BL_SAVED_HAD )); then
-      out="put $DROPIN back as it was before this run"
+      out="restored $DROPIN"
     else
-      out="removed $DROPIN, which this run wrote"
+      out="removed $DROPIN"
     fi
-    echo "[$PROG] FAIL: $1" >&2
+    echo "[$PROG] $1" >&2
     echo "[$PROG]   $out" >&2
     exit 1
   fi
   if out=$(bootloader_rollback "$BL_KIND" 2>&1); then
     [[ -z "$out" ]] || echo "$out" | sed "s/^/[$PROG]   /"
     if still=$(bootloader_lost "$BL_KIND" "$BEFORE") && [[ -z "$still" ]]; then
-      die "$1 -- put $DROPIN back as it was and ran $REGEN again"
+      die "$1, restored $DROPIN and ran $REGEN"
     fi
-    die "$1 -- put $DROPIN back as it was and ran $REGEN again, but the next boot still lacks:${still:- <cannot read $GRUBCFG>}"
+    die "$1, restored $DROPIN and ran $REGEN, $GRUBCFG has no${still:- <failed to read $GRUBCFG>}"
   fi
   echo "$out" >&2
-  bootloader_config_current "$BL_KIND" "$ALL_TOKENS" || state="no longer"
+  bootloader_config_current "$BL_KIND" "$ALL_TOKENS" || state="does not contain"
   if ! now=$(bootloader_lost "$BL_KIND" "$BEFORE"); then
-    now="cannot be read"
+    now="is unreadable"
   elif [[ -n "$now" ]]; then
-    now="lacks:$now"
+    now="has no$now"
   else
-    now="has every token besides rhizo's own that the next boot had before this run"
+    now="has all non-rhizo tokens"
   fi
-  die "$1 -- and putting $DROPIN back did not finish (see above): $DROPIN $state carries this run's tokens, and $GRUBCFG $now"
+  die "$1, failed to restore $DROPIN, $DROPIN $state the written tokens and $GRUBCFG $now"
 }
 
-log "running $REGEN"
 if ! out=$(bootloader_regen "$BL_KIND" 2>&1); then
   echo "$out" >&2
   regen_failed "$REGEN failed"
@@ -594,22 +582,22 @@ fi
 [[ -z "$out" ]] || echo "$out" | sed "s/^/[$PROG]   /"
 
 [[ -r "$GRUBCFG" ]] || regen_failed "no readable $GRUBCFG after $REGEN"
-missing=$(bootloader_missing "$BL_KIND" "$ALL_TOKENS") || regen_failed "cannot check $GRUBCFG for the tokens"
+missing=$(bootloader_missing "$BL_KIND" "$ALL_TOKENS") || regen_failed "failed to read $GRUBCFG"
 lost=""
 if [[ "$BL_KIND" != grub-dropin ]]; then
-  lost=$(bootloader_lost "$BL_KIND" "$BEFORE") || regen_failed "cannot read the cmdlines in $GRUBCFG"
+  lost=$(bootloader_lost "$BL_KIND" "$BEFORE") || regen_failed "failed to read the cmdlines in $GRUBCFG"
 fi
 if [[ -n "$missing$lost" ]]; then
   if [[ -n "$missing" && ( "$BL_KIND" == limine || "$BL_KIND" == sdboot ) ]]; then
     lacking=$(bootloader_missing_entries "$BL_KIND" "$ALL_TOKENS") \
-      || regen_failed "cannot check $GRUBCFG for the tokens"
-    why="$REGEN ran but" sep=""
-    while IFS=$'\t' read -r where toks; do why+="$sep $where is missing:$toks" sep=" and"; done <<<"$lacking"
-    [[ -z "$lost" ]] || why+=" and $GRUBCFG lost:$lost"
+      || regen_failed "failed to read $GRUBCFG"
+    why="after $REGEN" sep=""
+    while IFS=$'\t' read -r where toks; do why+="$sep $where has no$toks" sep=" and"; done <<<"$lacking"
+    [[ -z "$lost" ]] || why+=" and $GRUBCFG lost$lost"
   else
-    why="$REGEN ran but $GRUBCFG"
-    [[ -z "$missing" ]] || why+=" is missing:$missing"
-    [[ -z "$lost" ]] || why+="${missing:+ and} lost:$lost"
+    why="after $REGEN $GRUBCFG"
+    [[ -z "$missing" ]] || why+=" has no$missing"
+    [[ -z "$lost" ]] || why+="${missing:+ and} lost$lost"
   fi
   regen_failed "$why"
 fi
@@ -617,50 +605,44 @@ fi
 overridden_why() {
   local rtok eff src out="" sep=""
   while read -r rtok eff; do
-    if ! src=$(bootloader_token_source "$BL_KIND" "$eff" 2>&1); then src="a file that cannot be read: $src"
-    elif [[ -z "$src" ]]; then src="the host's own configuration"
+    if ! src=$(bootloader_token_source "$BL_KIND" "$eff" 2>&1); then src="an unreadable file ($src)"
+    elif [[ -z "$src" ]]; then src="the host configuration"
     else src=${src//$'\n'/ and }; fi
     out+="$sep $(bl_override_why "$rtok" "$eff" "$src")"
-    sep=";"
+    sep=" and"
   done <<<"$1"
   echo "$out"
 }
 if judges_overrides; then
-  overridden=$(bootloader_overridden "$BL_KIND" "$ALL_TOKENS") || regen_failed "cannot check $GRUBCFG for the tokens"
-  [[ -z "$overridden" ]] || regen_failed "$REGEN ran, but$(overridden_why "$overridden")"
+  overridden=$(bootloader_overridden "$BL_KIND" "$ALL_TOKENS") || regen_failed "failed to read $GRUBCFG"
+  [[ -z "$overridden" ]] || regen_failed "after $REGEN$(overridden_why "$overridden")"
 fi
-log "confirmed all $(echo "$ALL_TOKENS" | wc -w) tokens present in $GRUBCFG"
+log "$GRUBCFG contains all $(echo "$ALL_TOKENS" | wc -w) tokens"
 
 if ! grep -q '^rhizo-kernel-default ' "$INSTALL_RECORD" 2>/dev/null; then
   entry=$(bootloader_make_rhizo_default "$BL_KIND" "$INSTALL_RECORD") \
-    || die "cannot make the Rhizo kernel the default boot entry (see above)"
-  log "made $entry the default boot entry; $INSTALL_RECORD keeps the previous one for the uninstall"
+    || die "failed to make the Rhizo kernel the default boot entry"
+  log "made $entry the default boot entry"
 fi
 if [[ "$SELINUX_MODE" == namespace ]]; then
-  record_add "selinux-mode namespace" || die "cannot record selinux-mode namespace in $INSTALL_RECORD"
+  record_add "selinux-mode namespace" || die "failed to write selinux-mode namespace to $INSTALL_RECORD"
 fi
 
 if (( LIVE_APPLIED )); then
   if [[ "$SELINUX_MODE" == namespace ]]; then
-    log "this boot already runs $LIVE_NAMES, so no reboot is needed; the next boot keeps $LIVE_PRONOUN"
+    log "the running kernel has $LIVE_NAMES"
   else
-    log "the running kernel already has $LIVE_NAMES, so no reboot is needed for $LIVE_PRONOUN; the next boot keeps $LIVE_PRONOUN"
+    log "the running kernel has $LIVE_PRONOUN"
   fi
   log "RHIZO_BOOTSTRAP_CONFIG_RESTORED=1"
   exit 0
 fi
 
 if [[ "$SELINUX_MODE" == namespace ]]; then
-  log ""
-  log "Android runs only on the Rhizo kernel, the default boot entry now, and"
-  log "its cmdline takes effect when that kernel boots: reboot into it."
-  log "After rebooting, confirm with: $0 --verify"
+  log "the default boot entry is the Rhizo kernel"
   log "RHIZO_BOOTSTRAP_REBOOT_REQUIRED=1"
   exit 0
 fi
 
-log ""
-log "An LSM list is a boot-time kernel parameter. There is no live-reconfigure"
-log "path, so this does not take effect until the machine reboots."
-log "After rebooting, confirm with: $0 --verify"
+log "the kernel reads lsm= at boot"
 log "RHIZO_BOOTSTRAP_REBOOT_REQUIRED=1"

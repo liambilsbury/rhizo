@@ -90,7 +90,7 @@ struct NetworkConfig {
   std::vector<OuiKeyedData> vendor_data;
   bool enabled = false;
 
-  // return true when the configuration can join an open BSS
+  // return whether key_mgmt has KeyMgmtMask::NONE and wep_keys are empty
   bool Open() const {
     if (!(Bits(key_mgmt) & Bits(KeyMgmtMask::NONE))) return false;
     for (auto& k : wep_keys) {
@@ -98,7 +98,7 @@ struct NetworkConfig {
     }
     return true;
   }
-  // return true when a BSSID constraint is set
+  // return whether bssid is nonzero
   bool PinsBssid() const {
     for (uint8_t b : bssid) {
       if (b) return true;

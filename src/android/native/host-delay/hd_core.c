@@ -125,7 +125,7 @@ size_t hd_for_each_line(const char* buf, size_t len, void (*cb)(const struct hd_
 // zero a table
 void hd_table_init(struct hd_table* t) { memset(t, 0, sizeof *t); }
 
-// free the table arrays and zero it
+// free t->apps and t->threads and zero t
 void hd_table_free(struct hd_table* t) {
   free(t->apps);
   free(t->threads);
@@ -149,7 +149,7 @@ static void set_name(char* dst, const char* src) {
   snprintf(dst, HD_NAME_MAX + 1, "%s", src);
 }
 
-// remove all of the threads of a pid from the table
+// remove the threads of pid from t
 static void drop_threads_of(struct hd_table* t, int32_t pid) {
   size_t w = 0;
   for (size_t i = 0; i < t->tn; i++)
@@ -279,7 +279,7 @@ char* hd_table_dump(const struct hd_table* t, bool connected, size_t* len) {
     free(rows);
     return NULL;
   }
-  size_t n = (size_t)snprintf(out, cap, "rhizo host delay: connected=%s\n%s",
+  size_t n = (size_t)snprintf(out, cap, "connected=%s\n%s",
                               connected ? "yes" : "no",
                               "pid\tprocess\twork_periods\thost_delayed\tdelays\theld_us\tstate\n");
   for (size_t i = 0; i < t->n; i++) {
@@ -294,7 +294,7 @@ char* hd_table_dump(const struct hd_table* t, bool connected, size_t* len) {
   return out;
 }
 
-// free the seen-key set and zero it
+// free s->keys and zero s
 void hd_incr_free(struct hd_incr* s) {
   free(s->keys);
   memset(s, 0, sizeof *s);
@@ -309,7 +309,7 @@ static uint64_t fnv(const char* s) {
 
 static bool incr_insert(struct hd_incr* s, uint64_t key);
 
-// double the seen-key set and re-insert its keys
+// double the capacity of s and re-insert the keys of s
 static bool incr_grow(struct hd_incr* s) {
   size_t cap = s->cap ? s->cap * 2 : 256;
   struct hd_incr bigger = {calloc(cap, sizeof(uint64_t)), 0, cap, s->baselined};
@@ -321,7 +321,7 @@ static bool incr_grow(struct hd_incr* s) {
   return true;
 }
 
-// insert key into the seen set
+// insert key into s
 static bool incr_insert(struct hd_incr* s, uint64_t key) {
   if (!key) key = 1;
   if ((s->n + 1) * 2 > s->cap && !incr_grow(s)) return true;
@@ -340,7 +340,7 @@ static bool first_time(struct hd_incr* s, uint64_t uuid, const char* name) {
   return incr_insert(s, uuid ^ (fnv(name) * 0xff51afd7ed558ccdULL) ^ 0x5bd1e995);
 }
 
-// pass a packet to the sink unless it overflowed
+// pass b to sink unless b->overflow is set
 static void emit(hd_sink_fn sink, void* arg, struct hd_buf* b) {
   if (!b->overflow) sink(arg, b->data, b->len);
 }
@@ -352,7 +352,7 @@ static void emit(hd_sink_fn sink, void* arg, struct hd_buf* b) {
 static const char* const k_counter_names[4] = {HD_COUNTER_WP, HD_COUNTER_DELAYED,
                                                HD_COUNTER_DELAYS, HD_COUNTER_HELD};
 
-// emit a process track the first time a process is seen
+// emit a process track if first_time returns true for pid and name
 static void ensure_process(struct hd_incr* seen, int32_t pid, const char* name, uint64_t now_ns,
                            hd_sink_fn sink, void* arg) {
   uint64_t proc = hd_uuid_process(pid);
@@ -389,7 +389,7 @@ static void baseline_app(struct hd_incr* seen, int32_t pid, const struct hd_app*
   for (int w = 0; w < 4; w++) put_counter(seen, pid, w, vals[w], now_ns, sink, arg);
 }
 
-// emit the baseline for all of the apps once
+// call baseline_app for each app unless seen->baselined is set
 void hd_emit_baseline(const struct hd_table* t, struct hd_incr* seen, uint64_t now_ns,
                       hd_sink_fn sink, void* arg) {
   if (seen->baselined) return;
@@ -399,7 +399,7 @@ void hd_emit_baseline(const struct hd_table* t, struct hd_incr* seen, uint64_t n
       baseline_app(seen, t->apps[i].pid, &t->apps[i], now_ns, sink, arg);
 }
 
-// emit the baseline for a pid once
+// call baseline_app for pid if mark_baselined returns true
 void hd_emit_baseline_pid(const struct hd_table* t, struct hd_incr* seen, int32_t pid,
                           uint64_t now_ns, hd_sink_fn sink, void* arg) {
   if (mark_baselined(seen, pid)) baseline_app(seen, pid, hd_table_app(t, pid), now_ns, sink, arg);

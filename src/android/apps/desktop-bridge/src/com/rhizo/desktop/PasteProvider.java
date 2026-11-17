@@ -16,7 +16,7 @@ import java.nio.file.Files;
 
 // ContentProvider for pasted and dropped files
 public class PasteProvider extends ContentProvider {
-    // report the provider as ready
+    // return true
     @Override
     public boolean onCreate() {
         return true;
@@ -47,19 +47,19 @@ public class PasteProvider extends ContentProvider {
         return cursor;
     }
 
-    // reject inserts
+    // throw UnsupportedOperationException
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         throw new UnsupportedOperationException();
     }
 
-    // reject deletes
+    // throw UnsupportedOperationException
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         throw new UnsupportedOperationException();
     }
 
-    // reject updates
+    // throw UnsupportedOperationException
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         throw new UnsupportedOperationException();

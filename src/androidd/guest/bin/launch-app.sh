@@ -1,8 +1,8 @@
 #!/system/bin/sh
-# run an app launch inside the sandbox shell
+# Android-side app launch on a composer display
 export PATH=/system/bin:/system/xbin:/vendor/bin:$PATH
 
-# return 0 when the display holds an activity of the package
+# return whether dumpsys activity lists a $1 activity on display $2
 on_display_now() {
   cmd display get-displays -i 2>/dev/null | toybox grep -qx "$2" || return 1
   dumpsys activity activities 2>/dev/null | awk -v want="Display #$2 " -v pkg=" $1/" '
@@ -30,14 +30,14 @@ ACTIVATION_TOKEN="${15}"
 REUSE_CID="${16}"
 cid=""
 
-# write the toplevel identity to the control channel
+# write display identity to $CTL
 set_toplevel_identity() {
   [ -n "$1" ] || return 0
   [ -n "$IDENT_APPID_B64" ] || return 0
   echo display identity "$1" "$IDENT_APPID_B64" "$IDENT_TITLE_B64" > "$CTL"
 }
 
-# stamp the first presented app frame on this display
+# write display arm-first-present to $CTL
 arm_first_present() {
   [ -n "$1" ] || return 0
   echo display arm-first-present "$1" > "$CTL"
@@ -83,7 +83,7 @@ poll_sleep() {
   fi
 }
 
-# return 0 when the display's top task names the package
+# return whether topResumedActivity on display $1 is a $PKG or permissioncontroller activity
 on_top_now() {
   dumpsys activity activities 2>/dev/null | awk -v want="Display #$1 " -v pkg=" $PKG/" '
     /Display #/ { if (inseg) exit; inseg = index($0, want) > 0; ti = 0; next }
@@ -93,7 +93,7 @@ on_top_now() {
     END { exit !found }'
 }
 
-# wait for the app to top the display
+# poll on_top_now until deadline $2
 await_on_top() {
   case "$AM_OUT" in
     *"Error:"*|*"Exception occurred"*) return 2 ;;
@@ -165,7 +165,7 @@ echo "stage=wake t=$t3 awake=$awake_result"
 
 need_display_add=1
 if [ -n "$REUSE_CID" ] && ! on_display_now "$PKG" "$REUSE_LOGID"; then
-  echo "stage=own-display-gone t=$(date +%s.%N) logid=$REUSE_LOGID cid=$REUSE_CID"
+  echo "stage=reuse-display-gone t=$(date +%s.%N) logid=$REUSE_LOGID cid=$REUSE_CID"
   REUSE_LOGID=""
   REUSE_CID=""
 fi

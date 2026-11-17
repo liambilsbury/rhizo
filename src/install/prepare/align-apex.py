@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Copy an APEX with apex_payload.img aligned to 4096 bytes"""
+"""APEX copier with apex_payload.img aligned to 4096 bytes"""
 
 import struct
 import sys
 import zipfile
 
-USAGE = """Usage: align-apex.py <src.apex> <dst.apex>"""
+USAGE = """align-apex.py <src.apex> <dst.apex>"""
 
 ALIGN = 4096
 PAYLOAD = "apex_payload.img"
@@ -16,7 +16,7 @@ def find_eocd(data):
     """return the offset of the end-of-central-directory record"""
     at = data.rfind(b"PK\x05\x06")
     if at < 0:
-        raise ValueError("no end-of-central-directory record: not a zip")
+        raise ValueError("no end-of-central-directory record")
     return at
 
 
@@ -48,14 +48,12 @@ def align(src, dst):
                 fo.write(chunk)
         return 0
     if header_offset != 0:
-        raise ValueError("%s is not the first entry (header at %d); this tool "
-                         "shifts everything after it and only handles the "
-                         "first-entry case" % (PAYLOAD, header_offset))
+        raise ValueError("%s is not the first entry (header at %d)" % (PAYLOAD, header_offset))
     data = open(src, "rb").read()
     eocd = find_eocd(data)
     entries, cd_size, cd_offset = struct.unpack("<HII", data[eocd + 10:eocd + 20])
     if len(data) - eocd > 22 + 65535:
-        raise ValueError("end-of-central-directory record is not where it should be")
+        raise ValueError("end-of-central-directory record is more than 65557 bytes from the end")
 
     head = bytearray(data[:30])
     name_len, extra_len = struct.unpack("<HH", head[26:30])
@@ -105,30 +103,29 @@ def check_extra_field(path):
     at = 0
     while at < len(extra):
         if len(extra) - at < 4:
-            raise ValueError("%s: extra field has %d trailing byte(s), too few "
-                             "for a record header" % (path, len(extra) - at))
+            raise ValueError("%s extra field has %d trailing bytes, fewer than 4" % (path, len(extra) - at))
         _, size = struct.unpack("<HH", extra[at:at + 4])
         if at + 4 + size > len(extra):
-            raise ValueError("%s: extra field record claims %d bytes with %d "
-                             "remaining" % (path, size, len(extra) - at - 4))
+            raise ValueError("%s extra field record size %d exceeds the %d remaining bytes"
+                             % (path, size, len(extra) - at - 4))
         at += 4 + size
 
 
 def verify(src, dst):
-    """check dst holds the entries of src"""
+    """check that dst has the entries of src"""
     _, offset = payload_data_offset(dst)
     if offset % ALIGN:
-        raise ValueError("%s: payload lands at %d, not a multiple of %d"
+        raise ValueError("%s payload offset %d is not a multiple of %d"
                          % (dst, offset, ALIGN))
     check_extra_field(dst)
     with zipfile.ZipFile(src) as a, zipfile.ZipFile(dst) as b:
         want = [i.filename for i in a.infolist()]
         got = [i.filename for i in b.infolist()]
         if want != got:
-            raise ValueError("%s holds %s, %s holds %s" % (src, want, dst, got))
+            raise ValueError("%s has %s, %s has %s" % (src, want, dst, got))
         for name in want:
             if a.read(name) != b.read(name):
-                raise ValueError("%s: entry %s differs from the source" % (dst, name))
+                raise ValueError("%s entry %s differs from the source" % (dst, name))
     return offset
 
 
@@ -140,7 +137,7 @@ def main(argv):
     src, dst = argv[1], argv[2]
     pad = align(src, dst)
     offset = verify(src, dst)
-    print("%s -> %s: payload at %d (padded %d bytes), %d entries verified identical"
+    print("%s -> %s payload_offset=%d pad=%d entries=%d"
           % (src, dst, offset, pad, len(zipfile.ZipFile(dst).infolist())))
     return 0
 

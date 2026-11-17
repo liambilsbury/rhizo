@@ -55,7 +55,7 @@ using ndk::ScopedFileDescriptor;
 
 namespace {
 
-// write the message to logcat and kmsg
+// write the message to logcat, kmsg and /data/rhizo_control/composer-debug.log
 void klog(const char* msg) {
   __android_log_print(ANDROID_LOG_INFO, "rhizo-composer", "%s", msg);
   static int kmsgFd = -1;
@@ -86,7 +86,7 @@ bool composerUnreliableFences() {
   return !off;
 }
 
-// present time pacing modes
+// RHIZO_COMPOSER_PACING modes
 enum class ComposerPacingMode { kOff, kNatural, kFull };
 // read RHIZO_COMPOSER_PACING from the environment
 ComposerPacingMode composerPacingMode() {
@@ -109,7 +109,7 @@ bool resizeTraceEnabled() {
   return on;
 }
 
-// check for the desktop profile's freeform feature file
+// return whether /vendor/etc/permissions/rhizo-freeform.xml exists
 bool freeformEnabled() {
   static const bool on = access("/vendor/etc/permissions/rhizo-freeform.xml", F_OK) == 0;
   return on;
@@ -134,7 +134,7 @@ int composerVsyncMinGapPct() {
     char* end = nullptr;
     long n = strtol(v, &end, 10);
     if (end == v || *end != '\0' || n < 0 || n > 100) {
-      klog("bad RHIZO_COMPOSER_VSYNC_MIN_GAP, keeping 90");
+      klog("failed to parse RHIZO_COMPOSER_VSYNC_MIN_GAP");
       return 90;
     }
     return static_cast<int>(n);
@@ -156,7 +156,7 @@ int displayPoolIdleSeconds() {
     char* end = nullptr;
     long n = strtol(v, &end, 10);
     if (end == v || *end != '\0' || n < 0) {
-      klog("bad RHIZO_DISPLAY_POOL_IDLE_S, keeping 0 (never)");
+      klog("failed to parse RHIZO_DISPLAY_POOL_IDLE_S");
       return 0;
     }
     return static_cast<int>(n);
@@ -174,7 +174,7 @@ bool displayPoolEnabled() {
 }
 
 void klogf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-// format the message and write it with klog
+// write the formatted message with klog
 void klogf(const char* fmt, ...) {
   char buf[320];
   va_list ap;
@@ -189,13 +189,13 @@ void SetFifoPriority2(const char* threadLabel) {
   struct sched_param sp {};
   sp.sched_priority = 2;
   if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
-    klogf("%s: sched_setscheduler(SCHED_FIFO, pri=2) FAILED errno=%d (%s) -- thread stays SCHED_OTHER",
+    klogf("%s sched_setscheduler(SCHED_FIFO, pri=2) failed errno=%d (%s)",
           threadLabel, errno, strerror(errno));
   }
 }
 
 void LifecycleKlogf(int64_t id, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
-// log a display lifecycle message when composer debugging is on
+// log a display lifecycle message when RHIZO_COMPOSER_DEBUG is set
 void LifecycleKlogf(int64_t id, const char* fmt, ...) {
   if (!composerDebugEnabled()) return;
   char body[256];
@@ -235,7 +235,7 @@ const DisplayGeometry& PrimaryGeometry() {
     char extra = 0;
     if (sscanf(v, "%dx%d@%d/%d%c", &w, &h, &fps, &dpi, &extra) != 4 ||
         w <= 0 || h <= 0 || fps <= 0 || dpi <= 0) {
-      klogf("bad RHIZO_DISPLAY_GEOMETRY=%s, expected WxH@fps/dpi", v);
+      klogf("failed to parse RHIZO_DISPLAY_GEOMETRY=%s as WxH@fps/dpi", v);
       abort();
     }
     return DisplayGeometry{w, h, 1000000000LL / fps, static_cast<float>(dpi)};
@@ -247,7 +247,7 @@ const int32_t kDefaultHeight = PrimaryGeometry().height;
 const int64_t kVsyncPeriodNs = PrimaryGeometry().vsyncPeriodNs;
 const float kBaseDpi = PrimaryGeometry().dpi;
 
-// primary display geometry kept across clients
+// primary display geometry for the next client
 struct KeptPrimaryGeometry {
   int32_t width = kDefaultWidth;
   int32_t height = kDefaultHeight;
@@ -255,7 +255,7 @@ struct KeptPrimaryGeometry {
   float dpi = kBaseDpi;
   int64_t vsyncPeriodNs = kVsyncPeriodNs;
 };
-// return the lock for the kept primary geometry
+// return the mutex of KeptPrimary()
 std::mutex& KeptPrimaryMutex() {
   static std::mutex m;
   return m;
@@ -305,7 +305,7 @@ struct OwnedFd {
     return *this;
   }
   int get() const { return fd; }
-  // close the current fd and store the new one
+  // close fd and store f
   void reset(int f = -1) {
     if (fd >= 0) close(fd);
     fd = f;
@@ -339,7 +339,7 @@ struct HeldBuffer {
     }
     return *this;
   }
-  // store the duplicated fd and its inode
+  // store dupFd and the inode of dupFd
   void Adopt(int dupFd) {
     Reset();
     fd = dupFd;
@@ -360,7 +360,7 @@ struct HeldBuffer {
   }
 };
 
-// wait for the fence fd and close it
+// wait for fenceFd and close fenceFd
 void WaitAndCloseFence(int fenceFd) {
   if (fenceFd < 0) return;
   struct pollfd pfd{fenceFd, POLLIN, 0};
@@ -376,7 +376,7 @@ void DmaBufSync(int fd, bool start, bool write) {
                (write ? DMA_BUF_SYNC_WRITE : DMA_BUF_SYNC_READ);
   int rc = ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
   if (rc != 0) {
-    klogf("DmaBufSync(fd=%d,start=%d) FAILED rc=%d errno=%d (%s)", fd, start, rc, errno,
+    klogf("DmaBufSync(fd=%d,start=%d) failed rc=%d errno=%d (%s)", fd, start, rc, errno,
           strerror(errno));
   }
 }
@@ -392,7 +392,7 @@ int SyncobjHandleLocked(int drmFd) {
     struct drm_syncobj_create create_req {};
     create_req.flags = DRM_SYNCOBJ_CREATE_SIGNALED;
     if (ioctl(drmFd, DRM_IOCTL_SYNCOBJ_CREATE, &create_req) < 0) {
-      klogf("DRM_IOCTL_SYNCOBJ_CREATE FAILED errno=%d (%s) -- no syncobj fence path available",
+      klogf("DRM_IOCTL_SYNCOBJ_CREATE failed errno=%d (%s)",
             errno, strerror(errno));
     } else {
       g_syncobjHandle = static_cast<int>(create_req.handle);
@@ -406,13 +406,13 @@ int TriviallySignaledFence();
 int SharedSignaledReleaseFence() {
   static const int shared = [] {
     int fd = TriviallySignaledFence();
-    if (fd < 0) klog("SharedSignaledReleaseFence: no signaled fence to share, release fences fall back per call");
+    if (fd < 0) klog("TriviallySignaledFence failed");
     return fd;
   }();
   if (shared < 0) return TriviallySignaledFence();
   int fd = fcntl(shared, F_DUPFD_CLOEXEC, 0);
   if (fd < 0) {
-    klogf("SharedSignaledReleaseFence: dup FAILED errno=%d (%s), falling back per call", errno, strerror(errno));
+    klogf("F_DUPFD_CLOEXEC of the shared release fence failed errno=%d (%s)", errno, strerror(errno));
     return TriviallySignaledFence();
   }
   return fd;
@@ -423,13 +423,13 @@ int TriviallySignaledFence() {
   std::lock_guard<std::mutex> lg(g_syncobjMutex);
   int drmFd = rhizo::OpenRenderNode();
   if (drmFd < 0) {
-    klog("TriviallySignaledFence: OpenRenderNode FAILED, falling back to /dev/null fence");
+    klog("OpenRenderNode failed");
     return open("/dev/null", O_RDONLY | O_CLOEXEC);
   }
   struct drm_syncobj_create create_req {};
   create_req.flags = DRM_SYNCOBJ_CREATE_SIGNALED;
   if (ioctl(drmFd, DRM_IOCTL_SYNCOBJ_CREATE, &create_req) < 0) {
-    klogf("DRM_IOCTL_SYNCOBJ_CREATE FAILED errno=%d (%s), falling back to /dev/null fence",
+    klogf("DRM_IOCTL_SYNCOBJ_CREATE failed errno=%d (%s)",
           errno, strerror(errno));
     return open("/dev/null", O_RDONLY | O_CLOEXEC);
   }
@@ -444,7 +444,7 @@ int TriviallySignaledFence() {
   ioctl(drmFd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy_req);
   if (rc < 0) {
     klogf(
-        "DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD FAILED errno=%d (%s), falling back to /dev/null fence",
+        "DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD failed errno=%d (%s)",
         exportErrno, strerror(exportErrno));
     return open("/dev/null", O_RDONLY | O_CLOEXEC);
   }
@@ -638,8 +638,7 @@ class RhizoComposerClient : public BnComposerClient {
         int remaining = transientThreads_.load(std::memory_order_acquire);
         if (remaining <= 0) break;
         if (NowNanos() >= deadline) {
-          klogf("Shutdown: %d transient thread(s) still running after %lldms -- "
-                "proceeding anyway",
+          klogf("%d transient threads are still running after %lldms",
                 remaining, static_cast<long long>(kQuiescenceMaxWaitNs / 1000000));
           break;
         }
@@ -679,7 +678,7 @@ class RhizoComposerClient : public BnComposerClient {
     return ok();
   }
 
-  // destroy a layer and release its buffers
+  // destroy a layer and release the layer's compositor buffers
   ScopedAStatus destroyLayer(int64_t display, int64_t layer) override {
     bool released = false;
     std::vector<int32_t> wlSlots;
@@ -701,21 +700,21 @@ class RhizoComposerClient : public BnComposerClient {
     }
     int dropped = 0;
     for (int32_t wlSlot : wlSlots) dropped += wayland_.ReleaseSlot(display, wlSlot);
-    if (dropped) LifecycleKlogf(display, "layer %lld gone: %d compositor buffer(s) released",
+    if (dropped) LifecycleKlogf(display, "destroyed layer %lld, released %d compositor buffers",
                                 static_cast<long long>(layer), dropped);
     if (released) WakeControlThread();
     return ok();
   }
 
-  // refuse virtual displays as unsupported
+  // return EX_UNSUPPORTED
   ScopedAStatus createVirtualDisplay(int32_t, int32_t,
                                       ::aidl::android::hardware::graphics::common::PixelFormat,
                                       int32_t, VirtualDisplay*) override {
-    return clientErr(IComposerClient::EX_UNSUPPORTED, "no virtual displays in v1");
+    return clientErr(IComposerClient::EX_UNSUPPORTED, "virtual displays unsupported");
   }
-  // refuse virtual displays as unsupported
+  // return EX_UNSUPPORTED
   ScopedAStatus destroyVirtualDisplay(int64_t) override {
-    return clientErr(IComposerClient::EX_UNSUPPORTED, "no virtual displays in v1");
+    return clientErr(IComposerClient::EX_UNSUPPORTED, "virtual displays unsupported");
   }
 
   // build a command error payload
@@ -728,7 +727,7 @@ class RhizoComposerClient : public BnComposerClient {
     return p;
   }
 
-  // apply display commands and present frames
+  // apply each DisplayCommand
   ScopedAStatus executeCommands(const std::vector<DisplayCommand>& commands,
                                  std::vector<CommandResultPayload>* out) override {
     const int64_t tCall = NowNanos();
@@ -809,7 +808,7 @@ class RhizoComposerClient : public BnComposerClient {
 
       if (cmd.presentDisplay || presentedNow) {
         if (composerVerboseFrames()) {
-          klogf("CMD display=%lld present=%d povd=%d validate=%d clientTarget=%d layers=%zu",
+          klogf("DisplayCommand display=%lld presentDisplay=%d presentOrValidateDisplay=%d validateDisplay=%d clientTarget=%d layers=%zu",
                 static_cast<long long>(cmd.display), cmd.presentDisplay,
                 cmd.presentOrValidateDisplay, cmd.validateDisplay, cmd.clientTarget.has_value(),
                 cmd.layers.size());
@@ -889,7 +888,7 @@ class RhizoComposerClient : public BnComposerClient {
     int dropped = 0;
     for (const auto& ds_slot : toRelease) dropped += wayland_.ReleaseSlot(ds_slot.first, ds_slot.second);
     if (dropped && !toRelease.empty())
-      LifecycleKlogf(toRelease.front().first, "slots cleared: %d compositor buffer(s) released",
+      LifecycleKlogf(toRelease.front().first, "cleared slots, released %d compositor buffers",
                      dropped);
     return ok();
   }
@@ -902,7 +901,7 @@ class RhizoComposerClient : public BnComposerClient {
     *out = ds->configId;
     return ok();
   }
-  // accept a known config id without changing the display
+  // return EX_BAD_CONFIG for an unknown config id
   ScopedAStatus setActiveConfig(int64_t display, int32_t config) override {
     std::lock_guard<std::mutex> lg(mutex_);
     DisplayState* ds = FindLocked(display);
@@ -912,7 +911,7 @@ class RhizoComposerClient : public BnComposerClient {
     }
     return ok();
   }
-  // accept a known config id
+  // return EX_BAD_CONFIG for an unknown config id
   ScopedAStatus setActiveConfigWithConstraints(
       int64_t display, int32_t config, const VsyncPeriodChangeConstraints&,
       VsyncPeriodChangeTimeline* out) override {
@@ -927,27 +926,27 @@ class RhizoComposerClient : public BnComposerClient {
     out->refreshTimeNanos = 0;
     return ok();
   }
-  // reject setting the boot display config
+  // return EX_UNSUPPORTED
   ScopedAStatus setBootDisplayConfig(int64_t, int32_t) override {
     return clientErr(IComposerClient::EX_UNSUPPORTED, "boot display config unsupported");
   }
-  // refuse boot display configs as unsupported
+  // return EX_UNSUPPORTED
   ScopedAStatus clearBootDisplayConfig(int64_t) override {
     return clientErr(IComposerClient::EX_UNSUPPORTED, "boot display config unsupported");
   }
-  // refuse boot display configs as unsupported
+  // return EX_UNSUPPORTED
   ScopedAStatus getPreferredBootDisplayConfig(int64_t, int32_t*) override {
     return clientErr(IComposerClient::EX_UNSUPPORTED, "boot display config unsupported");
   }
 
-  // return the native color mode only
+  // return ColorMode::NATIVE
   ScopedAStatus getColorModes(int64_t display, std::vector<ColorMode>* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
     *out = {ColorMode::NATIVE};
     return ok();
   }
-  // return the render intents for a color mode
+  // return RenderIntent::COLORIMETRIC for ColorMode::NATIVE
   ScopedAStatus getRenderIntents(int64_t display, ColorMode mode,
                                   std::vector<RenderIntent>* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
@@ -958,7 +957,7 @@ class RhizoComposerClient : public BnComposerClient {
     *out = {RenderIntent::COLORIMETRIC};
     return ok();
   }
-  // check the color mode and intent
+  // return EX_BAD_PARAMETER unless the mode is NATIVE and the intent is COLORIMETRIC
   ScopedAStatus setColorMode(int64_t display, ColorMode mode, RenderIntent intent) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
@@ -978,7 +977,7 @@ class RhizoComposerClient : public BnComposerClient {
     return ok();
   }
 
-  // return an attribute of a known config
+  // return the config attribute, badDisplay() or EX_BAD_CONFIG
   ScopedAStatus getDisplayAttribute(int64_t display, int32_t config, DisplayAttribute attribute,
                                      int32_t* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
@@ -1073,7 +1072,7 @@ class RhizoComposerClient : public BnComposerClient {
     *out = static_cast<int32_t>(ds->vsyncPeriodNs);
     return ok();
   }
-  // return no transform for a known display
+  // return badDisplay() or Transform::NONE
   ScopedAStatus getDisplayPhysicalOrientation(
       int64_t display, ::aidl::android::hardware::graphics::common::Transform* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
@@ -1081,29 +1080,29 @@ class RhizoComposerClient : public BnComposerClient {
     *out = ::aidl::android::hardware::graphics::common::Transform::NONE;
     return ok();
   }
-  // report no display decoration support
+  // return std::nullopt for display decoration support
   ScopedAStatus getDisplayDecorationSupport(
       int64_t, std::optional<::aidl::android::hardware::graphics::common::DisplayDecorationSupport>* out) override {
     *out = std::nullopt;
     return ok();
   }
-  // refuse content sampling as unsupported
+  // return EX_UNSUPPORTED
   ScopedAStatus getDisplayedContentSample(int64_t, int64_t, int64_t,
                                            DisplayContentSample*) override {
     return clientErr(IComposerClient::EX_UNSUPPORTED, "content sampling unsupported");
   }
-  // refuse content sampling as unsupported
+  // return EX_UNSUPPORTED
   ScopedAStatus getDisplayedContentSamplingAttributes(
       int64_t, DisplayContentSamplingAttributes*) override {
     return clientErr(IComposerClient::EX_UNSUPPORTED, "content sampling unsupported");
   }
-  // refuse content sampling as unsupported
+  // return EX_UNSUPPORTED
   ScopedAStatus setDisplayedContentSamplingEnabled(int64_t, bool, FormatColorComponent,
                                                     int64_t) override {
     return clientErr(IComposerClient::EX_UNSUPPORTED, "content sampling unsupported");
   }
 
-  // report no hdr types and zero luminance for a known display
+  // return badDisplay() or no hdr types and zero luminance
   ScopedAStatus getHdrCapabilities(int64_t display, HdrCapabilities* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
@@ -1111,7 +1110,7 @@ class RhizoComposerClient : public BnComposerClient {
     out->maxLuminance = out->maxAverageLuminance = out->minLuminance = 0;
     return ok();
   }
-  // return no per-frame metadata keys for a known display
+  // return badDisplay() or no per-frame metadata keys
   ScopedAStatus getPerFrameMetadataKeys(int64_t display,
                                          std::vector<PerFrameMetadataKey>* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
@@ -1119,7 +1118,7 @@ class RhizoComposerClient : public BnComposerClient {
     *out = {};
     return ok();
   }
-  // report no overlay combinations, mixed color spaces or luts
+  // return no overlay combinations, mixed color spaces or luts
   ScopedAStatus getOverlaySupport(OverlayProperties* out) override {
     out->combinations = {};
     out->supportMixedColorSpaces = false;
@@ -1144,7 +1143,7 @@ class RhizoComposerClient : public BnComposerClient {
     *out = 0;
     return ok();
   }
-  // return no content types for a known display
+  // return badDisplay() or no content types
   ScopedAStatus getSupportedContentTypes(int64_t display,
                                           std::vector<ContentType>* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
@@ -1152,42 +1151,42 @@ class RhizoComposerClient : public BnComposerClient {
     *out = {};
     return ok();
   }
-  // accept only the NONE content type
+  // return EX_UNSUPPORTED for a content type other than NONE
   ScopedAStatus setContentType(int64_t display, ContentType type) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
-    if (type != ContentType::NONE) return clientErr(IComposerClient::EX_UNSUPPORTED, "no content types supported");
+    if (type != ContentType::NONE) return clientErr(IComposerClient::EX_UNSUPPORTED, "content types unsupported");
     return ok();
   }
-  // reject auto low latency mode
+  // return EX_UNSUPPORTED for auto low latency mode
   ScopedAStatus setAutoLowLatencyMode(int64_t display, bool) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
     return clientErr(IComposerClient::EX_UNSUPPORTED, "ALLM unsupported");
   }
-  // reject the idle timer
+  // return EX_UNSUPPORTED for the idle timer
   ScopedAStatus setIdleTimerEnabled(int64_t display, int32_t) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
     return clientErr(IComposerClient::EX_UNSUPPORTED, "idle timer unsupported");
   }
-  // refuse the refresh rate changed debug callback as unsupported
+  // return EX_UNSUPPORTED for the refresh rate changed debug callback
   ScopedAStatus setRefreshRateChangedCallbackDebugEnabled(int64_t display, bool) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
     return clientErr(IComposerClient::EX_UNSUPPORTED, "refresh rate changed callback debug unsupported");
   }
-  // accept and ignore an expected present time
+  // return ok
   ScopedAStatus notifyExpectedPresent(int64_t, const ClockMonotonicTimestamp&, int32_t) override {
     return ok();
   }
-  // refuse picture profiles as unsupported
+  // return EX_UNSUPPORTED for picture profiles
   ScopedAStatus getMaxLayerPictureProfiles(int64_t display, int32_t*) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
     return clientErr(IComposerClient::EX_UNSUPPORTED, "picture profiles unsupported");
   }
-  // accept and ignore an hdcp negotiation request
+  // return ok
   ScopedAStatus startHdcpNegotiation(
       int64_t, const ::aidl::android::hardware::drm::HdcpLevels&) override {
     return ok();
@@ -1198,7 +1197,7 @@ class RhizoComposerClient : public BnComposerClient {
     return ok();
   }
 
-  // accept and ignore a client target slot count
+  // return ok for a client target slot count
   ScopedAStatus setClientTargetSlotCount(int64_t, int32_t) override { return ok(); }
   // set the display power mode
   ScopedAStatus setPowerMode(int64_t display, PowerMode mode) override {
@@ -1256,7 +1255,7 @@ class RhizoComposerClient : public BnComposerClient {
     return ok();
   }
 
-  // report RGBA_8888 with an unknown dataspace for readback
+  // return RGBA_8888 and Dataspace::UNKNOWN for readback
   ScopedAStatus getReadbackBufferAttributes(int64_t display, ReadbackBufferAttributes* out) override {
     std::lock_guard<std::mutex> lg(mutex_);
     if (!FindLocked(display)) return badDisplay();
@@ -1264,10 +1263,9 @@ class RhizoComposerClient : public BnComposerClient {
     out->dataspace = ::aidl::android::hardware::graphics::common::Dataspace::UNKNOWN;
     return ok();
   }
-  // wait for the release fence and hold the readback buffer
+  // wait for the release fence and store the readback buffer
   ScopedAStatus setReadbackBuffer(int64_t display, const NativeHandle& buffer,
                                    const ScopedFileDescriptor& releaseFence) override {
-    klog("setReadbackBuffer() CALLED");
     if (releaseFence.get() >= 0) WaitAndCloseFence(dup(releaseFence.get()));
     NhView v = ViewNativeHandle(buffer);
     if (v.fd < 0 || !v.decoded.valid) return clientErr(IComposerClient::EX_BAD_PARAMETER, "bad readback buffer");
@@ -1287,18 +1285,16 @@ class RhizoComposerClient : public BnComposerClient {
     return ok();
   }
 
-  // store the callback and send primary hotplug
+  // store the callback and call onHotplugEvent for the primary display
   ScopedAStatus registerCallback(const std::shared_ptr<IComposerCallback>& cb) override {
-    klog("registerCallback() entered");
     {
       std::lock_guard<std::mutex> lg(mutex_);
       callback_ = cb;
     }
-    klog("calling onHotplugEvent synchronously");
     auto st = cb->onHotplugEvent(
         kPrimaryDisplayId,
         ::aidl::android::hardware::graphics::common::DisplayHotplugEvent::CONNECTED);
-    klogf("onHotplugEvent status: isOk=%d exceptionCode=%d", st.isOk(),
+    klogf("onHotplugEvent isOk=%d exceptionCode=%d", st.isOk(),
           st.isOk() ? 0 : st.getExceptionCode());
     StartVsyncThreadOnce();
     StartControlThreadOnce();
@@ -1307,7 +1303,6 @@ class RhizoComposerClient : public BnComposerClient {
       if (shuttingDown_.load(std::memory_order_acquire)) return;
       TryStartPrimaryWaylandSurface();
     }).detach();
-    klog("registerCallback() returning");
     return ok();
   }
 
@@ -1486,7 +1481,7 @@ class RhizoComposerClient : public BnComposerClient {
       int64_t hopSfPresentNs = 0;
       int64_t hopCommitNs = 0;
     } tap;
-    // timing of the first present
+    // arm-first-present timestamps
     struct FirstPresent {
       bool armed = false;
       int64_t armNs = 0;
@@ -1503,7 +1498,7 @@ class RhizoComposerClient : public BnComposerClient {
     int64_t expectedPresentTimeNanos = 0;
   };
 
-  // wait for the target present time
+  // wait for expectedPresentTime
   bool PaceExpectedPresentTime(std::unique_lock<std::mutex>& lg, int64_t display) {
     DisplayState* ds = FindLocked(display);
     if (!ds) return false;
@@ -1546,7 +1541,7 @@ class RhizoComposerClient : public BnComposerClient {
   static constexpr int64_t kQuiescenceMaxWaitNs = 1500LL * 1000 * 1000;
   static constexpr useconds_t kQuiescencePollUs = 10 * 1000;
 
-  // search the display configs for an id
+  // return whether ds.configs contains the config id
   static bool KnownConfig(const DisplayState& ds, int32_t config) {
     for (const auto& c : ds.configs) {
       if (c.id == config) return true;
@@ -1647,7 +1642,7 @@ class RhizoComposerClient : public BnComposerClient {
     }
   }
 
-  // check for the identity matrix
+  // return whether m is the 4x4 identity matrix
   static bool IsIdentityMatrix(const std::vector<float>& m) {
     if (m.size() != 16) return false;
     for (int i = 0; i < 16; i++) {
@@ -1668,12 +1663,12 @@ class RhizoComposerClient : public BnComposerClient {
     return h;
   }
 
-  // send the cursor image to the compositor
+  // call WaylandBackend::SetCursorSurface with the cursor layer image
   void UpdateCursorLayerLocked(DisplayState& ds, LayerState& ls, bool byName = true) {
     ds.cursor.offered++;
     auto sit = ls.slots.find(ls.slot);
     if (ls.slot < 0) { ds.cursor.lastSkip = "no-slot"; return; }
-    if (sit == ls.slots.end()) { ds.cursor.lastSkip = "slot-not-held"; return; }
+    if (sit == ls.slots.end()) { ds.cursor.lastSkip = "slot-not-found"; return; }
     if (sit->second.fd < 0) { ds.cursor.lastSkip = "no-fd"; return; }
     const rhizo::DecodedHandle& d = sit->second.decoded;
     ds.cursor.seen++;
@@ -1686,7 +1681,7 @@ class RhizoComposerClient : public BnComposerClient {
     const bool isBgra = d.drmFourcc == rhizo::kDrmFormatArgb8888;
     const bool isRgba = d.drmFourcc == rhizo::kDrmFormatAbgr8888;
     if (!isBgra && !isRgba) {
-      klogf("cursor layer: unsupported drm format 0x%x for display %lld", d.drmFourcc,
+      klogf("cursor layer drm format 0x%x is unsupported for display %lld", d.drmFourcc,
             static_cast<long long>(ds.id));
       return;
     }
@@ -1701,7 +1696,7 @@ class RhizoComposerClient : public BnComposerClient {
         d.allocSize ? d.allocSize : static_cast<size_t>(d.stride) * d.height;
     void* s = mmap(nullptr, srcSize, PROT_READ, MAP_SHARED, sit->second.fd, 0);
     if (s == MAP_FAILED) {
-      klogf("cursor layer: mmap failed for display %lld", static_cast<long long>(ds.id));
+      klogf("cursor layer mmap failed for display %lld", static_cast<long long>(ds.id));
       return;
     }
     std::vector<uint8_t> argb(static_cast<size_t>(d.width) * d.height * 4);
@@ -1721,7 +1716,6 @@ class RhizoComposerClient : public BnComposerClient {
     }
     munmap(s, srcSize);
 
-    // the hotspot is the pointer less the sprite origin
     int32_t hotspotX = 0, hotspotY = 0;
     int32_t px = 0, py = 0;
     if (GetCursorPointerAbs(ds.id, &px, &py)) {
@@ -1736,7 +1730,6 @@ class RhizoComposerClient : public BnComposerClient {
 
     const uint32_t digest = Fnv1a32(argb.data(), argb.size());
     const bool newImage = !ds.cursor.valid || digest != ds.cursor.digest;
-    // keep an image's first hotspot; later ones differ only by pointer lag
     if (ds.cursor.valid && digest == ds.cursor.digest && d.width == ds.cursor.width &&
         d.height == ds.cursor.height &&
         (ds.cursor.hotspotMeasured || !measured ||
@@ -1757,7 +1750,7 @@ class RhizoComposerClient : public BnComposerClient {
     ds.cursor.hotspotMeasured = measured;
     ds.cursor.digest = digest;
     ds.cursor.uploads++;
-    klogf("cursor layer: display %lld upload #%llu %dx%d hotspot %d,%d digest %u (batches seen %llu)",
+    klogf("display %lld cursor upload=%llu size=%dx%d hotspot=%d,%d digest=%u seen=%llu",
           static_cast<long long>(ds.id), (unsigned long long)ds.cursor.uploads, d.width, d.height,
           hotspotX, hotspotY, digest, (unsigned long long)ds.cursor.seen);
     if (newImage) {
@@ -1766,7 +1759,7 @@ class RhizoComposerClient : public BnComposerClient {
     }
   }
 
-  // show the host shape for the cursor image's pointer type
+  // set the host cursor shape for the cursor image's pointer type
   void ShowPointerTypeLocked(DisplayState& ds) {
     auto known = pointerTypeByImage_.find(ds.cursor.digest);
     if (known != pointerTypeByImage_.end()) {
@@ -1856,7 +1849,7 @@ class RhizoComposerClient : public BnComposerClient {
     if (ds.displayColorTransformed) return refuse("display-color-transform");
     if (ds.layers.size() != 1) return refuse(ds.layers.empty() ? "no-layer" : "multiple-layers");
     auto& [id, ls] = *ds.layers.begin();
-    if (ls.requested != Composition::DEVICE) return refuse("not-requested");
+    if (ls.requested != Composition::DEVICE) return refuse("not-device");
     if (ls.sideband) return refuse("sideband");
     auto sit = ls.slots.find(ls.slot);
     if (ls.slot < 0 || sit == ls.slots.end() || sit->second.fd < 0) return refuse("no-buffer");
@@ -1891,7 +1884,7 @@ class RhizoComposerClient : public BnComposerClient {
 
   int64_t fenceWaitNs_ = 0;
 
-  // present the device layer buffer to Wayland
+  // call PresentToWayland with the device layer buffer
   void PresentDeviceFrame(DisplayState& ds) {
     auto lit = ds.layers.find(ds.deviceLayer);
     if (lit == ds.layers.end()) return;
@@ -1918,7 +1911,7 @@ class RhizoComposerClient : public BnComposerClient {
     ds.lastDeviceSlot = wlSlot;
   }
 
-  // check the layers for a buffer
+  // return whether a layer has a buffer slot
   static bool LayerHasBufferLocked(const DisplayState& ds) {
     for (const auto& kv : ds.layers) {
       if (kv.second.slot >= 0) return true;
@@ -1976,7 +1969,7 @@ class RhizoComposerClient : public BnComposerClient {
     f->fillHeight = 0;
   }
 
-  // crop a freeform display's frame to its task below the caption
+  // crop a freeform display's frame to the display's task below the caption
   void FreeformCropLocked(DisplayState& ds, rhizo::WaylandFrame* f) {
     const LayerState* app = nullptr;
     int64_t best = 0;
@@ -2067,7 +2060,7 @@ class RhizoComposerClient : public BnComposerClient {
     ds.cropY = y;
   }
 
-  // send a frame to the Wayland surface
+  // call WaylandBackend::PresentFrameWhenSignaled with a frame
   void PresentToWayland(DisplayState& ds, const rhizo::WaylandFrame& wf, const char* who) {
     if (ds.waylandBacked && !ds.closing) {
       const int64_t now = NowNanos();
@@ -2077,13 +2070,13 @@ class RhizoComposerClient : public BnComposerClient {
       rhizo::WaylandFrame shown = wf;
       if (freeformEnabled()) FreeformCropLocked(ds, &shown);
       if (!wayland_.PresentFrameWhenSignaled(ds.id, shown)) {
-        klogf("%s: WaylandBackend::PresentFrame FAILED for display %lld", who,
+        klogf("%s WaylandBackend::PresentFrameWhenSignaled failed for display %lld", who,
               static_cast<long long>(ds.id));
       }
     }
   }
 
-  // send a frame to the stream export
+  // call StreamExportBackend::Present with a primary display frame
   void PresentToStream(DisplayState& ds, const HeldBuffer& buf, int64_t presentedNs) {
     if (ds.id != kPrimaryDisplayId) return;
     if (!stream_.EnsureConnected()) return;
@@ -2097,7 +2090,7 @@ class RhizoComposerClient : public BnComposerClient {
     sf.modifier = buf.decoded.modifier;
     sf.presentedNs = presentedNs;
     if (!stream_.Present(sf)) {
-      klog("PresentToStream: StreamExportBackend::Present FAILED, consumer dropped");
+      klog("StreamExportBackend::Present failed");
     }
   }
 
@@ -2110,8 +2103,8 @@ class RhizoComposerClient : public BnComposerClient {
     for (const auto& kv : ds->deviceRefusals) {
       refusals += (refusals.empty() ? "" : ",") + kv.first + "=" + std::to_string(kv.second);
     }
-    klogf("composition stats: display %lld device=%llu client=%llu release-held=%llu over %lldms "
-          "(boot total device=%llu client=%llu) last=%s refusals{%s}",
+    klogf("display %lld composition stats device=%llu client=%llu release-held=%llu over %lldms "
+          "deviceFrames=%llu clientFrames=%llu last=%s refusals{%s}",
           static_cast<long long>(displayId),
           (unsigned long long)(ds->deviceFrames - ds->deviceFramesReported),
           (unsigned long long)(ds->clientFrames - ds->clientFramesReported),
@@ -2119,8 +2112,8 @@ class RhizoComposerClient : public BnComposerClient {
           (long long)((now - ds->lastCompositionStatsNs) / 1000000),
           (unsigned long long)ds->deviceFrames, (unsigned long long)ds->clientFrames,
           ds->deviceReason, refusals.c_str());
-    klogf("frame cost: display %lld us mean/max lock=%s apply=%s fencewait=%s present=%s fences=%s "
-          "total=%s over %llu calls",
+    klogf("display %lld frame cost us mean/max costLock=%s costApply=%s costFenceWait=%s costPresent=%s costFences=%s "
+          "costTotal=%s over %llu calls",
           static_cast<long long>(displayId), ds->costLock.str().c_str(), ds->costApply.str().c_str(),
           ds->costFenceWait.str().c_str(), ds->costPresent.str().c_str(), ds->costFences.str().c_str(),
           ds->costTotal.str().c_str(), (unsigned long long)ds->costTotal.n);
@@ -2133,7 +2126,7 @@ class RhizoComposerClient : public BnComposerClient {
     ds->lastCompositionStatsNs = now;
   }
 
-  // present the target buffer
+  // call PresentToWayland and PresentToStream with the client target buffer
   void PresentBufferedFrame(DisplayState& ds, const DisplayCommand& cmd) {
     if (!cmd.clientTarget.has_value()) return;
     const Buffer& buf = cmd.clientTarget->buffer;
@@ -2155,7 +2148,7 @@ class RhizoComposerClient : public BnComposerClient {
     if (newHandle) {
       NhView v = ViewNativeHandle(*buf.handle);
       if (v.fd < 0 || !v.decoded.valid) {
-        klog("presentDisplay: client target handle undecodable, skipping frame");
+        klog("failed to decode the client target handle");
         return;
       }
       HeldBuffer& slot = ds.clientTargetSlots[buf.slot];
@@ -2166,7 +2159,7 @@ class RhizoComposerClient : public BnComposerClient {
     } else {
       auto it = ds.clientTargetSlots.find(buf.slot);
       if (it == ds.clientTargetSlots.end() || it->second.fd < 0) {
-        klogf("presentDisplay: display %lld slot %d has no cached handle, skipping frame",
+        klogf("display %lld slot %d has no cached client target handle",
               static_cast<long long>(ds.id), buf.slot);
         return;
       }
@@ -2175,8 +2168,8 @@ class RhizoComposerClient : public BnComposerClient {
     }
 
     if (decoded->width <= 0 || decoded->height <= 0 || decoded->stride <= 0 || fd < 0) {
-      klogf("presentDisplay: display %lld invalid client target geometry "
-            "w=%d h=%d stride=%d fd=%d -- skipping frame",
+      klogf("display %lld invalid client target geometry "
+            "w=%d h=%d stride=%d fd=%d",
             static_cast<long long>(ds.id), decoded->width, decoded->height, decoded->stride, fd);
       return;
     }
@@ -2189,7 +2182,7 @@ class RhizoComposerClient : public BnComposerClient {
       if (n < 0) snprintf(link, sizeof(link), "readlink failed errno=%d", errno);
       struct stat st{};
       int fstatRc = fstat(fd, &st);
-      klogf("clientTarget fd identity: display=%lld new=%d slot=%d fd=%d -> %s fstat_rc=%d size=%lld",
+      klogf("clientTarget display=%lld new=%d slot=%d fd=%d link=%s fstat_rc=%d size=%lld",
             static_cast<long long>(ds.id), newHandle, buf.slot, fd, link, fstatRc,
             (long long)st.st_size);
     }
@@ -2228,7 +2221,7 @@ class RhizoComposerClient : public BnComposerClient {
                               : static_cast<size_t>(d.stride) * (d.height > 0 ? d.height : 1);
     ++ds.presentCount;
     if (size == 0 || src.fd < 0) {
-      klogf("CLIENT TARGET display=%lld bad buffer: size=%zu fd=%d w=%d h=%d stride=%d",
+      klogf("CLIENT TARGET display=%lld bad buffer size=%zu fd=%d w=%d h=%d stride=%d",
             static_cast<long long>(ds.id), size, src.fd, d.width, d.height, d.stride);
       return;
     }
@@ -2238,11 +2231,11 @@ class RhizoComposerClient : public BnComposerClient {
 
     bool xferOk = rhizo::VirtgpuTransferFromHost(src.fd, d.width, d.height, d.stride,  false);
     if (ds.presentCount == 1 || wantDump) {
-      klogf("VirtgpuTransferFromHost -> %s", xferOk ? "ok" : "FAILED");
+      klogf("VirtgpuTransferFromHost -> %s", xferOk ? "ok" : "failed");
     }
 
     void* s = mmap(nullptr, size, PROT_READ, MAP_SHARED, src.fd, 0);
-    if (s == MAP_FAILED) { klog("InspectClientTarget: mmap failed"); return; }
+    if (s == MAP_FAILED) { klog("client target mmap failed"); return; }
     DmaBufSync(src.fd,  true,  false);
     const uint8_t* p = static_cast<const uint8_t*>(s);
 
@@ -2291,14 +2284,14 @@ class RhizoComposerClient : public BnComposerClient {
     size_t size = d.allocSize ? d.allocSize
                               : static_cast<size_t>(d.stride) * (d.height > 0 ? d.height : 1);
     if (size == 0 || src.fd < 0) {
-      klogf("CLIENT TARGET dump-now display=%lld: no client target (size=%zu fd=%d)",
+      klogf("CLIENT TARGET dump-client-target display=%lld no client target size=%zu fd=%d",
             static_cast<long long>(ds.id), size, src.fd);
       return "dump-client-target-failed reason=no-client-target";
     }
     bool xferOk = rhizo::VirtgpuTransferFromHost(src.fd, d.width, d.height, d.stride,  true);
     void* s = mmap(nullptr, size, PROT_READ, MAP_SHARED, src.fd, 0);
     if (s == MAP_FAILED) {
-      klogf("CLIENT TARGET dump-now display=%lld: mmap failed errno=%d", static_cast<long long>(ds.id),
+      klogf("CLIENT TARGET dump-client-target display=%lld mmap failed errno=%d", static_cast<long long>(ds.id),
             errno);
       return std::string("dump-client-target-failed reason=mmap-") + strerror(errno);
     }
@@ -2307,7 +2300,7 @@ class RhizoComposerClient : public BnComposerClient {
     std::string reply;
     int fd = open(kDumpOutPath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
-      klogf("CLIENT TARGET dump-now open(%s) failed errno=%d (%s)", kDumpOutPath, errno,
+      klogf("CLIENT TARGET dump-client-target open(%s) failed errno=%d (%s)", kDumpOutPath, errno,
             strerror(errno));
       reply = std::string("dump-client-target-failed reason=open-") + strerror(errno);
     } else {
@@ -2319,9 +2312,9 @@ class RhizoComposerClient : public BnComposerClient {
         off += static_cast<size_t>(w);
       }
       close(fd);
-      klogf("CLIENT TARGET dumped %zu/%zu bytes to %s (now: display=%lld %dx%d stride=%d xfer=%s)",
+      klogf("CLIENT TARGET dumped %zu/%zu bytes to %s display=%lld %dx%d stride=%d xfer=%s",
             off, size, kDumpOutPath, static_cast<long long>(ds.id), d.width, d.height, d.stride,
-            xferOk ? "ok" : "FAILED");
+            xferOk ? "ok" : "failed");
       if (off == size) {
         reply = "dump-client-target done size=" + std::to_string(d.width) + "x" +
                 std::to_string(d.height) + " stride=" + std::to_string(d.stride) +
@@ -2350,10 +2343,10 @@ class RhizoComposerClient : public BnComposerClient {
     if (s != MAP_FAILED && d != MAP_FAILED) {
       memcpy(d, s, n);
       const uint8_t* sp = static_cast<const uint8_t*>(s);
-      klogf("CopyBuffer: n=%zu srcFirst8=%02x%02x%02x%02x%02x%02x%02x%02x", n, sp[0], sp[1], sp[2],
+      klogf("readback copy n=%zu srcFirst8=%02x%02x%02x%02x%02x%02x%02x%02x", n, sp[0], sp[1], sp[2],
             sp[3], sp[4], sp[5], sp[6], sp[7]);
     } else {
-      klog("readback CopyBuffer: mmap failed");
+      klog("readback mmap failed");
     }
     if (s != MAP_FAILED) munmap(s, srcSize);
     if (d != MAP_FAILED) munmap(d, dstSize);
@@ -2389,7 +2382,7 @@ class RhizoComposerClient : public BnComposerClient {
     *y = ds ? ds->cropY : 0;
   }
 
-  // take a closed app's window off the desktop
+  // destroy the Wayland window of a closed app's display
   void HideClosedWindow(int64_t displayId) {
     {
       std::lock_guard<std::mutex> lg(mutex_);
@@ -2400,13 +2393,13 @@ class RhizoComposerClient : public BnComposerClient {
     wayland_.DestroyDisplay(displayId);
   }
 
-  // remove a freeform display's task through the task helper before the display
+  // write close to /data/rhizo_control/task-close-<displayId>
   bool RequestTaskClose(int64_t displayId) {
     char path[96];
     snprintf(path, sizeof(path), "/data/rhizo_control/task-close-%lld", static_cast<long long>(displayId));
     const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
-      klogf("freeform: cannot write %s: errno=%d", path, errno);
+      klogf("failed to open %s errno=%d", path, errno);
       return false;
     }
     fchmod(fd, 0644);
@@ -2416,14 +2409,13 @@ class RhizoComposerClient : public BnComposerClient {
       unlink(path);
       return false;
     }
-    // remove the display if the helper has not within 3s
     std::thread([this, displayId] {
       std::this_thread::sleep_for(std::chrono::seconds(3));
       {
         std::lock_guard<std::mutex> lg(mutex_);
         if (displays_.find(displayId) == displays_.end()) return;
       }
-      klogf("freeform: display %lld still up 3s after its close request, removing it",
+      klogf("display %lld is still open 3s after RequestTaskClose",
             static_cast<long long>(displayId));
       {
         std::lock_guard<std::mutex> lg(workMutex_);
@@ -2462,13 +2454,13 @@ class RhizoComposerClient : public BnComposerClient {
     snprintf(path, sizeof(path), "/data/rhizo_control/task-bounds-%lld", static_cast<long long>(displayId));
     const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
-      klogf("freeform: cannot write %s: errno=%d", path, errno);
+      klogf("failed to open %s errno=%d", path, errno);
       return;
     }
     fchmod(fd, 0644);
     char line[48];
     const int n = snprintf(line, sizeof(line), "%d %d\n", width, height + captionPx);
-    if (write(fd, line, n) != n) klogf("freeform: short write to %s", path);
+    if (write(fd, line, n) != n) klogf("short write to %s", path);
     close(fd);
   }
 
@@ -2488,7 +2480,6 @@ class RhizoComposerClient : public BnComposerClient {
     const int32_t dx = static_cast<int32_t>(static_cast<int64_t>(targetX) * 1000 / milli);
     const int32_t dy = static_cast<int32_t>(static_cast<int64_t>(targetY) * 1000 / milli);
     if (accelerated) {
-      // keep the move out of the speed estimate of the move home
       std::this_thread::sleep_for(std::chrono::nanoseconds(rhizo::kVelocityResetNs));
     }
     if (dx != 0 || dy != 0) uinput_.Move(displayId, dx, dy);
@@ -2498,14 +2489,14 @@ class RhizoComposerClient : public BnComposerClient {
     }
   }
 
-  // return whether Android accelerates the display's mouse past a flat low-speed gain
+  // return DisplayState::cursorAccelerated of the display
   bool CursorAccelerated(int64_t displayId) {
     std::lock_guard<std::mutex> lg(mutex_);
     const DisplayState* ds = FindLocked(displayId);
     return ds && ds->cursorAccelerated;
   }
 
-  // send a relative move to an accelerated display
+  // call UinputDevices::Move or set HeldPointerMove::dueNs for a relative move
   void PaceAcceleratedMove(int64_t displayId, int32_t dx, int32_t dy) {
     bool hold = false;
     {
@@ -2526,7 +2517,7 @@ class RhizoComposerClient : public BnComposerClient {
     if (hold) WakeControlThread();
   }
 
-  // drop a display's held move
+  // clear a display's HeldPointerMove
   void DropHeldPointerMove(int64_t displayId) {
     std::lock_guard<std::mutex> lg(pacerMutex_);
     auto it = pacer_.find(displayId);
@@ -2535,14 +2526,14 @@ class RhizoComposerClient : public BnComposerClient {
     it->second.dueNs = 0;
   }
 
-  // return whether a display has a held move
+  // return whether a display's HeldPointerMove has a dueNs
   bool HoldingPointerMove(int64_t displayId) {
     std::lock_guard<std::mutex> lg(pacerMutex_);
     auto it = pacer_.find(displayId);
     return it != pacer_.end() && it->second.dueNs != 0;
   }
 
-  // send all of the held moves that are due
+  // call UinputDevices::Move for each HeldPointerMove past dueNs
   void SendDueHeldPointerMoves() {
     std::lock_guard<std::mutex> lg(pacerMutex_);
     const int64_t now = NowNanos();
@@ -2561,7 +2552,7 @@ class RhizoComposerClient : public BnComposerClient {
     return ds && ds->cursorScaleMilli > 0 ? ds->cursorScaleMilli : 1000;
   }
 
-  // move Android's pointer to the new position
+  // move Android's pointer to mx, my
   void StepAndroidPointer(int64_t displayId, int32_t mx, int32_t my) {
     auto& ap = androidPointer_[displayId];
     const int32_t milli = CursorScaleMilli(displayId);
@@ -2679,7 +2670,7 @@ class RhizoComposerClient : public BnComposerClient {
             pointerDown_.erase(ev.displayId);
           }
           if (!uinput_.Touch(ev.displayId, x, y, ev.value != 0)) {
-            klogf("OnWaylandInput: uinput_.Touch(display=%lld,x=%d,y=%d,down=%d) FAILED",
+            klogf("uinput_.Touch(display=%lld,x=%d,y=%d,down=%d) failed",
                   static_cast<long long>(ev.displayId), x, y, ev.value != 0);
           } else if (ev.value) {
             NoteTapUinputWritten(ev.displayId);
@@ -2779,7 +2770,7 @@ class RhizoComposerClient : public BnComposerClient {
         firstTime = unmappableChars_.insert(ch).second;
       }
       if (firstTime) {
-        klogf("TranslateAndEmitKey: host character '%s' has no Android ASCII-table entry, dropping",
+        klogf("no kUsAsciiKeys entry for host character '%s'",
               ch.c_str());
       }
       st.active[scancode] = KeyTranslateState::Emitted{};
@@ -2841,7 +2832,7 @@ class RhizoComposerClient : public BnComposerClient {
                               std::to_string(nextKeymapFileSeq_.fetch_add(1));
     int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
-      klogf("OnHostKeymap: open(%s) FAILED errno=%d (%s)", path.c_str(), errno, strerror(errno));
+      klogf("open(%s) failed errno=%d (%s)", path.c_str(), errno, strerror(errno));
       return;
     }
     fchmod(fd, 0666);
@@ -2849,7 +2840,7 @@ class RhizoComposerClient : public BnComposerClient {
     while (off < text.size()) {
       ssize_t w = write(fd, text.data() + off, text.size() - off);
       if (w <= 0) {
-        klogf("OnHostKeymap: write(%s) FAILED at %zu/%zu errno=%d (%s)", path.c_str(), off,
+        klogf("write(%s) failed at %zu/%zu errno=%d (%s)", path.c_str(), off,
               text.size(), errno, strerror(errno));
         break;
       }
@@ -2867,7 +2858,7 @@ class RhizoComposerClient : public BnComposerClient {
                               std::to_string(nextDropSeq_.fetch_add(1));
     int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
-      klogf("OnWaylandDrop: open(%s) FAILED errno=%d (%s)", path.c_str(), errno, strerror(errno));
+      klogf("open(%s) failed errno=%d (%s)", path.c_str(), errno, strerror(errno));
       return;
     }
     fchmod(fd, 0666);
@@ -2875,7 +2866,7 @@ class RhizoComposerClient : public BnComposerClient {
     while (off < ev.bytes.size()) {
       ssize_t w = write(fd, ev.bytes.data() + off, ev.bytes.size() - off);
       if (w <= 0) {
-        klogf("OnWaylandDrop: write(%s) FAILED at %zu/%zu errno=%d (%s)", path.c_str(), off,
+        klogf("write(%s) failed at %zu/%zu errno=%d (%s)", path.c_str(), off,
               ev.bytes.size(), errno, strerror(errno));
         break;
       }
@@ -2904,7 +2895,7 @@ class RhizoComposerClient : public BnComposerClient {
                               std::to_string(NowNanos()) + "-" + std::to_string(seq);
     int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
-      klogf("OnWaylandSelection: open(%s) FAILED errno=%d (%s)", path.c_str(), errno, strerror(errno));
+      klogf("open(%s) failed errno=%d (%s)", path.c_str(), errno, strerror(errno));
       return;
     }
     fchmod(fd, 0666);
@@ -2912,7 +2903,7 @@ class RhizoComposerClient : public BnComposerClient {
     while (off < ev.bytes.size()) {
       ssize_t w = write(fd, ev.bytes.data() + off, ev.bytes.size() - off);
       if (w <= 0) {
-        klogf("OnWaylandSelection: write(%s) FAILED at %zu/%zu errno=%d (%s)", path.c_str(), off,
+        klogf("write(%s) failed at %zu/%zu errno=%d (%s)", path.c_str(), off,
               ev.bytes.size(), errno, strerror(errno));
         break;
       }
@@ -2923,7 +2914,7 @@ class RhizoComposerClient : public BnComposerClient {
                        " sha256=" + Sha256Hex(ev.bytes));
   }
 
-  // send touch up for a stalled touch
+  // call UinputDevices::Touch with down=false for a stalled touch
   void RunInjectTouchWatchdog(int64_t id) {
     ThreadGuard g(transientThreads_);
     for (;;) {
@@ -2949,7 +2940,7 @@ class RhizoComposerClient : public BnComposerClient {
       }
       if (timedOut) {
         uinput_.Touch(id, 0, 0,  false);
-        klogf("inject touch: display %lld down with no move/up for %lldms, synthesizing up",
+        klogf("injected touch on display %lld is still down with no move or up after %lldms",
               static_cast<long long>(id), static_cast<long long>(kInjectTouchTimeoutNs / 1000000));
         WriteControlReply("inject timeout id=" + std::to_string(id));
         return;
@@ -2968,7 +2959,7 @@ class RhizoComposerClient : public BnComposerClient {
     kept.vsyncPeriodNs = ds.vsyncPeriodNs;
   }
 
-  // resize a display and send hotplug
+  // resize a display and call onHotplugEvent
   void ApplyResize(int64_t id, int32_t width, int32_t height, int32_t scale120) {
     if (getenv("RHIZO_NO_RESIZE") != nullptr) return;
     bool scaleChanged = false;
@@ -3004,9 +2995,9 @@ class RhizoComposerClient : public BnComposerClient {
       if (DisplayState* ds2 = FindLocked(id)) port = ds2->port;
     }
     uinput_.Resize(id, port, width, height);
-    klogf("ApplyResize: display %lld now %dx%d, re-hotplug CONNECTED isOk=%d",
+    klogf("display %lld resized to %dx%d, re-hotplug CONNECTED isOk=%d",
           static_cast<long long>(id), width, height, st.isOk());
-    LifecycleKlogf(id, "hotplug CONNECTED sent");
+    LifecycleKlogf(id, "onHotplugEvent CONNECTED");
     if (scaleChanged) {
       WriteControlReply("display scaled id=" + std::to_string(id) + " port=" + std::to_string(port) +
                         " scale=" + ScaleText(scale120) + " dpi=" +
@@ -3014,7 +3005,7 @@ class RhizoComposerClient : public BnComposerClient {
     }
   }
 
-  // create a display and send hotplug
+  // create a display and call onHotplugEvent
   int64_t AddDisplay(int32_t width, int32_t height, bool claimed = true) {
     int64_t id;
     int32_t port;
@@ -3022,7 +3013,7 @@ class RhizoComposerClient : public BnComposerClient {
     {
       std::lock_guard<std::mutex> lg(mutex_);
       if (freePorts_.empty()) {
-        klogf("AddDisplay: refusing -- all 8 external input ports are in use");
+        klogf("freePorts_ is empty");
         return -1;
       }
       port = *freePorts_.begin();
@@ -3046,7 +3037,7 @@ class RhizoComposerClient : public BnComposerClient {
       std::string title = "Rhizo display " + std::to_string(id);
       wayland = wayland_.CreateDisplay(id, title, width, height);
       if (!wayland) {
-        klogf("AddDisplay: WaylandBackend::CreateDisplay FAILED for display %lld",
+        klogf("WaylandBackend::CreateDisplay failed for display %lld",
               static_cast<long long>(id));
       }
     }
@@ -3063,11 +3054,11 @@ class RhizoComposerClient : public BnComposerClient {
         if (DisplayState* ds = FindLocked(id)) ds->lastConnectAt = std::chrono::steady_clock::now();
         lastAnyHotplugNs_ = NowNanos();
       }
-      klogf("AddDisplay: display %lld %dx%d hotplug CONNECTED isOk=%d", static_cast<long long>(id),
+      klogf("display %lld %dx%d hotplug CONNECTED isOk=%d", static_cast<long long>(id),
             width, height, st.isOk());
-      LifecycleKlogf(id, "hotplug CONNECTED sent");
+      LifecycleKlogf(id, "onHotplugEvent CONNECTED");
     } else {
-      klogf("AddDisplay: display %lld created but no composer callback is registered yet",
+      klogf("display %lld created with no IComposerCallback registered",
             static_cast<long long>(id));
     }
     if (wayland) wayland_.KickVsync(id);
@@ -3090,7 +3081,7 @@ class RhizoComposerClient : public BnComposerClient {
           if (!refreshCb) return;
           refreshCb->onRefresh(id);
         }
-        klogf("AddDisplay: display %lld still never presented after 5s of onRefresh",
+        klogf("0 frames for display %lld after 40 onRefresh calls",
               static_cast<long long>(id));
       }).detach();
     }
@@ -3124,11 +3115,11 @@ class RhizoComposerClient : public BnComposerClient {
   // remove a display
   RemoveOutcome RemoveDisplayImpl(int64_t id, bool requireUnclaimed) {
     if (requireUnclaimed && id == kPrimaryDisplayId) {
-      klog("RemoveDisplay: refusing to release the primary display as a spare");
+      klog("release-spare refused for kPrimaryDisplayId");
       return RemoveOutcome::kStillClaimed;
     }
     if (id == kPrimaryDisplayId) {
-      klog("RemoveDisplay: refusing to remove the primary display");
+      klog("remove refused for kPrimaryDisplayId");
       bool wasWayland;
       {
         std::lock_guard<std::mutex> lg(mutex_);
@@ -3141,7 +3132,7 @@ class RhizoComposerClient : public BnComposerClient {
         uinput_.Destroy(id);
     ForgetDisplayInputState(id);
         ForgetDisplayInputState(id);
-        klog("RemoveDisplay: primary display's Wayland surface torn down (display object stays, now headless)");
+        klog("destroyed the primary display's Wayland surface");
         MaybeTeardownWaylandConnection();
       }
       return RemoveOutcome::kRefused;
@@ -3167,9 +3158,9 @@ class RhizoComposerClient : public BnComposerClient {
     if (cb) {
       auto st = cb->onHotplugEvent(
           id, ::aidl::android::hardware::graphics::common::DisplayHotplugEvent::DISCONNECTED);
-      klogf("RemoveDisplay: display %lld hotplug DISCONNECTED isOk=%d", static_cast<long long>(id),
+      klogf("display %lld hotplug DISCONNECTED isOk=%d", static_cast<long long>(id),
             st.isOk());
-      LifecycleKlogf(id, "DISCONNECTED sent attempt=1");
+      LifecycleKlogf(id, "onHotplugEvent DISCONNECTED attempt=1");
       {
         std::lock_guard<std::mutex> lg(mutex_);
         AwaitingRelease& ar = awaitingSfRelease_[id];
@@ -3212,7 +3203,7 @@ class RhizoComposerClient : public BnComposerClient {
     return RemoveOutcome::kOk;
   }
 
-  // free a removed display and its port
+  // free a removed display and the display's port
   void FinishRemoval(int64_t id, bool returnPort) {
     DisplayState taken;
     bool have = false;
@@ -3255,13 +3246,13 @@ class RhizoComposerClient : public BnComposerClient {
       std::lock_guard<std::mutex> lg(mutex_);
       freePorts_.insert(taken.port);
     } else if (taken.port >= 1) {
-      LifecycleKlogf(id, "SF-ORPHANED port=%d withheld", taken.port);
+      LifecycleKlogf(id, "SF-ORPHANED port=%d", taken.port);
     }
-    klogf("RemoveDisplay: display %lld gone, port %d %s", static_cast<long long>(id), taken.port,
-          returnPort ? "free" : "WITHHELD (SurfaceFlinger never released it)");
+    klogf("display %lld removed, port %d %s", static_cast<long long>(id), taken.port,
+          returnPort ? "free" : "orphaned");
   }
 
-  // finish or resend pending display removals
+  // call FinishRemoval or onHotplugEvent DISCONNECTED for pending display removals
   void ServiceSfReleases() {
     std::vector<int64_t> finish, orphan;
     std::vector<std::pair<int64_t, int>> resend;
@@ -3288,9 +3279,9 @@ class RhizoComposerClient : public BnComposerClient {
     for (const auto& [id, attempt] : resend) {
       auto st = cb->onHotplugEvent(
           id, ::aidl::android::hardware::graphics::common::DisplayHotplugEvent::DISCONNECTED);
-      klogf("RemoveDisplay: display %lld re-sent DISCONNECTED attempt=%d isOk=%d",
+      klogf("display %lld hotplug DISCONNECTED attempt=%d isOk=%d",
             static_cast<long long>(id), attempt, st.isOk());
-      LifecycleKlogf(id, "DISCONNECTED sent attempt=%d", attempt);
+      LifecycleKlogf(id, "onHotplugEvent DISCONNECTED attempt=%d", attempt);
     }
     for (int64_t id : orphan) FinishRemoval(id,  false);
   }
@@ -3306,7 +3297,7 @@ class RhizoComposerClient : public BnComposerClient {
     ssize_t ignored = write(fd, out.c_str(), out.size());
     (void)ignored;
     close(fd);
-    klogf("control: %s", line.c_str());
+    klogf("wrote control reply %s", line.c_str());
   }
 
   // run a control command line
@@ -3450,7 +3441,7 @@ class RhizoComposerClient : public BnComposerClient {
         std::string title = "Rhizo display " + std::to_string(id);
         wayland = wayland_.CreateDisplay(id, title, claimWidth, claimHeight);
         if (!wayland) {
-          klogf("HandleControlLine: WaylandBackend::CreateDisplay FAILED for claimed display %lld",
+          klogf("WaylandBackend::CreateDisplay failed for claimed display %lld",
                 static_cast<long long>(id));
         }
       }
@@ -3475,7 +3466,7 @@ class RhizoComposerClient : public BnComposerClient {
         std::lock_guard<std::mutex> lg(mutex_);
         if (DisplayState* ds = FindLocked(id)) hadClock = ds->vsyncEnabled;
       }
-      klogf("claim: display %lld vsyncEnabled=%d at claim", static_cast<long long>(id),
+      klogf("display %lld claimed vsyncEnabled=%d", static_cast<long long>(id),
             hadClock ? 1 : 0);
       std::thread([this, id, presentAtClaim] {
         ThreadGuard g(transientThreads_);
@@ -3493,7 +3484,7 @@ class RhizoComposerClient : public BnComposerClient {
           if (!refreshCb) return;
           refreshCb->onRefresh(id);
         }
-        klogf("HandleControlLine: claimed display %lld still never presented after 5s of onRefresh",
+        klogf("0 frames for claimed display %lld after 40 onRefresh calls",
               static_cast<long long>(id));
       }).detach();
       WriteControlReply("display claimed id=" + std::to_string(id));
@@ -3678,7 +3669,6 @@ class RhizoComposerClient : public BnComposerClient {
           if (pointerTypeByImage_.size() >= kMaxPointerTypeImages) pointerTypeByImage_.clear();
           pointerTypeByImage_[digest] = static_cast<int32_t>(type);
         } else {
-          // the image changed during the read: show Android's newest type until the image is named
           wayland_.SetCursorType(ds->id, static_cast<int32_t>(type));
         }
         ShowPointerTypeLocked(*ds);
@@ -3946,7 +3936,7 @@ class RhizoComposerClient : public BnComposerClient {
           WriteControlReply("inject-failed id=" + std::to_string(id) + " reason=uinput-touch-failed");
           return;
         }
-        klogf("inject touch down: id=%d -> port=%d x=%d y=%d", id, port, ix, iy);
+        klogf("inject touch down id=%d port=%d x=%d y=%d", id, port, ix, iy);
         bool needWatchdog = false;
         {
           std::lock_guard<std::mutex> lg(injectMutex_);
@@ -3985,7 +3975,7 @@ class RhizoComposerClient : public BnComposerClient {
           WriteControlReply("inject-failed id=" + std::to_string(id) + " reason=uinput-touch-failed");
           return;
         }
-        klogf("inject touch move: id=%d -> port=%d x=%d y=%d", id, port, ix, iy);
+        klogf("inject touch move id=%d port=%d x=%d y=%d", id, port, ix, iy);
         WriteControlReply("inject move id=" + std::to_string(id));
         return;
       }
@@ -4002,11 +3992,11 @@ class RhizoComposerClient : public BnComposerClient {
           WriteControlReply("inject-failed id=" + std::to_string(id) + " reason=uinput-touch-failed");
           return;
         }
-        klogf("inject touch up: id=%d -> port=%d", id, port);
+        klogf("inject touch up id=%d port=%d", id, port);
         WriteControlReply("inject up id=" + std::to_string(id));
         return;
       }
-      WriteControlReply("error unknown command: " + line);
+      WriteControlReply("error unknown command " + line);
       return;
     }
     if (n >= 2 && !strcmp(verb, "wl") && !strcmp(noun, "status")) {
@@ -4047,7 +4037,7 @@ class RhizoComposerClient : public BnComposerClient {
       WriteControlReply(reply);
       return;
     }
-    WriteControlReply("error unknown command: " + line);
+    WriteControlReply("error unknown command " + line);
   }
 
   // start the control thread
@@ -4058,22 +4048,21 @@ class RhizoComposerClient : public BnComposerClient {
       prctl(PR_SET_NAME, "rhizo-control");
       unlink(kControlPath);
       if (mkfifo(kControlPath, 0666) != 0 && errno != EEXIST) {
-        klogf("control: mkfifo(%s) FAILED errno=%d (%s) -- no host control channel", kControlPath,
+        klogf("mkfifo(%s) failed errno=%d (%s)", kControlPath,
               errno, strerror(errno));
         return;
       }
       chmod(kControlPath, 0666);
       int fd = open(kControlPath, O_RDWR | O_CLOEXEC);
       if (fd < 0) {
-        klogf("control: open(%s) FAILED errno=%d (%s)", kControlPath, errno, strerror(errno));
+        klogf("open(%s) failed errno=%d (%s)", kControlPath, errno, strerror(errno));
         return;
       }
       controlWakeFd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
       if (controlWakeFd_ < 0) {
-        klogf("control: eventfd() FAILED errno=%d (%s) -- falling back to a 100ms poll bound",
+        klogf("eventfd() for controlWakeFd_ failed errno=%d (%s)",
               errno, strerror(errno));
       }
-      klogf("control: listening on %s", kControlPath);
       std::string buffered;
       for (;;) {
         if (shuttingDown_.load(std::memory_order_acquire)) break;
@@ -4128,15 +4117,15 @@ class RhizoComposerClient : public BnComposerClient {
               buffered.erase(0, nl + 1);
               while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
               if (line.size() > kMaxControlLineBytes) {
-                klogf("control: refusing a %zu-byte line, over the %zu-byte cap",
+                klogf("dropped a %zu-byte control line over the %zu-byte kMaxControlLineBytes",
                       line.size(), kMaxControlLineBytes);
               } else if (!line.empty()) {
-                klogf("control: <- %.80s%s", line.c_str(), line.size() > 80 ? "..." : "");
+                klogf("received control line %.80s%s", line.c_str(), line.size() > 80 ? "..." : "");
                 HandleControlLine(line);
               }
             }
             if (buffered.size() > kMaxControlLineBytes) {
-              klogf("control: unterminated line exceeded %zu bytes, dropping %zu buffered bytes",
+              klogf("unterminated control line over %zu bytes, cleared %zu buffered bytes",
                     kMaxControlLineBytes, buffered.size());
               buffered.clear();
             }
@@ -4220,7 +4209,7 @@ class RhizoComposerClient : public BnComposerClient {
             ds.timerTakeovers++;
             ds.timerNextNs = 0;
             if (ds.presentsSinceFeedback >= 2) {
-              klogf("display %lld timer takeover with %u presents unanswered for %.1fms",
+              klogf("display %lld timerDriving=1 frames=%u vsync_gap_ms=%.1f",
                     static_cast<long long>(id), ds.presentsSinceFeedback, (now - ds.lastVsyncNs) / 1e6);
             }
           }
@@ -4261,17 +4250,17 @@ class RhizoComposerClient : public BnComposerClient {
     std::lock_guard<std::mutex> lg(waylandLifecycleMutex_);
     if (waylandActive_.load(std::memory_order_acquire)) return true;
     if (!getenv("WAYLAND_DISPLAY")) {
-      klog("EnsureWaylandConnected: WAYLAND_DISPLAY unset, staying headless (expected in the M2 config)");
+      klog("WAYLAND_DISPLAY is unset");
       return false;
     }
     if (!wayland_.Connect()) {
-      klog("EnsureWaylandConnected: WaylandBackend::Connect FAILED, staying headless");
+      klog("WaylandBackend::Connect failed");
       return false;
     }
     wayland_.StartEventPump(
         [this](int64_t displayId, int64_t timestampNs) { WaylandVsync(displayId, timestampNs); },
         [this](int64_t displayId) {
-          klogf("Wayland compositor requested close of display %lld",
+          klogf("closeCb for display %lld",
                 static_cast<long long>(displayId));
           if (displayId != kPrimaryDisplayId) HideClosedWindow(displayId);
           if (freeformEnabled() && RequestTaskClose(displayId)) return;
@@ -4303,7 +4292,7 @@ class RhizoComposerClient : public BnComposerClient {
         [this](const std::string& keymapText) { OnHostKeymap(keymapText); },
         [this](const rhizo::WaylandSelectionEvent& ev) { OnWaylandSelection(ev); });
     waylandActive_.store(true, std::memory_order_release);
-    klogf("EnsureWaylandConnected: Wayland connection established, presenting via %s", wayland_.PresentPaths());
+    klogf("WaylandBackend::PresentPaths() returned %s", wayland_.PresentPaths());
     return true;
   }
 
@@ -4322,10 +4311,10 @@ class RhizoComposerClient : public BnComposerClient {
     bool surface = EnsureWaylandConnected();
     const char* primaryWindow = getenv("RHIZO_PRIMARY_WINDOW");
     if (surface && primaryWindow && strcmp(primaryWindow, "0") == 0) {
-      klog("TryStartPrimaryWaylandSurface: RHIZO_PRIMARY_WINDOW=0, primary stays headless, apps get windows");
+      klog("RHIZO_PRIMARY_WINDOW=0, primary display headless");
       surface = false;
     } else if (surface && !wayland_.CreateDisplay(kPrimaryDisplayId, "Rhizo", primaryW, primaryH)) {
-      klog("TryStartPrimaryWaylandSurface: WaylandBackend::CreateDisplay FAILED, staying headless");
+      klog("WaylandBackend::CreateDisplay failed for the primary display");
       surface = false;
     }
     {
@@ -4338,8 +4327,8 @@ class RhizoComposerClient : public BnComposerClient {
     }
     uinput_.PreCreatePool();
     uinput_.Create(kPrimaryDisplayId, 0, primaryW, primaryH);
-    klog(surface ? "TryStartPrimaryWaylandSurface: primary display's Wayland surface live"
-                 : "TryStartPrimaryWaylandSurface: primary display headless, its input devices live");
+    klog(surface ? "primary display Wayland surface created"
+                 : "primary display headless, uinput devices created");
   }
 
   // log the display pool idle release time
@@ -4373,8 +4362,7 @@ class RhizoComposerClient : public BnComposerClient {
       wayland_.DestroyDisplay(kPrimaryDisplayId);
       uinput_.Destroy(kPrimaryDisplayId);
       ForgetDisplayInputState(kPrimaryDisplayId);
-      klog("MaybeTeardownOnLastAppDisplayClosed: last app display closed -- "
-           "primary's own surface dropped too, connection going down");
+      klog("destroyed the primary display's Wayland surface after the last app display closed");
     }
     MaybeTeardownWaylandConnection();
   }
@@ -4398,7 +4386,7 @@ class RhizoComposerClient : public BnComposerClient {
     waylandActive_.store(false, std::memory_order_release);
     wayland_.Shutdown();
     wayland_.Disconnect();
-    klog("Wayland: connection torn down, zero displays mapped (DEEP-ASLEEP freeze precondition met)");
+    klog("disconnected from Wayland with zero Wayland-backed displays");
   }
 
   // log vsync counts for a display
@@ -4409,8 +4397,8 @@ class RhizoComposerClient : public BnComposerClient {
     }
     int64_t elapsedNs = now - ds->lastVsyncStatsNs;
     if (elapsedNs < kVsyncStatsIntervalNs) return;
-    klogf("vsync stats: display %lld recv=%llu sent=%llu dropped=%llu presented=%llu "
-          "discarded=%llu timer=%llu takeovers=%llu over %lldms (boot total recv=%llu sent=%llu), "
+    klogf("display %lld vsync stats recv=%llu sent=%llu dropped=%llu presented=%llu "
+          "discarded=%llu timer=%llu takeovers=%llu over %lldms vsyncRecv=%llu vsyncSent=%llu "
           "period=%.3fms min_gap=%d%%",
           static_cast<long long>(displayId),
           (unsigned long long)(ds->vsyncRecv - ds->vsyncRecvReported),
@@ -4477,7 +4465,7 @@ class RhizoComposerClient : public BnComposerClient {
       ds->vsyncRecv++;
       const int64_t now = NowNanos();
       if (ds->presentsSinceFeedback >= 3 && ds->lastFeedbackNs > 0) {
-        klogf("display %lld compositor stall: %u presents fed over %.1fms before feedback (%lld periods)",
+        klogf("display %lld wp_presentation_feedback after frames=%u ms=%.1f periods=%lld",
               static_cast<long long>(displayId), ds->presentsSinceFeedback,
               (now - ds->lastFeedbackNs) / 1e6,
               static_cast<long long>(ds->vsyncPeriodNs > 0 ? (now - ds->lastFeedbackNs) / ds->vsyncPeriodNs : 0));
@@ -4499,7 +4487,7 @@ class RhizoComposerClient : public BnComposerClient {
           ds->tap.hopCommitNs = commitNs - ds->tap.armQueuedNs;
           ds->tap.count++;
           if (ds->tap.count == 1) {
-            klogf("display %lld first input-to-photon: press->presented %lldns, wire delta %lldns",
+            klogf("display %lld tap_count=1 tap_last_ns=%lld tap_wire_delta_last_ns=%lld",
                   static_cast<long long>(displayId), (long long)deltaNs,
                   (long long)ds->tap.wireDeltaLastNs);
           }
@@ -4516,16 +4504,15 @@ class RhizoComposerClient : public BnComposerClient {
       const int64_t feedbackRefreshNs = refreshNs;
       if (refreshNs <= 0) refreshNs = wayland_.OutputRefreshNs(displayId);
       if (ds->presented == 1) {
-        klogf("display %lld first presentation feedback: presented=%lld now=%lld (delta %.3fms) "
-              "refresh=%lldns (feedback %lldns, output mode %lldns) clock=%d",
+        klogf("display %lld presented=1 presentedNs=%lld now=%lld delta=%.3fms "
+              "refresh=%lldns feedback_refresh=%lldns output_refresh=%lldns clock=%d",
               static_cast<long long>(displayId), (long long)presentedNs, (long long)now,
               (now - presentedNs) / 1e6, (long long)refreshNs, (long long)feedbackRefreshNs,
               (long long)wayland_.OutputRefreshNs(displayId), wayland_.PresentationClockId());
       }
       if (!clockUsable && !presentationClockWarned_) {
         presentationClockWarned_ = true;
-        klogf("presentation feedback is on clock %d, not CLOCK_MONOTONIC -- vsync timestamps "
-              "stay pump-time", wayland_.PresentationClockId());
+        klogf("presentation feedback clock is %d, not CLOCK_MONOTONIC", wayland_.PresentationClockId());
       }
       if (refreshNs > 0 && RefreshDiffers(refreshNs, ds->vsyncPeriodNs)) {
         {
@@ -4576,7 +4563,7 @@ class RhizoComposerClient : public BnComposerClient {
       if (!ds) return;
       if (ds->removing) return;
       if (!RefreshDiffers(refreshNs, ds->vsyncPeriodNs)) return;
-      klogf("display %lld refresh %.3fms -> %.3fms (%.2fHz), re-hotplugging",
+      klogf("display %lld refresh %.3fms -> %.3fms (%.2fHz)",
             static_cast<long long>(id), ds->vsyncPeriodNs / 1e6, refreshNs / 1e6, 1e9 / refreshNs);
       ds->vsyncPeriodNs = refreshNs;
       ds->timerNextNs = 0;
@@ -4594,9 +4581,9 @@ class RhizoComposerClient : public BnComposerClient {
       if (DisplayState* ds = FindLocked(id)) ds->lastConnectAt = std::chrono::steady_clock::now();
       lastAnyHotplugNs_ = NowNanos();
     }
-    klogf("ApplyRefresh: display %lld re-hotplug CONNECTED isOk=%d", static_cast<long long>(id),
+    klogf("display %lld re-hotplug CONNECTED after refresh isOk=%d", static_cast<long long>(id),
           st.isOk());
-    LifecycleKlogf(id, "hotplug CONNECTED sent");
+    LifecycleKlogf(id, "onHotplugEvent CONNECTED");
   }
 
   std::mutex mutex_;
@@ -4650,7 +4637,7 @@ class RhizoComposerClient : public BnComposerClient {
   }
   std::mutex observedPointerMutex_;
   std::map<int64_t, ObservedPointer> observedPointer_;
-  // a relative move held for an accelerated display
+  // relative move pending for an accelerated display
   struct HeldPointerMove {
     int32_t dx = 0, dy = 0;
     int64_t lastSendNs = 0, dueNs = 0;
@@ -4660,7 +4647,6 @@ class RhizoComposerClient : public BnComposerClient {
 
   std::mutex cursorPointerMutex_;
   std::map<int64_t, std::pair<int32_t, int32_t>> cursorPointerAbs_;
-  // pointer type and request count per cursor image digest (under mutex_)
   static constexpr size_t kMaxPointerTypeImages = 4096;
   std::map<uint32_t, int32_t> pointerTypeByImage_;
   std::map<uint32_t, int> pointerTypeAsks_;
@@ -4709,7 +4695,7 @@ class RhizoComposerClient : public BnComposerClient {
   std::map<int64_t, int64_t> pendingRefresh_;
   std::map<int64_t, std::pair<int64_t, int64_t>> heldRefresh_;
   int controlWakeFd_ = -1;
-  // write one to the control thread's wake eventfd
+  // write 1 to controlWakeFd_
   void WakeControlThread() {
     if (controlWakeFd_ < 0) return;
     uint64_t one = 1;
@@ -4728,7 +4714,6 @@ class RhizoComposer : public BnComposer {
  public:
   // create the RhizoComposerClient
   ScopedAStatus createClient(std::shared_ptr<IComposerClient>* out) override {
-    klog("createClient() called");
     std::lock_guard<std::mutex> lg(mutex_);
     if (auto live = client_.lock()) {
       (void)live;
@@ -4742,7 +4727,6 @@ class RhizoComposer : public BnComposer {
   }
   // return the composer capabilities
   ScopedAStatus getCapabilities(std::vector<Capability>* out) override {
-    klog("getCapabilities() called");
     *out = composerUnreliableFences() ? std::vector<Capability>{Capability::PRESENT_FENCE_IS_NOT_RELIABLE}
                                        : std::vector<Capability>{};
     return ok();
@@ -4757,20 +4741,18 @@ class RhizoComposer : public BnComposer {
 
 // register the composer and join the thread pool
 int main() {
-  klog("main() entered");
   klogf("RHIZO_MARKER display_pool_idle_s=%d", displayPoolIdleSeconds());
   auto composer = ndk::SharedRefBase::make<RhizoComposer>();
   const std::string instance = std::string(RhizoComposer::descriptor) + "/default";
   AIBinder_setMinSchedulerPolicy(composer->asBinder().get(), SCHED_FIFO, 2);
   binder_status_t status = AServiceManager_addService(composer->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
-    klogf("addService FAILED status=%d", status);
+    klogf("AServiceManager_addService failed with status %d", status);
     return 1;
   }
-  klog("registered, joining thread pool");
   SetFifoPriority2("rhizo-composer main thread");
   ABinderProcess_setThreadPoolMaxThreadCount(4);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

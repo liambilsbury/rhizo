@@ -130,14 +130,13 @@ kernel/ is licensed GPL-2.0-only (LICENSES/GPL-2.0-only.txt). It builds the
 separate Rhizo kernel packages; the rhizo package carries none of it.
 
 Linux                                  GPL-2.0-only
-  v7.1-rc1, the base tree kernel/SOURCE pins
+  v7.3.1, the base tree kernel/SOURCE pins
   Copyright the Linux kernel contributors
 SELinux namespace series               GPL-2.0-only
   Copyright 2020-2026 Stephen Smalley, 2025 Christian Göttsche,
   2026 Daniel Durning, 2026 Thorsten Blum
 Patches in kernel/patches               GPL-2.0-only
   Copyright 2026 Liam Bilsbury
-  0003 is mainline commit 1aac65f3e651, Copyright 2026 Denis V. Lunev
 ashmem uapi header in kernel/patches   (GPL-2.0 WITH Linux-syscall-note) OR Apache-2.0
   include/uapi/linux/android/ashmem.h, Copyright 2008 Google Inc.
   (LICENSES/Linux-syscall-note.txt)

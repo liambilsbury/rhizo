@@ -1,4 +1,4 @@
-// serve the host's PipeWire cameras to the camera provider HAL
+// PipeWire camera server for the camera provider HAL
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
@@ -27,6 +27,8 @@
 #include <spa/pod/iter.h>
 #include <spa/utils/result.h>
 
+#define RHIZO_PEER_NAME "cameraserver"
+#include "../common/peer.h"
 #include "mjpeg.h"
 #include "rhizo/camera_protocol.h"
 
@@ -50,10 +52,6 @@
 #define AID_CAMERASERVER 1047
 #define REFUSAL_LOG_MS 10000
 
-#ifndef SO_PEERPIDFD
-#define SO_PEERPIDFD 77
-#endif
-
 #define HDR_LEN ((uint32_t)sizeof(struct rhizo_camera_msg_header))
 #define LIST_PAYLOAD_MAX \
     (sizeof(struct rhizo_camera_list) + RHIZO_CAMERA_MAX_CAMERAS * sizeof(struct rhizo_camera_info))
@@ -73,7 +71,7 @@ enum layout_kind { PLANAR_UV, PLANAR_VU, SEMI_UV, SEMI_VU, PACKED_422, PACKED_RG
 
 #define FORMAT_MJPG 0x4d4a5047u
 
-// a raw format's spa id, layout and component offsets
+// raw format spa id, layout and component offsets
 struct raw_format {
     uint32_t spa;
     const char *name;
@@ -115,7 +113,7 @@ struct rate_entry {
     struct spa_fraction lo;
 };
 
-// a size at its best rate, its formats and rates
+// rhizo_camera_mode with candidate formats and rates
 struct mode_entry {
     struct rhizo_camera_mode mode;
     uint32_t formats[MAX_MODE_FORMATS];
@@ -124,7 +122,7 @@ struct mode_entry {
     uint32_t n_rates;
 };
 
-// a format, size and rate offer from EnumFormat
+// EnumFormat format, size and rate candidate
 struct candidate {
     uint32_t format;
     uint32_t width;
@@ -136,14 +134,14 @@ struct candidate {
     uint32_t lo_den;
 };
 
-// a rate an EnumFormat pod offers
+// rate from an EnumFormat pod
 struct rate_spec {
     struct spa_fraction rate;
     struct spa_fraction lo;
     uint32_t kind;
 };
 
-// a PipeWire Video/Source node and its output port
+// PipeWire Video/Source node and output port
 struct cam_node {
     int used;
     uint32_t id;
@@ -183,7 +181,7 @@ struct outmsg {
 
 struct client;
 
-// a HAL stream from a camera at a mode
+// HAL stream from a camera at a mode
 struct cam_stream {
     int used;
     struct client *owner;
@@ -278,7 +276,7 @@ static int64_t mono_ns(void)
     return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
 
-// wake the poll loop from either thread
+// write g_wake_fd
 static void wake(void)
 {
     uint64_t one = 1;
@@ -286,7 +284,7 @@ static void wake(void)
     (void)ignore;
 }
 
-// set the stop flag and wake the poll loop
+// set g_stop and write g_stop_fd
 static void on_signal(int sig)
 {
     (void)sig;
@@ -307,7 +305,7 @@ static const struct raw_format *raw_format_of(uint32_t spa)
     return NULL;
 }
 
-// return a format's rank in the preference order
+// return the RAW_FORMATS index of spa, or N_RAW_FORMATS
 static int format_rank(uint32_t spa)
 {
     for (size_t i = 0; i < N_RAW_FORMATS; i++) {
@@ -318,7 +316,7 @@ static int format_rank(uint32_t spa)
     return (int)N_RAW_FORMATS;
 }
 
-// return a facing value's short name
+// return "front", "back" or "external" for facing
 static const char *facing_name(uint32_t facing)
 {
     return facing == RHIZO_CAMERA_FACING_FRONT ? "front" : facing == RHIZO_CAMERA_FACING_BACK ? "back" : "external";
@@ -367,7 +365,7 @@ static uint32_t format_planes(const struct raw_format *f, uint32_t w, uint32_t h
     }
 }
 
-// resolve a PipeWire buffer's planes, or -1 when unreadable
+// map the planes of a PipeWire buffer, or return -1
 static int map_planes(const struct spa_buffer *buf, const struct raw_format *f, uint32_t w, uint32_t h,
                       struct plane_view out[3])
 {
@@ -445,7 +443,7 @@ static inline uint8_t rgb_v(int r, int g, int b)
 
 static uint8_t g_expand_y[256], g_expand_c[256], g_identity[256];
 
-// fill the range tables
+// fill g_expand_y, g_expand_c and g_identity
 static void init_range_tables(void)
 {
     for (int v = 0; v < 256; v++) {
@@ -472,7 +470,7 @@ static void copy_plane(uint8_t *dst, size_t dst_stride, const struct plane_view 
     }
 }
 
-// convert a raw frame to packed full-range I420
+// convert a raw frame to packed BT.601 full-range I420
 static void convert_frame(const struct raw_format *f, const struct plane_view *pl, uint32_t w, uint32_t h,
                           int full_range, uint8_t *dst)
 {
@@ -550,7 +548,7 @@ static size_t utf8_prefix(const char *s, size_t max)
     return max;
 }
 
-// write node.name as the key, hashing a long one
+// copy name to key, or a name prefix and an FNV-1a hash
 static void make_key(const char *name, char *key)
 {
     size_t len = strlen(name);
@@ -566,7 +564,7 @@ static void make_key(const char *name, char *key)
     snprintf(key, RHIZO_CAMERA_KEY_LEN, "%.*s~%08x", (int)head, name, hash);
 }
 
-// write a display name cut on a UTF-8 boundary
+// copy text to name cut on a UTF-8 boundary
 static void make_name(const char *text, char *name)
 {
     size_t n = utf8_prefix(text, RHIZO_CAMERA_NAME_LEN - 1);
@@ -574,7 +572,7 @@ static void make_name(const char *text, char *name)
     name[n] = '\0';
 }
 
-// return a camera's facing from libcamera or its USB port
+// return the facing from api.libcamera.location or the v4l2 device removable attribute
 static uint32_t facing_of(const char *location, const char *v4l2_path)
 {
     if (location != NULL) {
@@ -611,7 +609,7 @@ static uint32_t facing_of(const char *location, const char *v4l2_path)
     return RHIZO_CAMERA_FACING_EXTERNAL;
 }
 
-// return whether a node's role, factory or api is a camera's
+// return whether role, factory or api match a v4l2 or libcamera camera
 static int props_are_camera(const char *role, const char *factory, const char *api)
 {
     if (role != NULL && strcmp(role, "Camera") == 0) {
@@ -623,7 +621,7 @@ static int props_are_camera(const char *role, const char *factory, const char *a
     return api != NULL && (strcmp(api, "v4l2") == 0 || strcmp(api, "libcamera") == 0);
 }
 
-// a property's values in a format pod
+// property values in a format pod
 struct pod_values {
     const uint8_t *body;
     uint32_t n;
@@ -631,7 +629,7 @@ struct pod_values {
     uint32_t choice;
 };
 
-// read a property's values of a spa type, or -1
+// read the values of property key with spa type, or return -1
 static int pod_values(const struct spa_pod *obj, uint32_t key, uint32_t type, uint32_t elem, struct pod_values *out)
 {
     const struct spa_pod_prop *prop = spa_pod_find_prop(obj, NULL, key);
@@ -675,7 +673,7 @@ static const struct spa_rectangle RANGE_SIZES[] = {
     {800, 600},   {640, 480},   {640, 360},   {352, 288},   {320, 240},  {176, 144},
 };
 
-// record a format, size and rate offer
+// append a format, size and rate candidate
 static void add_candidate(struct candidate *cand, uint32_t *n_cand, uint32_t format, struct spa_rectangle size,
                           const struct rate_spec *r)
 {
@@ -686,7 +684,7 @@ static void add_candidate(struct candidate *cand, uint32_t *n_cand, uint32_t for
                                            r->lo.num, r->lo.denom};
 }
 
-// record a format's offers at each size or size range
+// append candidates for each size or each RANGE_SIZES entry in a size range
 static void add_sizes(struct candidate *cand, uint32_t *n_cand, uint32_t format, const struct pod_values *sizes,
                       const struct rate_spec *rate)
 {
@@ -714,7 +712,7 @@ static void add_sizes(struct candidate *cand, uint32_t *n_cand, uint32_t format,
     }
 }
 
-// collect raw and MJPG offers, or 1 on another codec
+// append raw and MJPG candidates, or return 1 on another media subtype
 static int collect_candidates(const struct spa_pod *param, struct candidate *cand, uint32_t *n_cand)
 {
     uint32_t media_type, media_subtype;
@@ -786,20 +784,20 @@ static int collect_candidates(const struct spa_pod *param, struct candidate *can
     return 0;
 }
 
-// return true when an I420 size fits a frame message
+// return whether w and h are even and within 2 to MAX_DIM
 static int size_ok(uint32_t w, uint32_t h)
 {
     return w >= 2 && h >= 2 && w <= MAX_DIM && h <= MAX_DIM && w % 2 == 0 && h % 2 == 0;
 }
 
-// order modes by largest area, then widest
+// return whether a has a larger area than b, or an equal area and a larger width
 static int mode_before(const struct mode_entry *a, const struct mode_entry *b)
 {
     uint64_t aa = (uint64_t)a->mode.width * a->mode.height, ba = (uint64_t)b->mode.width * b->mode.height;
     return aa != ba ? aa > ba : a->mode.width > b->mode.width;
 }
 
-// group offers into a mode per size at best rate
+// group candidates into a mode per size at the highest rate
 static uint32_t group_modes(const struct candidate *cand, uint32_t n_cand, struct mode_entry *out, uint32_t max)
 {
     static struct mode_entry groups[MAX_CANDIDATES];
@@ -909,7 +907,7 @@ static uint32_t group_modes(const struct candidate *cand, uint32_t n_cand, struc
     return keep;
 }
 
-// choose the lowest offered rate at or above the request
+// choose the lowest candidate rate at or above want
 static void choose_rate(const struct mode_entry *m, struct spa_fraction want, uint32_t *format,
                         struct spa_fraction *rate, uint32_t *kind)
 {
@@ -941,7 +939,7 @@ static void choose_rate(const struct mode_entry *m, struct spa_fraction want, ui
     }
 }
 
-// return a message with its header filled
+// allocate an outmsg and write the message header
 static struct outmsg *msg_new(uint32_t type, uint32_t payload_len, uint32_t stream_id, int is_frame)
 {
     struct outmsg *m = malloc(sizeof(*m) + HDR_LEN + payload_len);
@@ -959,13 +957,13 @@ static struct outmsg *msg_new(uint32_t type, uint32_t payload_len, uint32_t stre
     return m;
 }
 
-// return true when a queued message may be dropped
+// return whether m is not c->head with c->sending or m->off set
 static int droppable(const struct client *c, const struct outmsg *m)
 {
     return !(m == c->head && (c->sending || m->off > 0));
 }
 
-// queue a message, returning the frames it dropped or -1
+// queue a message and return the dropped frame count, or -1
 static int enqueue(struct client *c, struct outmsg *m)
 {
     int dropped = 0;
@@ -1043,7 +1041,7 @@ static void purge_frames(struct client *c, uint32_t stream_id)
     pthread_mutex_unlock(&g_qlock);
 }
 
-// send a client's queued output without blocking, or -1
+// write the client queue with MSG_DONTWAIT, or return -1
 static int flush_client(struct client *c)
 {
     int rc = 0;
@@ -1079,7 +1077,7 @@ static int flush_client(struct client *c)
     return rc;
 }
 
-// return true when a client has output waiting
+// return whether c->head is not NULL
 static int client_has_output(struct client *c)
 {
     pthread_mutex_lock(&g_qlock);
@@ -1088,7 +1086,7 @@ static int client_has_output(struct client *c)
     return any;
 }
 
-// queue a stream's STOPPED
+// queue RHIZO_CAMERA_STOPPED for stream_id
 static void send_stopped(struct client *c, uint32_t stream_id, int error)
 {
     struct outmsg *m = msg_new(RHIZO_CAMERA_STOPPED, sizeof(struct rhizo_camera_stopped), stream_id, 0);
@@ -1100,14 +1098,14 @@ static void send_stopped(struct client *c, uint32_t stream_id, int error)
     enqueue(c, m);
 }
 
-// mark the camera set changed
+// set g_dirty and write g_wake_fd
 static void mark_dirty(void)
 {
     g_dirty = 1;
     wake();
 }
 
-// request a PipeWire roundtrip and clear the settled flag
+// call pw_core_sync and clear g_settled
 static int issue_sync(void)
 {
     g_sync_seq = pw_core_sync(g_core, PW_ID_CORE, g_sync_seq);
@@ -1126,7 +1124,7 @@ static struct cam_node *node_by_id(uint32_t id)
     return NULL;
 }
 
-// count the open streams reading a node
+// count the open streams on node_id
 static int streams_on_node(uint32_t node_id)
 {
     int n = 0;
@@ -1138,7 +1136,7 @@ static int streams_on_node(uint32_t node_id)
     return n;
 }
 
-// format a mode as log text
+// write a mode as WxH@N or WxH@N/D to out
 static void mode_text(const struct rhizo_camera_mode *m, char *out, size_t len)
 {
     if (m->fps_den == 1) {
@@ -1148,13 +1146,12 @@ static void mode_text(const struct rhizo_camera_mode *m, char *out, size_t len)
     }
 }
 
-// log a camera's modes
+// log the camera modes
 static void log_camera(const struct cam_node *n)
 {
     if (n->n_modes == 0) {
-        fprintf(stderr, "[camerad] camera '%s' %s, not listed\n", n->key,
-                n->saw_compressed ? "offers only compressed formats the daemon does not decode (H264 and the like)"
-                                  : "offers no format the daemon converts");
+        fprintf(stderr, "[camerad] skipping camera '%s' with %s\n", n->key,
+                n->saw_compressed ? "compressed formats only" : "no raw or MJPG format");
         return;
     }
     char line[RHIZO_CAMERA_MAX_MODES * 30 + 1] = "";
@@ -1165,11 +1162,11 @@ static void log_camera(const struct cam_node *n)
         used += (size_t)snprintf(line + used, sizeof(line) - used, " %s%s", m,
                                  n->modes[i].formats[0] == FORMAT_MJPG ? "(MJPG)" : "");
     }
-    fprintf(stderr, "[camerad] camera '%s' ('%s', facing %s): %u mode%s:%s\n", n->key, n->name, facing_name(n->facing),
+    fprintf(stderr, "[camerad] camera '%s' name='%s' facing=%s %u mode%s%s\n", n->key, n->name, facing_name(n->facing),
             n->n_modes, n->n_modes == 1 ? "" : "s", line);
 }
 
-// enumerate a node's formats unless a stream reads it
+// call pw_port_enum_params for EnumFormat unless a stream is open on the node
 static void start_enum(struct cam_node *n)
 {
     if (n->port_proxy == NULL) {
@@ -1180,7 +1177,7 @@ static void start_enum(struct cam_node *n)
         return;
     }
     if (n->cand == NULL && (n->cand = calloc(MAX_CANDIDATES, sizeof(*n->cand))) == NULL) {
-        fprintf(stderr, "[camerad] out of memory enumerating node %u\n", n->id);
+        fprintf(stderr, "[camerad] calloc failed for node %u\n", n->id);
         return;
     }
     n->enum_deferred = 0;
@@ -1191,7 +1188,7 @@ static void start_enum(struct cam_node *n)
     n->enum_pending = 1;
 }
 
-// turn a finished enumeration into the node's modes
+// group the enumerated candidates into the node modes
 static void finish_enum(struct cam_node *n)
 {
     struct mode_entry modes[RHIZO_CAMERA_MAX_MODES];
@@ -1211,7 +1208,7 @@ static void finish_enum(struct cam_node *n)
     }
 }
 
-// read a node's camera-ness, key, name and facing
+// read the camera match, key, name and facing of a node
 static void on_node_info(void *data, const struct pw_node_info *info)
 {
     struct cam_node *n = data;
@@ -1248,12 +1245,12 @@ static void on_node_info(void *data, const struct pw_node_info *info)
     memcpy(n->key, key, sizeof(key));
     memcpy(n->name, name, sizeof(name));
     if (!camera) {
-        fprintf(stderr, "[camerad] node %u '%s' is a Video/Source but not a camera (media.role '%s', factory '%s'), "
-                        "not listed\n", n->id, key, role ? role : "-", factory ? factory : "-");
+        fprintf(stderr, "[camerad] node %u '%s' is a Video/Source but not a camera media.role='%s' "
+                        "factory='%s'\n", n->id, key, role ? role : "-", factory ? factory : "-");
     } else if (n->enumerated) {
         log_camera(n);
     } else {
-        fprintf(stderr, "[camerad] node %u '%s' is a camera (media.role '%s', factory '%s'), reading its formats\n",
+        fprintf(stderr, "[camerad] node %u '%s' is a camera media.role='%s' factory='%s'\n",
                 n->id, key, role ? role : "-", factory ? factory : "-");
     }
     mark_dirty();
@@ -1264,7 +1261,7 @@ static const struct pw_node_events node_events = {
     .info = on_node_info,
 };
 
-// re-read the port's formats when its EnumFormat param changes
+// call start_enum when the port EnumFormat param changes
 static void on_port_info(void *data, const struct pw_port_info *info)
 {
     struct cam_node *n = data;
@@ -1299,7 +1296,7 @@ static const struct pw_port_events port_events = {
     .param = on_port_param,
 };
 
-// drop a node's port and the modes it gave
+// destroy the port proxy and clear the node modes
 static void forget_port(struct cam_node *n)
 {
     if (n->port_proxy != NULL) {
@@ -1319,7 +1316,7 @@ static void forget_port(struct cam_node *n)
     }
 }
 
-// mark a stream ended from either thread
+// set s->ended and write g_wake_fd
 static void end_stream(struct cam_stream *s, int error)
 {
     if (!s->ended) {
@@ -1329,7 +1326,7 @@ static void end_stream(struct cam_stream *s, int error)
     }
 }
 
-// track a new Video/Source node or its first output port
+// bind a Video/Source node or the first output port of a node
 static void on_global(void *data, uint32_t id, uint32_t permissions, const char *type, uint32_t version,
                       const struct spa_dict *props)
 {
@@ -1351,7 +1348,7 @@ static void on_global(void *data, uint32_t id, uint32_t permissions, const char 
             }
         }
         if (n == NULL) {
-            fprintf(stderr, "[camerad] tracking %d video sources already, ignoring node %u\n", MAX_NODES, id);
+            fprintf(stderr, "[camerad] %d nodes tracked, skipping node %u\n", MAX_NODES, id);
             return;
         }
         memset(n, 0, sizeof(*n));
@@ -1363,7 +1360,7 @@ static void on_global(void *data, uint32_t id, uint32_t permissions, const char 
         }
         n->proxy = pw_registry_bind(g_registry, id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
         if (n->proxy == NULL) {
-            fprintf(stderr, "[camerad] cannot bind node %u\n", id);
+            fprintf(stderr, "[camerad] pw_registry_bind failed for node %u\n", id);
             return;
         }
         n->used = 1;
@@ -1372,7 +1369,7 @@ static void on_global(void *data, uint32_t id, uint32_t permissions, const char 
         pw_node_add_listener((struct pw_node *)n->proxy, &n->listener, &node_events, n);
         issue_sync();
         if (g_verbose) {
-            fprintf(stderr, "[camerad] video source node %u (serial %s)\n", id, n->serial);
+            fprintf(stderr, "[camerad] Video/Source node %u serial=%s\n", id, n->serial);
         }
     } else if (strcmp(type, PW_TYPE_INTERFACE_Port) == 0) {
         const char *dir = spa_dict_lookup(props, PW_KEY_PORT_DIRECTION);
@@ -1386,7 +1383,7 @@ static void on_global(void *data, uint32_t id, uint32_t permissions, const char 
         }
         n->port_proxy = pw_registry_bind(g_registry, id, PW_TYPE_INTERFACE_Port, PW_VERSION_PORT, 0);
         if (n->port_proxy == NULL) {
-            fprintf(stderr, "[camerad] cannot bind port %u of node %u\n", id, n->id);
+            fprintf(stderr, "[camerad] pw_registry_bind failed for port %u of node %u\n", id, n->id);
             return;
         }
         n->port_id = id;
@@ -1395,7 +1392,7 @@ static void on_global(void *data, uint32_t id, uint32_t permissions, const char 
     }
 }
 
-// drop a removed node with its streams, or a port
+// end the streams on a removed node and clear the node, or call forget_port for a removed port
 static void on_global_remove(void *data, uint32_t id)
 {
     (void)data;
@@ -1436,7 +1433,7 @@ static const struct pw_registry_events registry_events = {
     .global_remove = on_global_remove,
 };
 
-// finish the enumerations whose roundtrip returned
+// call finish_enum for the nodes whose sync_seq is seq
 static void on_core_done(void *data, uint32_t id, int seq)
 {
     (void)data;
@@ -1454,12 +1451,12 @@ static void on_core_done(void *data, uint32_t id, int seq)
     }
 }
 
-// log PipeWire errors and stop on a lost connection
+// log a PipeWire error and call on_signal on -EPIPE for PW_ID_CORE
 static void on_core_error(void *data, uint32_t id, int seq, int res, const char *message)
 {
     (void)data;
     (void)seq;
-    fprintf(stderr, "[camerad] pipewire error on object %u: %s (%s)\n", id, spa_strerror(res),
+    fprintf(stderr, "[camerad] pw_core error id=%u res=%s message='%s'\n", id, spa_strerror(res),
             message ? message : "");
     if (id == PW_ID_CORE && res == -EPIPE) {
         g_pipewire_lost = 1;
@@ -1509,7 +1506,7 @@ static int listed_cameras(struct cam_node **out, int *left)
     return n;
 }
 
-// build the LIST payload and return its length
+// build the LIST payload and return the payload length
 static uint32_t build_list(unsigned char *out, int *count_out, int *left)
 {
     struct cam_node *cams[RHIZO_CAMERA_MAX_CAMERAS];
@@ -1532,7 +1529,7 @@ static uint32_t build_list(unsigned char *out, int *count_out, int *left)
     return (uint32_t)(sizeof(hdr) + (size_t)count * sizeof(struct rhizo_camera_info));
 }
 
-// send STARTED and set buffer params on a negotiated format
+// queue STARTED and set buffer params on a negotiated format
 static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
     struct cam_stream *s = data;
@@ -1555,14 +1552,15 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
         info.framerate = mjpg.framerate;
     } else if (!parsed || media_subtype != SPA_MEDIA_SUBTYPE_raw || spa_format_video_raw_parse(param, &info) < 0 ||
                info.format == FORMAT_MJPG) {
-        fprintf(stderr, "[camerad] client %d stream %u: unreadable format negotiated\n", s->owner->id, s->stream_id);
+        fprintf(stderr, "[camerad] client %d stream %u failed to parse the negotiated format\n", s->owner->id,
+                s->stream_id);
         end_stream(s, -EPROTO);
         return;
     }
     const struct raw_format *f = raw_format_of(info.format);
     if (f == NULL || info.format != s->req_format || info.size.width != s->mode.mode.width ||
         info.size.height != s->mode.mode.height) {
-        fprintf(stderr, "[camerad] client %d stream %u: negotiated %ux%u format %u, not the %ux%u it asked for\n",
+        fprintf(stderr, "[camerad] client %d stream %u negotiated %ux%u format %u, expected %ux%u\n",
                 s->owner->id, s->stream_id, info.size.width, info.size.height, info.format, s->mode.mode.width,
                 s->mode.mode.height);
         end_stream(s, -EPROTO);
@@ -1593,10 +1591,11 @@ static void on_param_changed(void *data, uint32_t id, const struct spa_pod *para
     struct rhizo_camera_started st = {s->stream_id, s->mode.mode.width, s->mode.mode.height, rate.num, rate.denom, 0};
     memcpy(MSG_PAYLOAD(m), &st, sizeof(st));
     s->started = 1;
-    fprintf(stderr, "[camerad] client %d stream %u started: '%s' %ux%u@%u/%u %s%s\n", s->owner->id, s->stream_id,
+    fprintf(stderr, "[camerad] client %d stream %u started '%s' %ux%u@%u/%u %s%s\n", s->owner->id, s->stream_id,
             s->key, info.size.width, info.size.height, info.framerate.num, info.framerate.denom, f->name,
-            f->kind == PACKED_RGB || f->kind == MJPEG ? "" : s->full_range ? " full range"
-                                                                              : " limited range, expanded to full");
+            f->kind == PACKED_RGB || f->kind == MJPEG ? ""
+            : s->full_range                           ? " full range"
+                                                      : " limited range expanded to full range");
     enqueue(s->owner, m);
 }
 
@@ -1633,7 +1632,7 @@ static void on_process(void *data)
     const struct spa_data *d = &b->buffer->datas[0];
     const char *why = NULL;
     if (d->chunk->flags & SPA_CHUNK_FLAG_CORRUPTED) {
-        why = "the producer marked it corrupted";
+        why = "SPA_CHUNK_FLAG_CORRUPTED";
     } else if (f->kind == MJPEG) {
         if (d->data == NULL || d->chunk->offset > d->maxsize) {
             why = "unmapped or out-of-bounds MJPEG buffer";
@@ -1647,15 +1646,15 @@ static void on_process(void *data)
     } else {
         struct plane_view planes[3];
         if (map_planes(b->buffer, f, w, h, planes) < 0) {
-            why = "its planes do not fit the buffer";
+            why = "map_planes failed";
         } else {
             convert_frame(f, planes, w, h, s->full_range, out);
         }
     }
     if (why != NULL) {
         if (s->unreadable++ == 0) {
-            fprintf(stderr, "[camerad] client %d stream %u: unreadable %s frame (%s; %u datas, type %u, offset %u "
-                            "size %u stride %d maxsize %u, %ux%u), dropping such frames\n", s->owner->id,
+            fprintf(stderr, "[camerad] client %d stream %u unreadable %s frame (%s) datas=%u type=%u offset=%u "
+                            "size=%u stride=%d maxsize=%u %ux%u\n", s->owner->id,
                     s->stream_id, f->name, why, b->buffer->n_datas, d->type, d->chunk->offset, d->chunk->size,
                     d->chunk->stride, d->maxsize, w, h);
         }
@@ -1678,7 +1677,8 @@ static void on_stream_state(void *data, enum pw_stream_state old, enum pw_stream
 {
     struct cam_stream *s = data;
     fprintf(stderr, "[camerad] client %d stream %u state %s -> %s%s%s\n", s->owner->id, s->stream_id,
-            pw_stream_state_as_string(old), pw_stream_state_as_string(state), error ? ": " : "", error ? error : "");
+            pw_stream_state_as_string(old), pw_stream_state_as_string(state), error ? " error=" : "",
+            error ? error : "");
     if (state == PW_STREAM_STATE_ERROR) {
         end_stream(s, -EIO);
     } else if (state == PW_STREAM_STATE_UNCONNECTED && old != PW_STREAM_STATE_UNCONNECTED) {
@@ -1712,7 +1712,7 @@ static int connect_stream(struct cam_stream *s, const struct cam_node *n)
     pw_properties_set(props, "rhizo.camera.key", n->key);
     s->stream = pw_stream_new(g_core, "rhizo.camera", props);
     if (s->stream == NULL) {
-        fprintf(stderr, "[camerad] pw_stream_new failed: %s\n", strerror(errno));
+        fprintf(stderr, "[camerad] pw_stream_new failed (%s)\n", strerror(errno));
         return -1;
     }
     pw_stream_add_listener(s->stream, &s->listener, &stream_events, s);
@@ -1742,7 +1742,7 @@ static int connect_stream(struct cam_stream *s, const struct cam_node *n)
     int res = pw_stream_connect(s->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
                                 PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS, params, 1);
     if (res < 0) {
-        fprintf(stderr, "[camerad] pw_stream_connect failed for '%s': %s\n", n->key, spa_strerror(res));
+        fprintf(stderr, "[camerad] pw_stream_connect failed for '%s' (%s)\n", n->key, spa_strerror(res));
         spa_hook_remove(&s->listener);
         pw_stream_destroy(s->stream);
         s->stream = NULL;
@@ -1751,7 +1751,7 @@ static int connect_stream(struct cam_stream *s, const struct cam_node *n)
     return 0;
 }
 
-// destroy a stream's PipeWire stream and free its slot
+// destroy the PipeWire stream and clear the cam_stream slot
 static void destroy_stream(struct cam_stream *s)
 {
     uint32_t node_id = s->node_id;
@@ -1800,7 +1800,7 @@ static int open_stream(struct client *c, const struct rhizo_camera_open *req)
         }
     }
     if (n == NULL) {
-        fprintf(stderr, "[camerad] client %d stream %u: no camera '%s'\n", c->id, req->stream_id, req->key);
+        fprintf(stderr, "[camerad] client %d stream %u key '%s' is not listed\n", c->id, req->stream_id, req->key);
         send_stopped(c, req->stream_id, -ENODEV);
         return 0;
     }
@@ -1813,7 +1813,7 @@ static int open_stream(struct client *c, const struct rhizo_camera_open *req)
     struct spa_fraction want = SPA_FRACTION(req->fps_num, req->fps_den);
     if (m == NULL || want.num == 0 || want.denom == 0 ||
         fps_cmp(want.num, want.denom, m->mode.fps_num, m->mode.fps_den) > 0) {
-        fprintf(stderr, "[camerad] client %d stream %u: '%s' has no mode for %s\n", c->id, req->stream_id, n->key,
+        fprintf(stderr, "[camerad] client %d stream %u camera '%s' has no mode for %s\n", c->id, req->stream_id, n->key,
                 mode);
         send_stopped(c, req->stream_id, -EINVAL);
         return 0;
@@ -1827,7 +1827,7 @@ static int open_stream(struct client *c, const struct rhizo_camera_open *req)
             if (o->used && o->node_id == n->id &&
                 (o->mode.mode.width != m->mode.width || o->mode.mode.height != m->mode.height ||
                  o->req_format != format || frac_cmp(o->req_rate, rate) != 0)) {
-                fprintf(stderr, "[camerad] client %d stream %u: '%s' already streams another size or rate\n", c->id,
+                fprintf(stderr, "[camerad] client %d stream %u camera '%s' is open at another size or rate\n", c->id,
                         req->stream_id, n->key);
                 send_stopped(c, req->stream_id, -EBUSY);
                 return 0;
@@ -1841,7 +1841,7 @@ static int open_stream(struct client *c, const struct rhizo_camera_open *req)
         }
     }
     if (s == NULL) {
-        fprintf(stderr, "[camerad] client %d stream %u: %d streams open already\n", c->id, req->stream_id,
+        fprintf(stderr, "[camerad] client %d stream %u streams_open=%d\n", c->id, req->stream_id,
                 STREAMS_PER_CLIENT);
         send_stopped(c, req->stream_id, -EMFILE);
         return 0;
@@ -1864,9 +1864,9 @@ static int open_stream(struct client *c, const struct rhizo_camera_open *req)
     s->used = 1;
     g_stream_count++;
     const struct raw_format *f = raw_format_of(format);
-    fprintf(stderr, "[camerad] client %d stream %u: opening '%s' (node %u, serial %s) for %s at %u/%u%s as %s\n",
+    fprintf(stderr, "[camerad] client %d stream %u opening '%s' node=%u serial=%s for %s at %u/%u%s as %s\n",
             c->id, req->stream_id, n->key, n->id, n->serial, mode, rate.num, rate.denom,
-            kind == RATE_NOMINAL ? " (nominal)" : "", f ? f->name : "?");
+            kind == RATE_NOMINAL ? " RATE_NOMINAL" : "", f ? f->name : "?");
     return 0;
 }
 
@@ -1876,11 +1876,11 @@ static void close_stream(struct client *c, uint32_t stream_id)
     struct cam_stream *s = stream_by_id(c, stream_id);
     if (s == NULL) {
         if (g_verbose) {
-            fprintf(stderr, "[camerad] client %d closed stream %u, which is not open\n", c->id, stream_id);
+            fprintf(stderr, "[camerad] client %d CLOSE stream %u is not open\n", c->id, stream_id);
         }
         return;
     }
-    fprintf(stderr, "[camerad] client %d stream %u closed: %llu frames, %llu dropped, %llu unreadable\n", c->id,
+    fprintf(stderr, "[camerad] client %d stream %u closed frames=%llu dropped=%llu unreadable=%llu\n", c->id,
             stream_id, (unsigned long long)s->frames, (unsigned long long)s->dropped,
             (unsigned long long)s->unreadable);
     destroy_stream(s);
@@ -1910,7 +1910,7 @@ static void schedule_list(int64_t now)
     }
 }
 
-// send the rebuilt LIST to the clients awaiting it
+// queue the rebuilt LIST to each client with hello set and a changed LIST or wants_list set
 static void send_lists(void)
 {
     unsigned char fresh[LIST_PAYLOAD_MAX];
@@ -1932,7 +1932,7 @@ static void send_lists(void)
                                      RHIZO_CAMERA_KEY_LEN - 1, info->key);
         }
         fprintf(stderr, "[camerad] listing %d camera%s%s%s\n", count, count == 1 ? "" : "s", names,
-                left > 0 ? " (more than the protocol carries; the rest are not listed)" : "");
+                left > 0 ? ", skipped cameras past RHIZO_CAMERA_MAX_CAMERAS" : "");
     }
     for (int i = 0; i < MAX_CLIENTS; i++) {
         struct client *c = &g_clients[i];
@@ -1943,7 +1943,7 @@ static void send_lists(void)
     }
 }
 
-// answer a HELLO with the LIST once the view settles
+// queue the LIST for a HELLO if g_settled is set, or set wants_list
 static void answer_hello(struct client *c)
 {
     if (g_settled && g_list_valid && g_list_due_ms == 0) {
@@ -1974,23 +1974,23 @@ static int header_ok(const struct rhizo_camera_msg_header *h, const char **why)
     return 0;
 }
 
-// handle a whole client message, -1 on a protocol error
+// handle a whole client message, or return -1 on a protocol error
 static int dispatch(struct client *c, uint32_t type, const unsigned char *p, uint32_t len)
 {
     if (type == RHIZO_CAMERA_HELLO) {
         struct rhizo_camera_hello h;
         if (len < sizeof(h)) {
-            fprintf(stderr, "[camerad] client %d sent a short HELLO\n", c->id);
+            fprintf(stderr, "[camerad] client %d HELLO is shorter than rhizo_camera_hello\n", c->id);
             return -1;
         }
         memcpy(&h, p, sizeof(h));
         if (h.version != RHIZO_CAMERA_PROTOCOL_VERSION) {
-            fprintf(stderr, "[camerad] client %d speaks protocol %u, the daemon %u\n", c->id, h.version,
-                    RHIZO_CAMERA_PROTOCOL_VERSION);
+            fprintf(stderr, "[camerad] client %d HELLO version %u != RHIZO_CAMERA_PROTOCOL_VERSION %u\n",
+                    c->id, h.version, RHIZO_CAMERA_PROTOCOL_VERSION);
             return -1;
         }
         if (!c->hello) {
-            fprintf(stderr, "[camerad] client %d sent HELLO\n", c->id);
+            fprintf(stderr, "[camerad] HELLO from client %d\n", c->id);
         }
         c->hello = 1;
         pw_thread_loop_lock(g_loop);
@@ -1999,18 +1999,18 @@ static int dispatch(struct client *c, uint32_t type, const unsigned char *p, uin
         return 0;
     }
     if (!c->hello) {
-        fprintf(stderr, "[camerad] client %d sent message %u before HELLO\n", c->id, type);
+        fprintf(stderr, "[camerad] client %d message type %u before HELLO\n", c->id, type);
         return -1;
     }
     if (type == RHIZO_CAMERA_OPEN) {
         struct rhizo_camera_open o;
         if (len < sizeof(o)) {
-            fprintf(stderr, "[camerad] client %d sent a short OPEN\n", c->id);
+            fprintf(stderr, "[camerad] client %d OPEN is shorter than rhizo_camera_open\n", c->id);
             return -1;
         }
         memcpy(&o, p, sizeof(o));
         if (memchr(o.key, '\0', sizeof(o.key)) == NULL) {
-            fprintf(stderr, "[camerad] client %d sent an OPEN whose key is not terminated\n", c->id);
+            fprintf(stderr, "[camerad] client %d OPEN key is not terminated\n", c->id);
             return -1;
         }
         pw_thread_loop_lock(g_loop);
@@ -2020,7 +2020,7 @@ static int dispatch(struct client *c, uint32_t type, const unsigned char *p, uin
     }
     struct rhizo_camera_close cl;
     if (len < sizeof(cl)) {
-        fprintf(stderr, "[camerad] client %d sent a short CLOSE\n", c->id);
+        fprintf(stderr, "[camerad] client %d CLOSE is shorter than rhizo_camera_close\n", c->id);
         return -1;
     }
     memcpy(&cl, p, sizeof(cl));
@@ -2030,7 +2030,7 @@ static int dispatch(struct client *c, uint32_t type, const unsigned char *p, uin
     return 0;
 }
 
-// read a client's input and handle its whole messages
+// read client input and dispatch whole messages
 static int client_read(struct client *c)
 {
     for (int budget = 0; budget < 64; budget++) {
@@ -2047,7 +2047,7 @@ static int client_read(struct client *c)
             const char *why = NULL;
             memcpy(&c->hdr, c->in, HDR_LEN);
             if (header_ok(&c->hdr, &why) != 0) {
-                fprintf(stderr, "[camerad] client %d: %s (magic 0x%08x type %u length %u), dropping it\n", c->id, why,
+                fprintf(stderr, "[camerad] client %d %s magic=0x%08x type=%u length=%u\n", c->id, why,
                         c->hdr.magic, c->hdr.type, c->hdr.length);
                 return -1;
             }
@@ -2063,7 +2063,7 @@ static int client_read(struct client *c)
     return 0;
 }
 
-// drop a client with its streams, queue and socket
+// destroy the client streams, free the client queue and close the client socket
 static void drop_client(struct client *c, const char *why)
 {
     if (c->fd < 0) {
@@ -2073,7 +2073,7 @@ static void drop_client(struct client *c, const char *why)
     for (int i = 0; i < STREAMS_PER_CLIENT; i++) {
         struct cam_stream *s = &c->streams[i];
         if (s->used) {
-            fprintf(stderr, "[camerad] client %d stream %u released: %llu frames, %llu dropped, %llu unreadable\n",
+            fprintf(stderr, "[camerad] client %d stream %u released frames=%llu dropped=%llu unreadable=%llu\n",
                     c->id, s->stream_id, (unsigned long long)s->frames, (unsigned long long)s->dropped,
                     (unsigned long long)s->unreadable);
             destroy_stream(s);
@@ -2096,125 +2096,13 @@ static void drop_client(struct client *c, const char *why)
     fprintf(stderr, "[camerad] client %d %s\n", c->id, why);
 }
 
-// return a cgroup path after a sandbox root, or NULL
-static const char *after_sandbox_root(const char *path)
-{
-    static const char literal[] = "/rhizo", unit[] = "/system.slice/androidd", leaf[] = ".service/android";
-    const char *p;
-    if (strncmp(path, literal, sizeof(literal) - 1) == 0) {
-        p = path + sizeof(literal) - 1;
-        if (*p == '-') {
-            const char *d = ++p;
-            while (isdigit((unsigned char)*p)) {
-                p++;
-            }
-            if (p == d) {
-                return NULL;
-            }
-        }
-        return p;
-    }
-    if (strncmp(path, unit, sizeof(unit) - 1) != 0) {
-        return NULL;
-    }
-    p = path + sizeof(unit) - 1;
-    if (*p == '@') {
-        const char *d = ++p;
-        while (isdigit((unsigned char)*p)) {
-            p++;
-        }
-        if (p == d) {
-            return NULL;
-        }
-    }
-    return strncmp(p, leaf, sizeof(leaf) - 1) == 0 ? p + sizeof(leaf) - 1 : NULL;
-}
-
-// return true when a cgroup is strictly below a sandbox root
+// return whether path is strictly below a sandbox root or under g_peer_cgroup
 static int cgroup_allowed(const char *path)
 {
-    size_t len = strlen(path);
-    if (path[0] != '/' || strstr(path, "/../") != NULL || strstr(path, "/./") != NULL ||
-        (len >= 3 && strcmp(path + len - 3, "/..") == 0)) {
-        return 0;
-    }
-    if (g_peer_cgroup != NULL) {
-        size_t n = strlen(g_peer_cgroup);
-        return strcmp(g_peer_cgroup, "/") == 0 ||
-               (strncmp(path, g_peer_cgroup, n) == 0 && (path[n] == '\0' || path[n] == '/'));
-    }
-    const char *rest = after_sandbox_root(path);
-    return rest != NULL && rest[0] == '/' && rest[1] != '\0';
+    return rhizo_peer_cgroup_allowed(path, g_peer_cgroup);
 }
 
-// read a process's host cgroup v2 path, or return -1
-static int read_cgroup(pid_t pid, char *out, size_t len)
-{
-    char path[64], line[PATH_MAX + 8];
-    snprintf(path, sizeof(path), "/proc/%d/cgroup", (int)pid);
-    FILE *f = fopen(path, "r");
-    if (f == NULL) {
-        return -1;
-    }
-    int rc = -1;
-    while (fgets(line, sizeof(line), f) != NULL) {
-        if (strncmp(line, "0::", 3) == 0) {
-            line[strcspn(line, "\n")] = '\0';
-            size_t n = strlen(line + 3);
-            if (n < len) {
-                memcpy(out, line + 3, n + 1);
-                rc = 0;
-            }
-            break;
-        }
-    }
-    fclose(f);
-    return rc;
-}
-
-// return true when the peer is a sandboxed cameraserver
-static int peer_allowed(int fd, char *why, size_t why_len)
-{
-    struct ucred cred;
-    socklen_t len = sizeof(cred);
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
-        snprintf(why, why_len, "no peer credentials (%s)", strerror(errno));
-        return 0;
-    }
-    if ((long)cred.uid != g_peer_uid) {
-        snprintf(why, why_len, "uid %u pid %d: not uid %ld (cameraserver)", cred.uid, (int)cred.pid, g_peer_uid);
-        return 0;
-    }
-    int pidfd = -1;
-    socklen_t plen = sizeof(pidfd);
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERPIDFD, &pidfd, &plen) != 0) {
-        if (errno != ENOPROTOOPT && errno != EINVAL) {
-            snprintf(why, why_len, "uid %u pid %d: the peer is gone (%s)", cred.uid, (int)cred.pid, strerror(errno));
-            return 0;
-        }
-        pidfd = -1;
-    }
-    char cgroup[PATH_MAX];
-    int readable = read_cgroup(cred.pid, cgroup, sizeof(cgroup)) == 0;
-    int alive = 1;
-    if (pidfd >= 0) {
-        alive = syscall(SYS_pidfd_send_signal, pidfd, 0, NULL, 0) == 0 || errno == EPERM;
-        close(pidfd);
-    }
-    if (!readable || !alive) {
-        snprintf(why, why_len, "uid %u pid %d: %s", cred.uid, (int)cred.pid,
-                 alive ? "its cgroup is unreadable" : "it exited before its cgroup was read");
-        return 0;
-    }
-    if (!cgroup_allowed(cgroup)) {
-        snprintf(why, why_len, "uid %u pid %d: cgroup '%s' is outside every Rhizo Android sandbox", cred.uid,
-                 (int)cred.pid, cgroup);
-        return 0;
-    }
-    return 1;
-}
-
-// log a refused connection at most once per REFUSAL_LOG_MS
+// log a refused connection if REFUSAL_LOG_MS passed since the last refusal line
 static void log_refusal(const char *why)
 {
     int64_t now = mono_ms();
@@ -2222,16 +2110,16 @@ static void log_refusal(const char *why)
         g_refusals_unlogged++;
         return;
     }
-    fprintf(stderr, "[camerad] refused a connection, not Android's camera provider: %s", why);
+    fprintf(stderr, "[camerad] refused a connection from %s", why);
     if (g_refusals_unlogged > 0) {
-        fprintf(stderr, " (%lu more refused since the last such line)", g_refusals_unlogged);
+        fprintf(stderr, " unlogged_refusals=%lu", g_refusals_unlogged);
     }
     fputc('\n', stderr);
     g_refusal_logged_ms = now;
     g_refusals_unlogged = 0;
 }
 
-// accept a connection from Android's camera provider
+// call accept4 and add the peer as a client if rhizo_peer_allowed returns 1
 static void accept_client(int listen_fd)
 {
     int fd = accept4(listen_fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
@@ -2239,7 +2127,7 @@ static void accept_client(int listen_fd)
         return;
     }
     char why[PATH_MAX + 160];
-    if (!peer_allowed(fd, why, sizeof(why))) {
+    if (!rhizo_peer_allowed(fd, g_peer_uid, g_peer_cgroup, why, sizeof(why))) {
         log_refusal(why);
         close(fd);
         return;
@@ -2251,7 +2139,7 @@ static void accept_client(int listen_fd)
         }
     }
     if (c == NULL) {
-        fprintf(stderr, "[camerad] %d clients connected already, refusing another\n", MAX_CLIENTS);
+        fprintf(stderr, "[camerad] %d clients connected, refused a connection\n", MAX_CLIENTS);
         close(fd);
         return;
     }
@@ -2272,7 +2160,7 @@ static void accept_client(int listen_fd)
     fprintf(stderr, "[camerad] client %d connected\n", c->id);
 }
 
-// trim the heap once an ended stream's frames are freed
+// call malloc_trim if no queued frame has a serial at or below g_trim_mark
 static void maybe_trim(void)
 {
     if (!g_trim_pending) {
@@ -2293,11 +2181,11 @@ static void maybe_trim(void)
     malloc_trim(0);
 #endif
     if (g_verbose) {
-        fprintf(stderr, "[camerad] returned freed stream memory to the system\n");
+        fprintf(stderr, "[camerad] malloc_trim(0)\n");
     }
 }
 
-// write the camera and stream counts beside the socket
+// write cameras= and streams= to g_status_path
 static void write_status(int cameras, int streams)
 {
     if (cameras == g_status_cameras && streams == g_status_streams) {
@@ -2309,17 +2197,17 @@ static void write_status(int cameras, int streams)
     snprintf(tmp, sizeof(tmp), "%s.new", g_status_path);
     FILE *f = fopen(tmp, "w");
     if (f == NULL) {
-        fprintf(stderr, "[camerad] could not write %s: %s\n", tmp, strerror(errno));
+        fprintf(stderr, "[camerad] failed to write %s (%s)\n", tmp, strerror(errno));
         return;
     }
     fprintf(f, "cameras=%d\nstreams=%d\n", cameras, streams);
     fclose(f);
     if (rename(tmp, g_status_path) != 0) {
-        fprintf(stderr, "[camerad] could not write %s: %s\n", g_status_path, strerror(errno));
+        fprintf(stderr, "[camerad] failed to write %s (%s)\n", g_status_path, strerror(errno));
     }
 }
 
-// derive the status file path beside the socket
+// write the status file path in the socket_path directory to out
 static void derive_status_path(const char *socket_path, char *out, size_t out_len)
 {
     char buf[PATH_MAX - 16];
@@ -2345,7 +2233,7 @@ static void arm_timer(int64_t due_ms)
     timerfd_settime(g_timer_fd, due_ms > 0 ? TFD_TIMER_ABSTIME : 0, &its, NULL);
 }
 
-// reap ended streams, time out opens and send due LISTs
+// destroy ended streams, end timed-out opens and queue due LISTs
 static void service(void)
 {
     int64_t now = mono_ms();
@@ -2362,13 +2250,13 @@ static void service(void)
                 continue;
             }
             if (!s->ended && !s->started && now >= s->deadline_ms) {
-                fprintf(stderr, "[camerad] client %d stream %u: no format negotiated in %d ms (is a session "
-                                "manager linking it?)\n", c->id, s->stream_id, OPEN_TIMEOUT_MS);
+                fprintf(stderr, "[camerad] client %d stream %u no format negotiated in %d ms\n", c->id, s->stream_id,
+                        OPEN_TIMEOUT_MS);
                 end_stream(s, -ETIMEDOUT);
             }
             if (s->ended) {
-                fprintf(stderr, "[camerad] client %d stream %u stopped: %s (%llu frames, %llu dropped, %llu "
-                                "unreadable)\n", c->id, s->stream_id, strerror(-s->end_error),
+                fprintf(stderr, "[camerad] client %d stream %u stopped (%s) frames=%llu dropped=%llu "
+                                "unreadable=%llu\n", c->id, s->stream_id, strerror(-s->end_error),
                         (unsigned long long)s->frames, (unsigned long long)s->dropped,
                         (unsigned long long)s->unreadable);
                 uint32_t id = s->stream_id;
@@ -2401,7 +2289,7 @@ static void service(void)
     write_status(g_list_valid ? g_listed_count : 0, streams);
 }
 
-// return true when a daemon listens at a socket path
+// return whether connect to path succeeds
 static int socket_path_is_live(const char *path)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -2422,7 +2310,7 @@ static int make_listen_socket(const char *path)
 {
     struct sockaddr_un addr;
     if (strlen(path) >= sizeof(addr.sun_path)) {
-        fprintf(stderr, "[camerad] socket path too long: %s\n", path);
+        fprintf(stderr, "[camerad] %s is longer than sun_path\n", path);
         return -1;
     }
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
@@ -2434,8 +2322,7 @@ static int make_listen_socket(const char *path)
     addr.sun_family = AF_UNIX;
     snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
     if (socket_path_is_live(path)) {
-        fprintf(stderr, "[camerad] %s is a live daemon's socket -- refusing; stop that daemon or pass another "
-                        "socket path\n", path);
+        fprintf(stderr, "[camerad] socket %s is still listening\n", path);
         close(fd);
         return -1;
     }
@@ -2461,7 +2348,7 @@ static int g_selftest_fails = 0;
 // record a self-test result
 static void expect(int ok, const char *what)
 {
-    fprintf(stderr, "SELFTEST %s %s\n", ok ? "OK:  " : "FAIL:", what);
+    fprintf(stderr, "%s %s\n", ok ? "ok" : "FAIL", what);
     g_selftest_fails += !ok;
 }
 
@@ -2528,7 +2415,7 @@ static void selftest_conversion(void)
     }
     expect(expanded[0] == 0 && g_expand_y[235] == 255 && g_expand_c[16] == 0 && g_expand_c[128] == 128 &&
                g_expand_c[240] == 255,
-           "the range tables map limited range's ends and centre to full range's");
+           "g_expand_y[16, 235] == 0, 255 && g_expand_c[16, 128, 240] == 0, 128, 255");
     static const int colours[4][3] = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255}};
     static const int want_yuv[4][3] = {{76, 85, 255}, {150, 44, 21}, {29, 255, 107}, {255, 128, 128}};
     for (size_t k = 0; k < N_RAW_FORMATS; k++) {
@@ -2543,10 +2430,10 @@ static void selftest_conversion(void)
         if (f->kind != PACKED_RGB) {
             build_yuv_source(f, ref, W, H, 3, src, pl);
             convert_frame(f, pl, W, H, 1, out);
-            snprintf(what, sizeof(what), "%s full range with padded rows passes through to I420 unchanged", f->name);
+            snprintf(what, sizeof(what), "convert_frame(%s, pad 3, full_range 1) == ref", f->name);
             expect(memcmp(out, ref, sizeof(ref)) == 0, what);
             convert_frame(f, pl, W, H, 0, out);
-            snprintf(what, sizeof(what), "%s limited range is expanded to full range", f->name);
+            snprintf(what, sizeof(what), "convert_frame(%s, pad 3, full_range 0) == expanded", f->name);
             expect(memcmp(out, expanded, sizeof(expanded)) == 0, what);
             continue;
         }
@@ -2566,12 +2453,12 @@ static void selftest_conversion(void)
             int yv = out[bx * 2], uv = out[W * H + bx], vv = out[W * H + (W / 2) * (H / 2) + bx];
             ok &= abs(yv - want[0]) <= 1 && abs(uv - want[1]) <= 1 && abs(vv - want[2]) <= 1;
         }
-        snprintf(what, sizeof(what), "%s converts red, green, blue and white to full-range BT.601", f->name);
+        snprintf(what, sizeof(what), "convert_frame(%s, red green blue white) == want_yuv +/- 1", f->name);
         expect(ok, what);
     }
 }
 
-// test plane resolution on fake buffers
+// test map_planes on fake buffers
 static void selftest_planes(void)
 {
     static uint8_t mem[4096];
@@ -2591,57 +2478,57 @@ static void selftest_planes(void)
     chunks[0] = (struct spa_chunk){16, 20 * 6 * 3 / 2, 20, 0};
     expect(map_planes(&buf, nv12, 16, 6, pl) == 0 && pl[0].p == mem + 16 && pl[0].stride == 20 &&
                pl[1].p == mem + 16 + 20 * 6 && pl[1].stride == 20,
-           "NV12 in one block: the UV plane follows the padded luma at the luma stride");
+           "map_planes(NV12, 1 data) == 0 && pl[1].p == pl[0].p + 20 * 6 && pl[1].stride == 20");
     chunks[0] = (struct spa_chunk){0, 20 * 6 * 3 / 2, 20, 0};
     expect(map_planes(&buf, i420, 16, 6, pl) == 0 && pl[1].p == mem + 120 && pl[1].stride == 10 &&
                pl[2].p == mem + 120 + 30 && pl[2].stride == 10,
-           "I420 in one block: U then V follow the luma at half its stride");
+           "map_planes(I420, 1 data) == 0 && pl[1].stride == 10 && pl[2].p == pl[1].p + 30");
     chunks[0] = (struct spa_chunk){1000, 100, 16, 0};
-    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "a block that runs past maxsize is refused");
+    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "map_planes(NV12, chunk offset 1000, maxsize 1024) < 0");
     chunks[0] = (struct spa_chunk){2000, 100, 16, 0};
-    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "an offset past maxsize is refused");
+    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "map_planes(NV12, chunk offset 2000, maxsize 1024) < 0");
     chunks[0] = (struct spa_chunk){0, 100, -16, 0};
-    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "a negative stride is refused");
+    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "map_planes(NV12, chunk stride -16) < 0");
     chunks[0] = (struct spa_chunk){0, 100, 8, 0};
-    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "a stride shorter than a row is refused");
+    expect(map_planes(&buf, nv12, 16, 6, pl) < 0, "map_planes(NV12, chunk stride 8, width 16) < 0");
     buf.n_datas = 3;
     chunks[0] = (struct spa_chunk){4, 24 * 6, 24, 0};
     chunks[1] = (struct spa_chunk){0, 12 * 3, 12, 0};
     chunks[2] = (struct spa_chunk){8, 12 * 3, 12, 0};
     expect(map_planes(&buf, i420, 16, 6, pl) == 0 && pl[0].p == mem + 4 && pl[1].p == mem + 1024 &&
                pl[2].p == mem + 2048 + 8 && pl[2].stride == 12,
-           "I420 in three datas: each plane at a separate chunk offset and stride");
+           "map_planes(I420, 3 datas) == 0 && pl[2].p == datas[2].data + 8 && pl[2].stride == 12");
     chunks[2] = (struct spa_chunk){8, 10, 12, 0};
-    expect(map_planes(&buf, i420, 16, 6, pl) < 0, "a plane whose chunk is shorter than its rows is refused");
+    expect(map_planes(&buf, i420, 16, 6, pl) < 0, "map_planes(I420, 3 datas, chunks[2].size 10) < 0");
 }
 
-// test that keys fit the protocol as unique whole UTF-8
+// test make_key and make_name
 static void selftest_keys(void)
 {
     char key[RHIZO_CAMERA_KEY_LEN], other[RHIZO_CAMERA_KEY_LEN], name[RHIZO_CAMERA_NAME_LEN];
     make_key("v4l2_input.pci-0000_00_14.0-usb-0_5_1.0", key);
-    expect(strcmp(key, "v4l2_input.pci-0000_00_14.0-usb-0_5_1.0") == 0, "a short node.name is the key unchanged");
+    expect(strcmp(key, "v4l2_input.pci-0000_00_14.0-usb-0_5_1.0") == 0, "make_key(short node.name) == node.name");
     const char *a = "libcamera_input.a-very-long-camera-name-that-does-not-fit-the-protocol-key-field-camera-one";
     const char *b = "libcamera_input.a-very-long-camera-name-that-does-not-fit-the-protocol-key-field-camera-two";
     make_key(a, key);
     make_key(b, other);
     expect(strlen(key) == RHIZO_CAMERA_KEY_LEN - 1 && strncmp(key, a, 54) == 0 && key[54] == '~',
-           "a long node.name keeps its head and ends in a hash, within the key field");
-    expect(strcmp(key, other) != 0, "two long names sharing a head get different keys");
+           "strlen(make_key(a)) == RHIZO_CAMERA_KEY_LEN - 1 && key[54] == '~'");
+    expect(strcmp(key, other) != 0, "make_key(a) != make_key(b)");
     char utf[200];
     memset(utf, 'x', sizeof(utf));
     memcpy(utf + 53, "\xc3\xa9", 2);
     utf[sizeof(utf) - 1] = '\0';
     make_key(utf, key);
-    expect(strlen(key) == 53 + 9 && key[53] == '~', "a cut never splits a UTF-8 sequence");
+    expect(strlen(key) == 53 + 9 && key[53] == '~', "strlen(make_key(utf)) == 53 + 9 && key[53] == '~'");
     memset(utf, 'n', sizeof(utf));
     memcpy(utf + 126, "\xe2\x82\xac", 3);
     utf[sizeof(utf) - 1] = '\0';
     make_name(utf, name);
-    expect(strlen(name) == 126, "a long description is cut before a UTF-8 sequence it would split");
+    expect(strlen(name) == 126, "strlen(make_name(utf)) == 126");
 }
 
-// test the grouping of offers into modes
+// test group_modes
 static void selftest_modes(void)
 {
     struct candidate cand[64];
@@ -2657,10 +2544,10 @@ static void selftest_modes(void)
     uint32_t count = group_modes(cand, n, modes, RHIZO_CAMERA_MAX_MODES);
     expect(count == 2 && modes[0].mode.width == 640 && modes[0].mode.fps_num == 30 && modes[0].n_formats == 1 &&
                modes[0].formats[0] == SPA_VIDEO_FORMAT_NV12,
-           "a size's mode is its best rate, with only the formats that reach it");
+           "group_modes() count == 2 && modes[0] == 640x480@30 {NV12}");
     expect(count == 2 && modes[1].mode.width == 320 && modes[1].n_formats == 2 &&
                modes[1].formats[0] == SPA_VIDEO_FORMAT_I420 && modes[1].formats[1] == SPA_VIDEO_FORMAT_YUY2,
-           "formats of one mode are in preference order; odd, oversized and rateless sizes are left out");
+           "group_modes() count == 2 && modes[1] == 320x240 {I420, YUY2}");
     n = 0;
     for (uint32_t i = 0; i < 40; i++) {
         cand[n++] = (struct candidate){SPA_VIDEO_FORMAT_YUY2, 64 + 16 * i, 48 + 12 * i, 30, 1, 0, 0, 0};
@@ -2668,7 +2555,7 @@ static void selftest_modes(void)
     count = group_modes(cand, n, modes, RHIZO_CAMERA_MAX_MODES);
     expect(count == RHIZO_CAMERA_MAX_MODES && modes[0].mode.width == 64 + 16 * 39 &&
                modes[RHIZO_CAMERA_MAX_MODES - 1].mode.width == 64 + 16 * 8,
-           "forty sizes become the thirty-two largest, largest first");
+           "group_modes(40 sizes) count == RHIZO_CAMERA_MAX_MODES && modes[0].mode.width == 64 + 16 * 39");
     n = 0;
     cand[n++] = (struct candidate){SPA_VIDEO_FORMAT_YUY2, 640, 480, 30, 1, 0, 0, 0};
     cand[n++] = (struct candidate){FORMAT_MJPG, 640, 480, 30, 1, 0, 0, 0};
@@ -2681,14 +2568,14 @@ static void selftest_modes(void)
     expect(count == 4 && modes[0].mode.width == 1920 && modes[0].formats[0] == FORMAT_MJPG && modes[0].n_formats == 1 &&
                modes[1].mode.width == 1280 && modes[1].formats[0] == FORMAT_MJPG && modes[1].mode.fps_num == 30 &&
                modes[1].n_formats == 1,
-           "a size only MJPG offers, or offers faster than raw, is an MJPG mode");
+           "group_modes() modes[0] == 1920x1080 {MJPG} && modes[1] == 1280x720@30 {MJPG}");
     expect(count == 4 && modes[2].mode.width == 640 && modes[2].formats[0] == SPA_VIDEO_FORMAT_YUY2 &&
                modes[2].n_formats == 1 && modes[3].mode.width == 320 && modes[3].formats[0] == SPA_VIDEO_FORMAT_NV12 &&
                modes[3].mode.fps_num == 30,
-           "a size raw offers as fast as MJPG, or faster, stays raw, with no MJPG among its formats");
+           "group_modes() modes[2] == 640x480 {YUY2} && modes[3] == 320x240@30 {NV12}");
 }
 
-// test the parsing of EnumFormat pods
+// test collect_candidates on EnumFormat pods
 static void selftest_pods(void)
 {
     uint8_t buffer[1024];
@@ -2710,7 +2597,7 @@ static void selftest_pods(void)
     collect_candidates(pod, cand, &n);
     expect(n == 2 && cand[0].format == SPA_VIDEO_FORMAT_YUY2 && cand[0].fps_num == 15 && cand[1].fps_num == 30 &&
                cand[0].rate_kind == RATE_FIXED && cand[1].rate_kind == RATE_FIXED,
-           "an enum of rates gives each rate once, and a format the daemon cannot convert is skipped");
+           "collect_candidates({YUY2, YUY2, GRAY8}, {15, 15, 30}) n == 2 && rates == 15, 30 RATE_FIXED");
 
     b = (struct spa_pod_builder)SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     pod = spa_pod_builder_add_object(&b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
@@ -2725,9 +2612,9 @@ static void selftest_pods(void)
     for (uint32_t i = 0; i < n; i++) {
         sizes_ok &= cand[i].width <= 1280 && cand[i].height <= 720 && cand[i].width >= 160 && cand[i].height >= 120;
     }
-    expect(sizes_ok, "a size range gives its largest size and the common sizes inside it");
+    expect(sizes_ok, "collect_candidates(160x120 to 1280x720) n == 7 && cand[0] == 1280x720");
     expect(n > 0 && cand[0].fps_num == NOMINAL_FPS && cand[0].fps_den == 1 && cand[0].rate_kind == RATE_NOMINAL,
-           "an open-ended rate range (libcamera's 0 to INT32_MAX) gives a nominal rate");
+           "collect_candidates(rate 0/1 to INT32_MAX/1) cand[0] == NOMINAL_FPS/1 RATE_NOMINAL");
 
     b = (struct spa_pod_builder)SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     pod = spa_pod_builder_add_object(&b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
@@ -2738,7 +2625,7 @@ static void selftest_pods(void)
     n = 0;
     collect_candidates(pod, cand, &n);
     expect(n == 1 && cand[0].fps_num == NOMINAL_FPS && cand[0].rate_kind == RATE_NOMINAL,
-           "a variable rate (0/1) gives a nominal rate");
+           "collect_candidates(rate 0/1) n == 1 && cand[0] == NOMINAL_FPS RATE_NOMINAL");
 
     b = (struct spa_pod_builder)SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     pod = spa_pod_builder_add_object(&b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
@@ -2750,7 +2637,7 @@ static void selftest_pods(void)
     n = 0;
     collect_candidates(pod, cand, &n);
     expect(n == 1 && cand[0].fps_num == 60 && cand[0].rate_kind == RATE_RANGE && cand[0].lo_num == 10,
-           "a bounded rate range gives its top, with its low end, as a range");
+           "collect_candidates(rate 10/1 to 60/1) cand[0] == 60 lo 10 RATE_RANGE");
 
     b = (struct spa_pod_builder)SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     pod = spa_pod_builder_add_object(&b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
@@ -2759,7 +2646,7 @@ static void selftest_pods(void)
         SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&SPA_FRACTION(30, 1)));
     n = 0;
     expect(collect_candidates(pod, cand, &n) == 0 && n == 1 && cand[0].format == FORMAT_MJPG && cand[0].width == 1920,
-           "an MJPG format gives a mode, as MJPG");
+           "collect_candidates(mjpg 1920x1080) == 0 && n == 1 && cand[0].format == FORMAT_MJPG");
 
     b = (struct spa_pod_builder)SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     pod = spa_pod_builder_add_object(&b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
@@ -2767,7 +2654,7 @@ static void selftest_pods(void)
         SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&SPA_RECTANGLE(1920, 1080)),
         SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&SPA_FRACTION(30, 1)));
     n = 0;
-    expect(collect_candidates(pod, cand, &n) == 1 && n == 0, "an H264 format is reported compressed and gives no mode");
+    expect(collect_candidates(pod, cand, &n) == 1 && n == 0, "collect_candidates(h264) == 1 && n == 0");
 
     b = (struct spa_pod_builder)SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     pod = spa_pod_builder_add_object(&b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
@@ -2777,10 +2664,10 @@ static void selftest_pods(void)
         SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&SPA_FRACTION(30, 1)));
     n = 0;
     collect_candidates(pod, cand, &n);
-    expect(n == 0, "a raw pod naming the daemon's private MJPG id gives no mode");
+    expect(n == 0, "collect_candidates(raw FORMAT_MJPG) n == 0");
 }
 
-// test the rate an OPEN gets
+// test choose_rate
 static void selftest_rates(void)
 {
     struct candidate cand[16];
@@ -2795,46 +2682,48 @@ static void selftest_rates(void)
     cand[n++] = (struct candidate){SPA_VIDEO_FORMAT_YUY2, 320, 240, 10, 1, RATE_FIXED, 10, 1};
     uint32_t count = group_modes(cand, n, modes, RHIZO_CAMERA_MAX_MODES);
     expect(count == 2 && modes[0].n_rates == 4 && modes[1].n_rates == 2,
-           "a mode keeps every rate its formats offer at its size");
+           "group_modes() modes[0].n_rates == 4 && modes[1].n_rates == 2");
     const struct mode_entry *m = &modes[0];
     choose_rate(m, SPA_FRACTION(24, 1), &format, &rate, &kind);
-    expect(format == SPA_VIDEO_FORMAT_NV12 && rate.num == 25, "24 fps gets 25, the lowest offered at or above it");
+    expect(format == SPA_VIDEO_FORMAT_NV12 && rate.num == 25, "choose_rate(24/1) == NV12 25/1");
     choose_rate(m, SPA_FRACTION(30, 1), &format, &rate, &kind);
-    expect(format == SPA_VIDEO_FORMAT_YUY2 && rate.num == 30, "30 fps gets 30");
+    expect(format == SPA_VIDEO_FORMAT_YUY2 && rate.num == 30, "choose_rate(30/1) == YUY2 30/1");
     choose_rate(m, SPA_FRACTION(30000, 1001), &format, &rate, &kind);
-    expect(rate.num == 30 && rate.denom == 1, "29.97 fps gets 30");
+    expect(rate.num == 30 && rate.denom == 1, "choose_rate(30000/1001) == 30/1");
     choose_rate(m, SPA_FRACTION(60, 1), &format, &rate, &kind);
-    expect(format == SPA_VIDEO_FORMAT_NV12 && rate.num == 60, "60 fps gets 60, the preferred format on a tie");
+    expect(format == SPA_VIDEO_FORMAT_NV12 && rate.num == 60, "choose_rate(60/1) == NV12 60/1");
     m = &modes[1];
     choose_rate(m, SPA_FRACTION(24, 1), &format, &rate, &kind);
-    expect(rate.num == 24 && kind == RATE_RANGE, "inside a range the request itself is asked for");
+    expect(rate.num == 24 && kind == RATE_RANGE, "choose_rate(24/1) in range 15/1 to 60/1 == 24/1 RATE_RANGE");
     choose_rate(m, SPA_FRACTION(12, 1), &format, &rate, &kind);
-    expect(rate.num == 15 && kind == RATE_RANGE, "below a range's low end its low end is asked for, not a slower rate");
+    expect(rate.num == 15 && kind == RATE_RANGE, "choose_rate(12/1) in range 15/1 to 60/1 == 15/1 RATE_RANGE");
     choose_rate(m, SPA_FRACTION(5, 1), &format, &rate, &kind);
-    expect(rate.num == 10 && kind == RATE_FIXED, "the slowest fixed rate at or above the request beats a range's end");
+    expect(rate.num == 10 && kind == RATE_FIXED, "choose_rate(5/1) == 10/1 RATE_FIXED");
 }
 
-// test the message header checks
+// test header_ok and facing_of
 static void selftest_headers(void)
 {
     const char *why = NULL;
     struct rhizo_camera_msg_header h = {RHIZO_CAMERA_MAGIC, RHIZO_CAMERA_OPEN, sizeof(struct rhizo_camera_open), 0};
-    expect(header_ok(&h, &why) == 0, "an OPEN header is accepted");
+    expect(header_ok(&h, &why) == 0, "header_ok(RHIZO_CAMERA_OPEN) == 0");
     h.magic = 0x12345678;
-    expect(header_ok(&h, &why) < 0 && strcmp(why, "bad magic") == 0, "a bad magic is refused");
+    expect(header_ok(&h, &why) < 0 && strcmp(why, "bad magic") == 0,
+           "header_ok(magic 0x12345678) < 0 && why == \"bad magic\"");
     h.magic = RHIZO_CAMERA_MAGIC;
     h.type = RHIZO_CAMERA_FRAME;
-    expect(header_ok(&h, &why) < 0, "a daemon-to-HAL type from the HAL is refused");
+    expect(header_ok(&h, &why) < 0, "header_ok(RHIZO_CAMERA_FRAME) < 0");
     h.type = RHIZO_CAMERA_HELLO;
     h.length = CLIENT_PAYLOAD_MAX + 1;
-    expect(header_ok(&h, &why) < 0 && strcmp(why, "message too long") == 0, "an oversized payload is refused");
+    expect(header_ok(&h, &why) < 0 && strcmp(why, "message too long") == 0,
+           "header_ok(length CLIENT_PAYLOAD_MAX + 1) < 0 && why == \"message too long\"");
     expect(facing_of("front", NULL) == RHIZO_CAMERA_FACING_FRONT && facing_of("back", NULL) == RHIZO_CAMERA_FACING_BACK &&
                facing_of("external", NULL) == RHIZO_CAMERA_FACING_EXTERNAL &&
                facing_of(NULL, "/dev/video0/../../etc") == RHIZO_CAMERA_FACING_EXTERNAL,
-           "facing follows api.libcamera.location, and a malformed v4l2 path is external");
+           "facing_of(location, NULL) == FRONT, BACK, EXTERNAL && facing_of(NULL, /dev/video0/../../etc) == EXTERNAL");
 }
 
-// test the sandbox cgroup checks
+// test cgroup_allowed
 static void selftest_peer_cgroups(void)
 {
     static const struct {
@@ -2865,15 +2754,15 @@ static void selftest_peer_cgroups(void)
     int bad = 0;
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         if (cgroup_allowed(cases[i].path) != cases[i].want) {
-            fprintf(stderr, "SELFTEST: cgroup '%s' %s\n", cases[i].path, cases[i].want ? "refused" : "admitted");
+            fprintf(stderr, "FAIL cgroup_allowed('%s') == %s\n", cases[i].path, cases[i].want ? "0" : "1");
             bad++;
         }
     }
-    expect(bad == 0, "a peer cgroup is admitted only strictly below /rhizo[-N] or androidd[@N].service/android");
+    expect(bad == 0, "cgroup_allowed(cases[i].path) == cases[i].want for each case");
     g_peer_cgroup = "/user.slice/user-1000.slice";
     expect(cgroup_allowed("/user.slice/user-1000.slice") && cgroup_allowed("/user.slice/user-1000.slice/x") &&
                !cgroup_allowed("/user.slice/user-1000.slicex") && !cgroup_allowed("/rhizo/init"),
-           "a test prefix admits that cgroup and its children only, and replaces the sandbox rule");
+           "cgroup_allowed(P) && cgroup_allowed(P/x) && !cgroup_allowed(Px) && !cgroup_allowed(/rhizo/init)");
     g_peer_cgroup = NULL;
 }
 
@@ -2890,23 +2779,23 @@ static int run_selftest(void)
     selftest_peer_cgroups();
     selftest_headers();
     if (g_selftest_fails > 0) {
-        fprintf(stderr, "SELFTEST: %d case(s) FAILED\n", g_selftest_fails);
+        fprintf(stderr, "SELFTEST failures=%d\n", g_selftest_fails);
         return 1;
     }
-    fprintf(stderr, "SELFTEST: all cases passed\n");
+    fprintf(stderr, "SELFTEST failures=0\n");
     return 0;
 }
 
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s [--socket PATH] [--peer-uid UID] [--peer-cgroup PATH] [-v]\n"
-            "       %s --status [--socket PATH]\n"
-            "       %s --selftest\n",
+            "%s [--socket PATH] [--peer-uid UID] [--peer-cgroup PATH] [-v]\n"
+            "%s --status [--socket PATH]\n"
+            "%s --selftest\n",
             argv0, argv0, argv0);
 }
 
-// print the status file written by the running daemon
+// print the status file in the socket_path directory, or cameras=0 and streams=0
 static int print_status(const char *socket_path)
 {
     char status_path[PATH_MAX];
@@ -2932,7 +2821,11 @@ int main(int argc, char *argv[])
         if (strcmp(argv[i], "--socket") == 0 && i + 1 < argc) {
             g_socket_path = argv[++i];
         } else if (strcmp(argv[i], "--peer-uid") == 0 && i + 1 < argc) {
-            g_peer_uid = strtol(argv[++i], NULL, 10);
+            if (rhizo_peer_parse_uid(argv[++i], &g_peer_uid) != 0) {
+                fprintf(stderr, "[camerad] failed to parse --peer-uid '%s'\n", argv[i]);
+                usage(argv[0]);
+                return 2;
+            }
         } else if (strcmp(argv[i], "--peer-cgroup") == 0 && i + 1 < argc) {
             g_peer_cgroup = argv[++i];
         } else if (strcmp(argv[i], "-v") == 0) {
@@ -2955,7 +2848,6 @@ int main(int argc, char *argv[])
 
     setvbuf(stderr, NULL, _IOLBF, 0);
 #ifdef __GLIBC__
-    // malloc_trim never releases the top of a glibc thread arena
     mallopt(M_ARENA_MAX, 1);
 #endif
     init_range_tables();
@@ -2999,7 +2891,7 @@ int main(int argc, char *argv[])
     }
     pw_thread_loop_unlock(g_loop);
     if (g_core == NULL || g_registry == NULL) {
-        fprintf(stderr, "[camerad] cannot connect to PipeWire (is it running?)\n");
+        fprintf(stderr, "[camerad] pw_context_connect failed\n");
         return 1;
     }
 
@@ -3008,13 +2900,13 @@ int main(int argc, char *argv[])
         return 1;
     }
     write_status(0, 0);
-    fprintf(stderr, "[camerad] serving cameras on %s (protocol %u, pipewire %s)\n", g_socket_path,
+    fprintf(stderr, "[camerad] listening on %s protocol=%u pipewire=%s\n", g_socket_path,
             RHIZO_CAMERA_PROTOCOL_VERSION, pw_get_library_version());
     if (g_peer_uid != AID_CAMERASERVER || g_peer_cgroup != NULL) {
-        fprintf(stderr, "[camerad] TEST OVERRIDE: accepting uid %ld in cgroup %s, not the camera provider\n",
-                g_peer_uid, g_peer_cgroup != NULL ? g_peer_cgroup : "(the sandbox roots)");
+        fprintf(stderr, "[camerad] --peer-uid %ld --peer-cgroup %s\n",
+                g_peer_uid, g_peer_cgroup != NULL ? g_peer_cgroup : "unset");
     } else {
-        fprintf(stderr, "[camerad] accepting uid %d (cameraserver) inside a Rhizo Android sandbox's cgroup only\n",
+        fprintf(stderr, "[camerad] peer uid=%d cgroup below /rhizo[-N] or androidd[@N].service/android\n",
                 AID_CAMERASERVER);
     }
 
@@ -3065,7 +2957,7 @@ int main(int argc, char *argv[])
                 continue;
             }
             if ((fds[k].revents & POLLOUT) && flush_client(c) != 0) {
-                drop_client(c, "stopped reading (send failed)");
+                drop_client(c, "send failed");
             }
         }
         service();
@@ -3078,9 +2970,9 @@ int main(int argc, char *argv[])
             int overflow = c->overflow;
             pthread_mutex_unlock(&g_qlock);
             if (overflow) {
-                drop_client(c, "left more than a megabyte of messages unread, dropping it");
+                drop_client(c, "control_bytes exceeded CONTROL_BACKLOG_MAX");
             } else if (flush_client(c) != 0) {
-                drop_client(c, "stopped reading (send failed)");
+                drop_client(c, "send failed");
             }
         }
         maybe_trim();
@@ -3107,6 +2999,6 @@ int main(int argc, char *argv[])
     pw_context_destroy(g_context);
     pw_thread_loop_destroy(g_loop);
     pw_deinit();
-    fprintf(stderr, "[camerad] stopped%s\n", g_pipewire_lost ? ": lost the connection to PipeWire" : "");
+    fprintf(stderr, "[camerad] stopped%s\n", g_pipewire_lost ? " after pw_core error -EPIPE" : "");
     return g_pipewire_lost ? 1 : 0;
 }

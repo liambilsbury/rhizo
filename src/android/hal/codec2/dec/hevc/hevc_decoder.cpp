@@ -17,7 +17,7 @@
 // the HEVC Main and Main 10 decoder core on VA
 
 #ifdef RHIZO_HEVC_DEBUG
-#define HEVC_LOG(...) fprintf(stderr, "hevc: " __VA_ARGS__)
+#define HEVC_LOG(...) fprintf(stderr, "hevc " __VA_ARGS__)
 #else
 #define HEVC_LOG(...) \
   do {                \
@@ -341,8 +341,7 @@ Status HevcDecoder::StartPicture(const uint8_t* nal, size_t size, const NalHeade
       refused = sps_unsupported_[pps->sps_id] ? Status::kUnsupported : Status::kBadStream;
     } else if (candidate->scaling_list_enabled && OnVirgl()) {
       if (!logged_virgl_scaling_)
-        LogErrorf("hevc: refusing a sequence with scaling lists: virgl never passes the host an IQ matrix, so its "
-                  "pictures would decode wrong");
+        LogErrorf("hevc scaling_list_enabled_flag=1 unsupported on virgl");
       logged_virgl_scaling_ = true;
       refused = Status::kUnsupported;
     }
@@ -405,7 +404,7 @@ Status HevcDecoder::StartPicture(const uint8_t* nal, size_t size, const NalHeade
         if (lists[l][i] >= 0) continue;
         if (!AddPlaceholder(wanted[l][i], l == 2 ? RefMark::kLong : RefMark::kShort, &lists[l][i]))
           return Status::kBadStream;
-        HEVC_LOG("poc %lld: generated missing reference poc %lld\n", (long long)poc, (long long)wanted[l][i]);
+        HEVC_LOG("poc=%lld placeholder_reference_poc=%lld\n", (long long)poc, (long long)wanted[l][i]);
       }
     }
   }
@@ -526,7 +525,7 @@ bool HevcDecoder::DeriveRps(const SliceHeader& sh, const Sps& sps, int64_t poc, 
   return true;
 }
 
-// add a never-decoded stand-in for a missing reference
+// add a generated placeholder picture for a missing reference
 bool HevcDecoder::AddPlaceholder(int64_t poc, RefMark mark, int* slot) {
   if (Fullness() + 2 > static_cast<int>(info_.min_surfaces)) return false;
   int s = FreeSlotIndex();
@@ -744,7 +743,7 @@ Status HevcDecoder::Submit() {
   pp.num_extra_slice_header_bits = pps.num_extra_slice_header_bits;
   pp.st_rps_bits = f.st_rps_bits;
 
-  // VAIQMatrixBufferHEVC takes its lists in raster order
+  // VAIQMatrixBufferHEVC takes the scaling lists in raster order
   VAIQMatrixBufferHEVC iq;
   if (sps.scaling_list_enabled) {
     memset(&iq, 0, sizeof(iq));
@@ -922,7 +921,7 @@ bool HevcDecoder::BumpOne() {
   return true;
 }
 
-// take a picture out of output
+// clear needed_for_output and call host_->Output when output is set and the tag is not emitted
 void HevcDecoder::PictureLeaves(Picture& p, bool output) {
   p.needed_for_output = false;
   auto it = tags_.find(p.tag);
@@ -959,7 +958,7 @@ void HevcDecoder::Resolve(uint64_t tag) {
   if (!emitted) host_->Skip(tag);
 }
 
-// output all waiting pictures and keep the references
+// output all waiting pictures without unmarking the references
 Status HevcDecoder::Drain() {
   Status s = FinishPicture();
   while (BumpOne()) {

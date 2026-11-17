@@ -54,7 +54,7 @@ int64_t MonotonicNs() {
   return int64_t(ts.tv_sec) * kNsPerSecond + ts.tv_nsec;
 }
 
-// return whether two host modes are the same
+// return whether two host modes are equal
 bool SameMode(const HostMode& a, const HostMode& b) {
   return a.width == b.width && a.height == b.height && a.fpsNum == b.fpsNum && a.fpsDen == b.fpsDen;
 }
@@ -76,7 +76,7 @@ std::string ExifDateTime() {
   return buf;
 }
 
-// return a product property, its vendor variant or the fallback
+// return a product property, the vendor property or the fallback
 std::string BuildProperty(const char* name, const char* vendorName, const char* fallback) {
 #ifdef __ANDROID__
   char value[PROP_VALUE_MAX] = {};
@@ -89,7 +89,7 @@ std::string BuildProperty(const char* name, const char* vendorName, const char* 
   return fallback;
 }
 
-// return the metadata id of a request template
+// return the metadata id of RequestTemplate t
 int32_t TemplateId(device::RequestTemplate t) { return static_cast<int32_t>(t); }
 
 // duplicate a NativeHandle into a native_handle_t
@@ -112,19 +112,19 @@ native_handle_t* DupHandle(const NativeHandle& h) {
 
 // return why a configuration is not supported, or empty
 std::string CheckStreams(const CameraShape& shape, const device::StreamConfiguration& config) {
-  if (config.operationMode != device::StreamConfigurationMode::NORMAL_MODE) return "only NORMAL_MODE";
+  if (config.operationMode != device::StreamConfigurationMode::NORMAL_MODE) return "operationMode is not NORMAL_MODE";
   if (config.streams.empty()) return "no streams";
   int processed = 0, stalling = 0;
   for (const device::Stream& s : config.streams) {
-    if (s.streamType != device::StreamType::OUTPUT) return "input streams are not supported (no reprocessing)";
-    if (s.rotation != device::StreamRotation::ROTATION_0) return "stream rotation is not supported";
-    if (!s.physicalCameraId.empty()) return "no physical cameras";
+    if (s.streamType != device::StreamType::OUTPUT) return "streamType is not OUTPUT";
+    if (s.rotation != device::StreamRotation::ROTATION_0) return "rotation is not ROTATION_0";
+    if (!s.physicalCameraId.empty()) return "physicalCameraId is not empty";
     if (!ShapeHasSize(shape, s.width, s.height)) {
-      return "size " + std::to_string(s.width) + "x" + std::to_string(s.height) + " is not offered";
+      return "size " + std::to_string(s.width) + "x" + std::to_string(s.height) + " is not in shape.sizes";
     }
     switch (s.format) {
       case PixelFormat::BLOB:
-        if (s.dataSpace != Dataspace::JFIF) return "BLOB is offered only as JFIF JPEG";
+        if (s.dataSpace != Dataspace::JFIF) return "BLOB dataSpace is not JFIF";
         stalling++;
         break;
       case PixelFormat::IMPLEMENTATION_DEFINED:
@@ -132,7 +132,7 @@ std::string CheckStreams(const CameraShape& shape, const device::StreamConfigura
         processed++;
         break;
       default:
-        return "format " + std::to_string(static_cast<int32_t>(s.format)) + " is not offered";
+        return "format " + std::to_string(static_cast<int32_t>(s.format)) + " is not BLOB, IMPLEMENTATION_DEFINED or YCBCR_420_888";
     }
   }
   if (processed > kMaxProcessedStreams) return "more than " + std::to_string(kMaxProcessedStreams) + " YUV/private streams";
@@ -149,16 +149,16 @@ CameraSession::CameraSession(std::shared_ptr<CameraContext> ctx, CameradClient* 
       make_(BuildProperty("ro.product.manufacturer", "ro.product.vendor.manufacturer", "Rhizo")),
       model_(BuildProperty("ro.product.model", "ro.product.vendor.model", "Rhizo")),
       wakeFd_(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) {
-  if (wakeFd_ < 0) klogf("camera %s: eventfd failed (%s); fence waits run to their timeout", ctx_->id.c_str(), strerror(errno));
+  if (wakeFd_ < 0) klogf("camera %s eventfd failed (%s)", ctx_->id.c_str(), strerror(errno));
   requestQueue_ = std::make_unique<MetadataQueue>(kMetadataQueueBytes, false);
   resultQueue_ = std::make_unique<MetadataQueue>(kMetadataQueueBytes, false);
   if (!requestQueue_->isValid() || !resultQueue_->isValid()) {
-    klogf("camera %s: metadata queues could not be made; settings and results go inline", ctx_->id.c_str());
+    klogf("failed to create metadata queues for camera %s", ctx_->id.c_str());
     if (!requestQueue_->isValid()) requestQueue_.reset();
     if (!resultQueue_->isValid()) resultQueue_.reset();
   }
   worker_ = std::thread([this] { workerLoop(); });
-  klogf("camera %s: session opened", ctx_->id.c_str());
+  klogf("camera %s session opened", ctx_->id.c_str());
 }
 
 CameraSession::~CameraSession() {
@@ -197,10 +197,10 @@ void CameraSession::openStreamLocked(const HostMode& mode, int32_t maxFps) {
   asked.fpsNum = openRate_.fpsNum;
   asked.fpsDen = openRate_.fpsDen;
   if (client_->open(ctx_->host.key, asked, mailbox_)) {
-    klogf("camera %s: OPEN stream %u at %ux%u %u/%u fps (mode %u/%u)", ctx_->id.c_str(), mailbox_->streamId(),
+    klogf("camera %s OPEN stream %u at %ux%u %u/%u fps (mode %u/%u)", ctx_->id.c_str(), mailbox_->streamId(),
           asked.width, asked.height, asked.fpsNum, asked.fpsDen, mode.fpsNum, mode.fpsDen);
   } else {
-    klogf("camera %s: OPEN stream %u failed: camerad is not connected", ctx_->id.c_str(), mailbox_->streamId());
+    klogf("CameradClient::open failed for camera %s stream %u", ctx_->id.c_str(), mailbox_->streamId());
     mailbox_->markStopped(-ENOTCONN);
   }
 }
@@ -209,7 +209,7 @@ void CameraSession::openStreamLocked(const HostMode& mode, int32_t maxFps) {
 void CameraSession::closeStreamLocked() {
   if (!mailbox_) return;
   client_->close(mailbox_->streamId());
-  klogf("camera %s: CLOSE stream %u", ctx_->id.c_str(), mailbox_->streamId());
+  klogf("camera %s CLOSE stream %u", ctx_->id.c_str(), mailbox_->streamId());
   mailbox_->interrupt();
   mailbox_.reset();
 }
@@ -235,7 +235,7 @@ ScopedAStatus CameraSession::close() {
   buffers_.clear();
   streams_.clear();
   lastSettings_.reset();
-  klogf("camera %s: session closed after %llu frames, %llu failed requests", ctx_->id.c_str(),
+  klogf("camera %s session closed after %llu frames, %llu failures", ctx_->id.c_str(),
         static_cast<unsigned long long>(completed_), static_cast<unsigned long long>(failures_));
   return ScopedAStatus::ok();
 }
@@ -250,19 +250,19 @@ ScopedAStatus CameraSession::configureStreamsV2(const device::StreamConfiguratio
   return configure(config, &out->halStreams);
 }
 
-// accept a stream set and open its host mode
+// configure a stream set and open the host mode of the largest stream
 ScopedAStatus CameraSession::configure(const device::StreamConfiguration& config,
                                        std::vector<device::HalStream>* out) {
   out->clear();
   std::string why = CheckStreams(ctx_->shape, config);
   if (!why.empty()) {
-    klogf("camera %s: configureStreams refused: %s", ctx_->id.c_str(), why.c_str());
+    klogf("camera %s configureStreams returned ILLEGAL_ARGUMENT (%s)", ctx_->id.c_str(), why.c_str());
     return Error(Status::ILLEGAL_ARGUMENT);
   }
   std::unique_lock<std::mutex> lk(mu_);
   if (closed_) return Error(Status::INTERNAL_ERROR);
   if (!idleCv_.wait_for(lk, std::chrono::milliseconds(kIdleWaitMs), [this] { return queue_.empty() && !busy_; })) {
-    klogf("camera %s: configureStreams with requests still in flight", ctx_->id.c_str());
+    klogf("camera %s CaptureRequests are still in flight at configureStreams", ctx_->id.c_str());
     return Error(Status::INTERNAL_ERROR);
   }
   if (closed_) return Error(Status::INTERNAL_ERROR);
@@ -316,7 +316,7 @@ ScopedAStatus CameraSession::configure(const device::StreamConfiguration& config
     h.maxBuffers = kPipelineMaxDepth;
     h.supportOffline = false;
     h.enableHalBufferManager = false;
-    klogf("camera %s: stream %d %dx%d format 0x%x usage 0x%llx -> 0x%x", ctx_->id.c_str(), s.id, s.width,
+    klogf("camera %s stream %d %dx%d format 0x%x usage 0x%llx -> 0x%x", ctx_->id.c_str(), s.id, s.width,
           s.height, static_cast<int32_t>(s.format), static_cast<unsigned long long>(s.usage),
           static_cast<int32_t>(h.overrideFormat));
     out->push_back(std::move(h));
@@ -331,7 +331,7 @@ ScopedAStatus CameraSession::constructDefaultRequestSettings(device::RequestTemp
   return ScopedAStatus::ok();
 }
 
-// fail the queued requests and wait for the one in flight
+// fail the CaptureRequests in queue_ and wait for busy_ to clear
 ScopedAStatus CameraSession::flush() {
   std::deque<Request> drained;
   {
@@ -363,7 +363,7 @@ ScopedAStatus CameraSession::getCaptureResultMetadataQueue(MQDescriptor<int8_t, 
   return ScopedAStatus::ok();
 }
 
-// read n bytes from the request queue
+// read n bytes from requestQueue_
 bool CameraSession::readRequestQueue(int64_t n, std::vector<uint8_t>* out) {
   if (!requestQueue_ || n <= 0 || static_cast<uint64_t>(n) > kMetadataQueueBytes) return false;
   out->resize(static_cast<size_t>(n));
@@ -376,11 +376,11 @@ ScopedAStatus CameraSession::isReconfigurationRequired(const device::CameraMetad
   return ScopedAStatus::ok();
 }
 
-// check a request, import its new buffers and dup its fences
+// check a CaptureRequest, import outputBuffers handles and dup acquire fences
 ScopedAStatus CameraSession::enqueue(const device::CaptureRequest& request, Request* out) {
   std::vector<uint8_t> queued;
   if (request.fmqSettingsSize > 0 && !readRequestQueue(request.fmqSettingsSize, &queued)) {
-    klogf("camera %s: frame %d settings (%lld bytes) are not in the request queue", ctx_->id.c_str(),
+    klogf("failed to read camera %s frame %d settings (%lld bytes) from requestQueue_", ctx_->id.c_str(),
           request.frameNumber, static_cast<long long>(request.fmqSettingsSize));
     return Error(Status::ILLEGAL_ARGUMENT);
   }
@@ -395,13 +395,13 @@ ScopedAStatus CameraSession::enqueue(const device::CaptureRequest& request, Requ
   if (!blob.empty()) {
     MetadataPtr parsed = ParseMetadata(blob);
     if (!parsed) {
-      klogf("camera %s: frame %d carries malformed settings", ctx_->id.c_str(), request.frameNumber);
+      klogf("failed to parse camera %s frame %d settings", ctx_->id.c_str(), request.frameNumber);
       return Error(Status::ILLEGAL_ARGUMENT);
     }
     settings = std::shared_ptr<camera_metadata_t>(parsed.release(), MetadataDeleter());
   }
   if (!settings) {
-    klogf("camera %s: frame %d has no settings and none came before", ctx_->id.c_str(), request.frameNumber);
+    klogf("camera %s frame %d has no settings and no previous settings", ctx_->id.c_str(), request.frameNumber);
     return Error(Status::ILLEGAL_ARGUMENT);
   }
   Request r;
@@ -432,7 +432,7 @@ ScopedAStatus CameraSession::enqueue(const device::CaptureRequest& request, Requ
     }
     auto cached = buffers_.find(key);
     if (cached == buffers_.end()) {
-      klogf("camera %s: frame %d names buffer %lld of stream %d, never sent", ctx_->id.c_str(), request.frameNumber,
+      klogf("camera %s frame %d buffer %lld of stream %d is not cached", ctx_->id.c_str(), request.frameNumber,
             static_cast<long long>(sb.bufferId), sb.streamId);
       for (OutBuffer& b : r.buffers) if (b.acquireFence >= 0) ::close(b.acquireFence);
       return Error(Status::ILLEGAL_ARGUMENT);
@@ -499,7 +499,7 @@ ScopedAStatus CameraSession::repeatingRequestEnd(int32_t, const std::vector<int3
   return ScopedAStatus::ok();
 }
 
-// pace each queued request to the next host frame
+// pace each CaptureRequest in queue_ to the next host frame
 void CameraSession::workerLoop() {
   for (;;) {
     Request r;
@@ -530,7 +530,7 @@ int64_t CameraSession::timestampFor(const Frame& f) {
   return ts;
 }
 
-// fill or fail a request after its fences and frame
+// fill or fail r after the acquire fences and a host frame
 void CameraSession::process(Request& r) {
   if (flushing_) return fail(r, "flushed");
   std::vector<bool> fenceOk(r.buffers.size(), true);
@@ -544,7 +544,7 @@ void CameraSession::process(Request& r) {
       case FenceWait::kWoken:
         return fail(r, "flushed");
       case FenceWait::kTimedOut:
-        klogf("camera %s: frame %d stream %d acquire fence timed out", ctx_->id.c_str(), r.frameNumber,
+        klogf("camera %s frame %d stream %d acquire fence timed out", ctx_->id.c_str(), r.frameNumber,
               r.buffers[i].streamId);
         fenceOk[i] = false;
         break;
@@ -561,7 +561,7 @@ void CameraSession::process(Request& r) {
     bool stopped = !mailbox_ || mailbox_->stopped(&error);
     bool olderCamerad = stopped && error == -EINVAL && openRate_.belowMode && !modeRateOnly_;
     if (olderCamerad) {
-      klogf("camera %s: camerad refused %u/%u fps; opening at mode rates from now on", ctx_->id.c_str(),
+      klogf("camerad stopped camera %s at %u/%u fps with EINVAL", ctx_->id.c_str(),
             openRate_.fpsNum, openRate_.fpsDen);
       modeRateOnly_ = true;
     }
@@ -574,7 +574,7 @@ void CameraSession::process(Request& r) {
                     msSinceOpen >= kReopenIntervalMs;
     if (haveMode_ && ((olderCamerad && ctx_->present) || retarget ||
                       ShouldReopen(stopped, consecutiveTimeouts_, ctx_->present, msSinceOpen))) {
-      if (!stopped && !retarget) klogf("camera %s: host stream silent; reopening it", ctx_->id.c_str());
+      if (!stopped && !retarget) klogf("camera %s reopening the host stream after frame timeouts", ctx_->id.c_str());
       closeStreamLocked();
       openStreamLocked(want != nullptr ? *want : mode_, maxFps);
       consecutiveTimeouts_ = 0;
@@ -607,7 +607,7 @@ void CameraSession::process(Request& r) {
       }
       case FrameMailbox::Wait::kTimeout:
         consecutiveTimeouts_++;
-        return fail(r, "no host frame in time");
+        return fail(r, "host frame timed out");
       case FrameMailbox::Wait::kInterrupted:
         return fail(r, "flushed");
     }
@@ -636,7 +636,7 @@ bool CameraSession::fillBuffer(const OutBuffer& b, const camera_metadata_t* sett
       req.exif.orientation = js.orientation;
       ssize_t n = FillJpeg(view, b.width, b.height, req, lb.blob, lb.blobSize, scratch_);
       ok = n > 0;
-      if (!ok) klogf("camera %s: JPEG %dx%d did not fit a %zu-byte buffer", ctx_->id.c_str(), b.width, b.height, lb.blobSize);
+      if (!ok) klogf("camera %s FillJpeg %dx%d failed with blobSize %zu", ctx_->id.c_str(), b.width, b.height, lb.blobSize);
     }
   } else if (lb.kind == LockedBuffer::Kind::kYuv) {
     FillYuv(view, lb.yuv, scratch_);
@@ -646,14 +646,14 @@ bool CameraSession::fillBuffer(const OutBuffer& b, const camera_metadata_t* sett
     ok = true;
   }
   if (!ok && lb.kind != LockedBuffer::Kind::kBlob) {
-    klogf("camera %s: stream %d buffer layout %d cannot take a %s frame", ctx_->id.c_str(), b.streamId,
+    klogf("camera %s stream %d buffer kind %d does not match a %s frame", ctx_->id.c_str(), b.streamId,
           static_cast<int>(lb.kind), b.blob ? "JPEG" : "YUV/RGBA");
   }
   bool published = gralloc_->unlock(b.handle, releaseFence);
   return ok && published;
 }
 
-// deliver a request's shutter, filled buffers and result metadata
+// deliver the shutter, filled buffers and result metadata of r
 void CameraSession::complete(Request& r, const std::vector<bool>& fenceOk) {
   int64_t ts = timestampFor(frame_);
   std::vector<device::NotifyMsg> msgs;
@@ -689,15 +689,15 @@ void CameraSession::complete(Request& r, const std::vector<bool>& fenceOk) {
   result.result.metadata = BuildResult(ctx_->shape, r.settings.get(), ts, r.depth);
   deliver(msgs, std::move(result));
   if (completed_++ == 0) {
-    klogf("camera %s: first frame %ux%u delivered to frame %d", ctx_->id.c_str(), frame_.width, frame_.height,
+    klogf("camera %s %ux%u frameNumber=%d completed_=0", ctx_->id.c_str(), frame_.width, frame_.height,
           r.frameNumber);
   }
 }
 
-// return a request's buffers unfilled with ERROR_REQUEST
+// return the buffers of r unfilled with ERROR_REQUEST
 void CameraSession::fail(Request& r, const char* why) {
   if (failures_++ % 100 == 0) {
-    klogf("camera %s: frame %d failed (%s; %llu failures so far)", ctx_->id.c_str(), r.frameNumber, why,
+    klogf("camera %s frame %d failed (%s), %llu failures", ctx_->id.c_str(), r.frameNumber, why,
           static_cast<unsigned long long>(failures_));
   }
   std::vector<device::NotifyMsg> msgs;
@@ -720,7 +720,7 @@ void CameraSession::fail(Request& r, const char* why) {
   deliver(msgs, std::move(result));
 }
 
-// send the notify messages, then the capture result
+// call notify, then processCaptureResult
 void CameraSession::deliver(const std::vector<device::NotifyMsg>& msgs, device::CaptureResult result) {
   std::lock_guard<std::mutex> lk(callbackMu_);
   const std::vector<uint8_t>& md = result.result.metadata;
@@ -733,7 +733,7 @@ void CameraSession::deliver(const std::vector<device::NotifyMsg>& msgs, device::
   std::vector<device::CaptureResult> results;
   results.push_back(std::move(result));
   auto status = callback_->processCaptureResult(results);
-  if (!status.isOk()) klogf("camera %s: processCaptureResult failed: %s", ctx_->id.c_str(), status.getMessage());
+  if (!status.isOk()) klogf("camera %s processCaptureResult failed (%s)", ctx_->id.c_str(), status.getMessage());
 }
 
 CameraDevice::CameraDevice(std::shared_ptr<CameraContext> ctx, CameradClient* client)
@@ -765,7 +765,7 @@ ScopedAStatus CameraDevice::open(const std::shared_ptr<device::ICameraDeviceCall
   if (callback == nullptr) return Error(Status::ILLEGAL_ARGUMENT);
   if (!ctx_->present) return Error(Status::CAMERA_DISCONNECTED);
   if (Gralloc::Get() == nullptr) {
-    klogf("camera %s: open refused: no mapper to write buffers with", ctx_->id.c_str());
+    klogf("failed to load the mapper for camera %s", ctx_->id.c_str());
     return Error(Status::INTERNAL_ERROR);
   }
   std::lock_guard<std::mutex> lk(mu_);

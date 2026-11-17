@@ -1,41 +1,41 @@
 #!/bin/bash
-# make the GSI signing keys and print their sign_target_files_apks arguments
+# GSI signing key generator and sign_target_files_apks key argument printer
 set -uo pipefail
 
-# print a prefixed progress line
+# print a [gsi-keys] line to stderr
 log() { echo "[gsi-keys] $*" >&2; }
 # print the usage text
 usage() {
   cat <<'EOF'
-usage: gsi-keys.sh <target-files.zip> <keys dir>
-       gsi-keys.sh --selftest
+gsi-keys.sh <target-files.zip> <keys dir>
+gsi-keys.sh --selftest
 EOF
 }
 
 DEFAULT_KEYS=(releasekey platform shared media networkstack sdk_sandbox)
 SECURITY_DIR=build/make/target/product/security
 
-# make a certificate key pair unless it exists
+# create keys/name.pk8 and keys/name.x509.pem if absent
 make_cert_key() {
   local keys="$1" name="$2"
   [[ -f "$keys/$name.pk8" && -f "$keys/$name.x509.pem" ]] && return 0
   ( cd "$keys" && "$MAKE_KEY" "$name" "/O=Rhizo/CN=$name" </dev/null >/dev/null 2>&1 )
-  [[ -s "$keys/$name.pk8" && -s "$keys/$name.x509.pem" ]] || { log "could not make key $name"; return 1; }
+  [[ -s "$keys/$name.pk8" && -s "$keys/$name.x509.pem" ]] || { log "failed to create key $name"; return 1; }
   chmod 0600 "$keys/$name.pk8"
-  log "made key $name"
+  log "created key $name"
 }
 
-# make an RSA key for an apex payload or an AVB footer unless it exists
+# create an RSA keys/name.pem for an apex payload or an AVB footer if absent
 make_payload_key() {
   local keys="$1" name="$2" bits="${3:-${PAYLOAD_KEY_BITS:-4096}}"
   [[ -f "$keys/$name.pem" ]] && return 0
   openssl genrsa -out "$keys/$name.pem" "$bits" >/dev/null 2>&1 \
-    || { log "could not make payload key $name"; return 1; }
+    || { log "failed to create payload key $name"; return 1; }
   chmod 0600 "$keys/$name.pem"
-  log "made payload key $name"
+  log "created payload key $name"
 }
 
-# make all of the keys META's signers need and print the arguments that map them
+# create the keys of META apkcerts.txt and apexkeys.txt and print the sign_target_files_apks key arguments
 make_keys() {
   local meta="$1" keys="$2" k cert base apex
   for k in "${DEFAULT_KEYS[@]}"; do make_cert_key "$keys" "$k" || return 1; done
@@ -63,7 +63,7 @@ selftest() {
   local tmp fail=0 out
   tmp=$(mktemp -d)
   mkdir -p "$tmp/META" "$tmp/keys"
-  # shellcheck disable=SC2016  # the stub expands its arguments
+  # shellcheck disable=SC2016
   printf '#!/bin/bash\necho k > "$1.pk8"; echo c > "$1.x509.pem"\nexit 1\n' > "$tmp/make_key"
   chmod +x "$tmp/make_key"
   cat > "$tmp/META/apkcerts.txt" <<'TXT'
@@ -77,27 +77,27 @@ name="com.x.apex" public_key="system/apex/com.x.avbpubkey" private_key="system/a
 name="com.pre.apex" public_key="" private_key="" container_certificate="PRESIGNED" container_private_key="" partition="system"
 TXT
   out=$(MAKE_KEY="$tmp/make_key" PAYLOAD_KEY_BITS=1024 make_keys "$tmp/META" "$tmp/keys" 2>/dev/null)
-  [[ "$out" != *security/platform* ]] || { echo "FAIL a default key is left to -d"; fail=1; }
+  [[ "$out" != *security/platform* ]] || { echo "FAIL make_keys output has no security/platform"; fail=1; }
   [[ "$out" == *$'-k\nbuild/make/target/product/security/bluetooth='"$tmp/keys/bluetooth"* ]] \
-    || { echo "FAIL a non-default security key is mapped with -k -- got: $out"; fail=1; }
+    || { echo "FAIL make_keys output has -k build/make/target/product/security/bluetooth=keys/bluetooth ($out)"; fail=1; }
   [[ "$out" == *$'-k\npackages/modules/Foo/com.android.foo='"$tmp/keys/com.android.foo"* ]] \
-    || { echo "FAIL a module key is mapped with -k -- got: $out"; fail=1; }
+    || { echo "FAIL make_keys output has -k packages/modules/Foo/com.android.foo=keys/com.android.foo ($out)"; fail=1; }
   [[ "$out" == *$'--extra_apks\ncom.x.apex='"$tmp/keys/com.x"* && "$out" == *$'--extra_apex_payload_key\ncom.x.apex='"$tmp/keys/com.x.pem"* ]] \
-    || { echo "FAIL an apex gets container and payload keys -- got: $out"; fail=1; }
-  [[ "$out" != *com.pre* && "$out" != *Pre.apk* ]] || { echo "FAIL presigned entries are left alone"; fail=1; }
+    || { echo "FAIL make_keys output has --extra_apks and --extra_apex_payload_key for com.x.apex ($out)"; fail=1; }
+  [[ "$out" != *com.pre* && "$out" != *Pre.apk* ]] || { echo "FAIL make_keys output has no com.pre or Pre.apk"; fail=1; }
   local k
   for k in releasekey platform shared media networkstack sdk_sandbox bluetooth com.android.foo com.x; do
-    [[ -f "$tmp/keys/$k.pk8" && -f "$tmp/keys/$k.x509.pem" ]] || { echo "FAIL key $k made"; fail=1; }
+    [[ -f "$tmp/keys/$k.pk8" && -f "$tmp/keys/$k.x509.pem" ]] || { echo "FAIL keys/$k.pk8 and keys/$k.x509.pem exist"; fail=1; }
   done
-  [[ -f "$tmp/keys/com.x.pem" ]] || { echo "FAIL apex payload key made"; fail=1; }
+  [[ -f "$tmp/keys/com.x.pem" ]] || { echo "FAIL keys/com.x.pem exists"; fail=1; }
   [[ "$out" == *$'--avb_system_key\n'"$tmp/keys/avb_system.pem"$'\n--avb_system_algorithm\nSHA256_RSA4096'* ]] \
-    || { echo "FAIL the system image's AVB footer gets its own key -- got: $out"; fail=1; }
+    || { echo "FAIL make_keys output has --avb_system_key keys/avb_system.pem --avb_system_algorithm SHA256_RSA4096 ($out)"; fail=1; }
   [[ "$out" == *$'--avb_vbmeta_key\n'"$tmp/keys/avb_vbmeta.pem"$'\n--avb_vbmeta_algorithm\nSHA256_RSA4096'* ]] \
-    || { echo "FAIL vbmeta gets its own key -- got: $out"; fail=1; }
-  [[ -f "$tmp/keys/avb_system.pem" && -f "$tmp/keys/avb_vbmeta.pem" ]] || { echo "FAIL the AVB keys are made"; fail=1; }
+    || { echo "FAIL make_keys output has --avb_vbmeta_key keys/avb_vbmeta.pem --avb_vbmeta_algorithm SHA256_RSA4096 ($out)"; fail=1; }
+  [[ -f "$tmp/keys/avb_system.pem" && -f "$tmp/keys/avb_vbmeta.pem" ]] || { echo "FAIL keys/avb_system.pem and keys/avb_vbmeta.pem exist"; fail=1; }
   rm -rf "$tmp"
-  if (( fail )); then echo "gsi-keys.sh selftest: FAILED"; return 1; fi
-  echo "gsi-keys.sh selftest: ok"
+  if (( fail )); then echo "FAIL gsi-keys.sh --selftest"; return 1; fi
+  echo "ok gsi-keys.sh --selftest"
 }
 
 [[ "${1:-}" == --selftest ]] && { selftest; exit $?; }
@@ -106,10 +106,10 @@ TXT
 TF="$1" KEYS="$2"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 MAKE_KEY="${MAKE_KEY:-$(readlink -f "${RHIZO_AOSP_DIR:-$ROOT/aosp-android16-qpr2}")/development/tools/make_key}"
-[[ -x "$MAKE_KEY" ]] || { log "no make_key at $MAKE_KEY"; exit 1; }
+[[ -x "$MAKE_KEY" ]] || { log "no $MAKE_KEY"; exit 1; }
 mkdir -p "$KEYS" && chmod 0700 "$KEYS"
-[[ -n "$(ls -A "$KEYS")" ]] || log "first keys in $KEYS: back them up; an image signed with other keys needs Android's data wiped"
+[[ -n "$(ls -A "$KEYS")" ]] || log "$KEYS is empty"
 META=$(mktemp -d)
 trap 'rm -rf "$META"' EXIT
-unzip -q -o "$TF" META/apkcerts.txt META/apexkeys.txt -d "$META" || { log "cannot read META from $TF"; exit 1; }
+unzip -q -o "$TF" META/apkcerts.txt META/apexkeys.txt -d "$META" || { log "failed to extract META/apkcerts.txt and META/apexkeys.txt from $TF"; exit 1; }
 make_keys "$META/META" "$KEYS"

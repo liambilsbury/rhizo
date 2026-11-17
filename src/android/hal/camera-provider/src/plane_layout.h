@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_PLANE_LAYOUT_H
 #define RHIZO_CAMERA_PLANE_LAYOUT_H
 
-// read the mapper's PLANE_LAYOUTS metadata into image_ops destinations
+// PLANE_LAYOUTS metadata decoding into image_ops destinations
 
 #include <stddef.h>
 #include <stdint.h>

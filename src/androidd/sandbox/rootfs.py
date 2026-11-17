@@ -1,4 +1,4 @@
-"""build the sandbox's root filesystem and pivot into it"""
+"""sandbox root filesystem build and pivot_root"""
 import ctypes
 import errno
 import fcntl
@@ -20,15 +20,16 @@ from sandbox import core
 from sandbox import selinux_ns
 from sandbox import guest_files
 from sandbox.core import (AID_READPROC, CLONE_NEWNS, DEVICE_STATE_LABEL, DEVICE_STATE_MOUNT, GSI,
-    HOST_ARCH, HOST_ARCH_AMD64, MS_BIND, MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_PRIVATE, MS_RDONLY,
+    HOST_ARCH, HOST_ARCH_AMD64, MOUNT_ATTR_NODEV, MOUNT_ATTR_NOEXEC, MOUNT_ATTR_NOSUID,
+    MOUNT_ATTR_RDONLY, MS_BIND, MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_PRIVATE, MS_RDONLY,
     MS_REC, MS_REMOUNT, MS_SHARED, NEWROOT, PREPARED_ROOT, RHIZO_APEX_DIR_BIND,
     RHIZO_DEVICE_STATE_DIR, RHIZO_ENFORCING, RHIZO_FLAT_DIR_BINDS, RHIZO_STATE_DIR,
     RHIZO_SYSKERNEL_SUBSET, RHIZO_UNDER_UNIT, RUN_ROOT, SANDBOX_ID, SYSTEM_ADB_KEYS, beside,
-    cgroup_write, host_selinux_mode, kmsg, libc, mount, product_build_prop_source, own_domain, phase, pivot_root, read_mountinfo, unshare)
+    cgroup_write, host_selinux_mode, kmsg, libc, mount, mount_setattr, product_build_prop_source, own_domain, phase, pivot_root, read_mountinfo, unshare)
 from sandbox.selinux_labels import relabel_flat_trees_now, relabel_root_objects_now
 
 
-DEV_NODES=("null","zero","full","random","urandom","tty","console","kmsg","ashmem")
+DEV_NODES=("null","zero","full","random","urandom","tty","kmsg","ashmem")
 TOPDIRS=("system","vendor","product","odm","system_ext","apex","linkerconfig","mnt",
          "data","metadata","dev","proc","sys","bootstrap-apex","second_stage_resources",
          "debug_ramdisk","postinstall","oldroot","storage")
@@ -36,10 +37,12 @@ MNT_CACHE_BYTES = 384
 MNT_NAMESPACES = 42
 MOUNT_TALLY = {"mounts": 0, "per_file": 0, "subtree": 0, "dir": 0,
                "overmount": 0, "apex": 0, "syskernel": 0}
+RHIZO_SYSFS_RO = os.environ.get("RHIZO_SYSFS_RO", "1") != "0"
+RHIZO_PERF_FILTER = os.environ.get("RHIZO_PERF_FILTER", "1") != "0"
 
 
 def unshare_root_namespace(mode, handoff):
-    """give gg a fresh SELinux namespace"""
+    """unshare a SELinux namespace for gg"""
     if mode == "namespace":
         selinux_ns.unshare_namespace(None if handoff else selinux_ns.ANDROID_ENFORCE_FILE)
         kmsg("RHIZO_MARKER selinuxns=hold-unshared" if handoff else "RHIZO_MARKER selinuxns=unshared")
@@ -59,12 +62,12 @@ HELPER_CAPS_EXIT = 3
 
 
 def stage_host_battery(state_dir, data, log=kmsg, owner=(0, 0)):
-    """stage host-battery's first bytes in place and return its path"""
+    """write the first host-battery bytes and return the host-battery path"""
     path = os.path.join(state_dir, core.HOST_BATTERY_FILE)
     if data is None:
         try:
             os.unlink(path)
-            log("host-battery: a stale file removed, the battery source is not host")
+            log("deleted host-battery for a battery source other than host")
         except FileNotFoundError:
             pass
         except OSError as e:
@@ -86,7 +89,7 @@ def stage_host_battery(state_dir, data, log=kmsg, owner=(0, 0)):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            log("host-battery: a reader holds its lock before Android started, writing the first reading anyway")
+            log("flock of host-battery failed with EWOULDBLOCK")
         if owner is not None and (st.st_uid, st.st_gid) != tuple(owner):
             os.fchown(fd, *owner)
         if stat.S_IMODE(st.st_mode) != 0o644:
@@ -103,24 +106,24 @@ def stage_host_battery(state_dir, data, log=kmsg, owner=(0, 0)):
 
 
 def _drop_host_battery(path, log=kmsg):
-    """unlink whatever a failed staging left at host-battery"""
+    """unlink host-battery after a failed staging"""
     try:
         os.unlink(path)
     except FileNotFoundError:
         pass
     except OSError as e:
-        log(f"host-battery: what a failed staging left could not be removed ({e.strerror})")
+        log(f"failed to unlink {path} ({e.strerror})")
 
 
 def settle_host_battery(path, result, log=kmsg):
-    """keep a labelled host-battery or unlink an unlabelled one"""
+    """return True for a labelled host-battery and unlink an unlabelled host-battery"""
     if path is None or result == "ok":
         return True
-    log(f"RHIZO_MARKER battery_relay=failed reason=label:{result} -- host-battery removed, Android reports no battery")
+    log(f"RHIZO_MARKER battery_relay=failed reason=label:{result}")
     try:
         os.unlink(path)
     except OSError as e:
-        log(f"host-battery: the unlabelled file could not be removed ({e.strerror})")
+        log(f"failed to unlink unlabelled {path} ({e.strerror})")
     return False
 
 
@@ -178,12 +181,12 @@ def prelabel_vendor_tree(root):
     if status:
         kmsg(f"RHIZO_MARKER selinuxns=vendor-prelabel-failed status={os.waitstatus_to_exitcode(status)}")
     if device_state != "ok":
-        refuse_device_state_label(RHIZO_DEVICE_STATE_DIR, device_state or f"no-report:{os.waitstatus_to_exitcode(status)}")
-    settle_host_battery(battery_path, battery_state or "no-report")
+        refuse_device_state_label(RHIZO_DEVICE_STATE_DIR, device_state or f"no-output:{os.waitstatus_to_exitcode(status)}")
+    settle_host_battery(battery_path, battery_state or "no-output")
 
 
 def device_state_dir_refusal(path, root):
-    """return why path is not Rhizo's device-state directory"""
+    """return the reason path is not a device-state directory, or None"""
     if os.path.islink(path):
         return "a-symlink"
     real, real_root = os.path.realpath(path), os.path.realpath(root)
@@ -195,7 +198,7 @@ def device_state_dir_refusal(path, root):
 
 
 def read_label(path):
-    """return path's label or its read error"""
+    """return the label of path or the getxattr error"""
     try:
         return os.getxattr(path, "security.selinux").rstrip(b"\0").decode(errors="replace")
     except OSError as e:
@@ -203,7 +206,7 @@ def read_label(path):
 
 
 def refuse_device_state_label(path, label):
-    """refuse the start over a device-state label"""
+    """log RHIZO_MARKER selinuxns=refused for a device-state label and exit"""
     kmsg(f"RHIZO_MARKER selinuxns=refused reason=device-state-label-failed path={path} label={label}")
     os._exit(1)
 
@@ -220,7 +223,7 @@ def label_device_state_dir(path):
 
 
 def label_before_policy(path, value, follow_symlinks=True):
-    """set path's label before the policy loads"""
+    """set the label of path before policy load"""
     if selinux_ns.state()["unshared"]:
         return False
     os.setxattr(path, "security.selinux", value, follow_symlinks=follow_symlinks)
@@ -255,12 +258,28 @@ def mount_marker():
          % (t["mounts"], t["per_file"], t["subtree"], t["apex"], t["syskernel"]))
 
 
+SYS_KERNEL_READONLY = frozenset({"uevent_helper"})
+
+
+def bind_sys_kernel_child(src, dst, name):
+    """bind src at dst, remount a SYS_KERNEL_READONLY child read-only and detach dst on a remount failure"""
+    if not mount(src, dst, None, MS_BIND | MS_REC):
+        return False
+    if name in SYS_KERNEL_READONLY and not mount(None, dst, None,
+                                                 MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC):
+        err = ctypes.get_errno()
+        libc.umount2(dst.encode(), 2)
+        kmsg(f"RHIZO_MARKER syskernel_ro=failed child={name} errno={err} detached=1")
+        return False
+    return True
+
+
 def _sys_kernel_keep():
     """return the /sys/kernel children to bind"""
     try:
         text = guest_files.read("sys-kernel-readers.txt")
     except OSError as e:
-        kmsg(f"sys/kernel subset: reader list unreadable ({e}) -- binding every child")
+        kmsg(f"failed to read sys-kernel-readers.txt ({e})")
         return None
     keep = {l.strip() for l in text.splitlines()
             if l.strip() and not l.startswith("#")}
@@ -268,7 +287,7 @@ def _sys_kernel_keep():
 
 
 def plan_bad_targets(ops, flat):
-    """return the plan's targets under the GSI or the prepared tree"""
+    """return the plan bind targets outside flat or under the GSI or the prepared tree"""
     flat_root = os.path.normpath(flat)
     forbidden = [os.path.normpath(p) for p in (GSI, PREPARED_ROOT)]
     bad = []
@@ -283,7 +302,7 @@ def plan_bad_targets(ops, flat):
 
 
 def plan_flat_tree(lower, upper, flat, readonly_lower=False, dir_binds=False):
-    """plan the flat tree without mounting"""
+    """return the ops, counts and walk errors of the flat tree"""
     ops = []
     counts = {"files": 0, "links": 0, "dirs": 0, "subtrees": 0,
               "dirbinds": 0, "overmounts": 0}
@@ -304,11 +323,11 @@ def plan_flat_tree(lower, upper, flat, readonly_lower=False, dir_binds=False):
                 rel = os.path.dirname(rel) or "."
 
     def _under(rel, d):
-        """return whether rel is d or lies under it"""
+        """return whether rel is d or under d"""
         return rel == d or rel.startswith(d + "/")
 
     def _replaceable(rel):
-        """return whether an upper file lands on a lower file of the same name"""
+        """return whether the upper and lower paths of rel are both regular files"""
         src, low = os.path.join(upper, rel), os.path.join(lower, rel)
         return (os.path.isfile(src) and not os.path.islink(src)
                 and os.path.isfile(low) and not os.path.islink(low))
@@ -397,10 +416,9 @@ def flatten_tree(lower, upper, flat, readonly_lower=False):
         lower, upper, flat, readonly_lower, dir_binds=RHIZO_FLAT_DIR_BINDS)
     bad = plan_bad_targets(ops, flat)
     if bad:
-        kmsg(f"flatten {flat}: REFUSED -- {len(bad)} mount target(s) outside the "
-             f"staging tree: {bad[:4]}")
-        raise RuntimeError(f"flatten_tree({flat}): {len(bad)} mount target(s) "
-                           f"outside the staging tree; first {bad[0]}")
+        kmsg(f"flatten {flat} has {len(bad)} mount targets outside the staging tree ({bad[:4]})")
+        raise RuntimeError(f"flatten_tree({flat}) {len(bad)} mount targets "
+                           f"outside the staging tree, first {bad[0]}")
     n = {"files": 0, "links": 0, "dirs": 0, "subtrees": 0,
          "dirbinds": 0, "overmounts": 0}
     failed = []
@@ -424,28 +442,28 @@ def flatten_tree(lower, upper, flat, readonly_lower=False):
                 mount(None, op["dst"], None, MS_BIND | MS_REMOUNT | MS_RDONLY)
         else:
             failed.append((op["kind"], op["rel"], ctypes.get_errno()))
-            kmsg(f"flatten {flat}: {op['kind']} bind of {op['rel']} FAILED "
+            kmsg(f"flatten {flat} {op['kind']} bind of {op['rel']} failed "
                  f"({os.strerror(ctypes.get_errno())})")
     try:
         label_before_policy(flat, b"u:object_r:system_file:s0\0")
     except OSError as e:
-        kmsg(f"flatten {flat}: flat dir setxattr FAILED: {e}")
-    kmsg(f"{flat}: flat non-overlay rebuild ({n['files']} files, {n['links']} symlinks, "
-         f"{n['dirs']} dirs, {n['subtrees']} whole-subtree binds, "
-         f"{n['dirbinds']} directory binds, {n['overmounts']} overmounts)")
+        kmsg(f"setxattr of {flat} failed ({e})")
+    kmsg(f"flatten {flat} files={n['files']} symlinks={n['links']} "
+         f"dirs={n['dirs']} subtrees={n['subtrees']} "
+         f"dirbinds={n['dirbinds']} overmounts={n['overmounts']}")
     if failed:
-        kmsg(f"flatten {flat}: REFUSED -- {len(failed)} bind(s) failed, first "
-             f"{failed[0][0]} {failed[0][1]}: {os.strerror(failed[0][2])}")
+        kmsg(f"flatten {flat} {len(failed)} binds failed, first "
+             f"{failed[0][0]} {failed[0][1]} ({os.strerror(failed[0][2])})")
         raise RuntimeError(
-            f"flatten_tree({flat}): {len(failed)} bind(s) failed; first "
-            f"{failed[0][0]} bind of {failed[0][1]}: {os.strerror(failed[0][2])}")
+            f"flatten_tree({flat}) {len(failed)} binds failed, first "
+            f"{failed[0][0]} bind of {failed[0][1]} ({os.strerror(failed[0][2])})")
     if walk_errors:
         first = walk_errors[0]
-        kmsg(f"flatten {flat}: source walk hit {len(walk_errors)} error(s), first: "
-             f"{getattr(first, 'filename', '?')}: {first} -- the staged tree is INCOMPLETE")
+        kmsg(f"flatten {flat} os.walk failed on {len(walk_errors)} paths, first "
+             f"{getattr(first, 'filename', '?')} ({first})")
         raise RuntimeError(
-            f"flatten_tree({flat}): source walk denied on {len(walk_errors)} path(s); "
-            f"first {getattr(first, 'filename', '?')}: {first}")
+            f"flatten_tree({flat}) os.walk failed on {len(walk_errors)} paths, "
+            f"first {getattr(first, 'filename', '?')} ({first})")
 def apex_override_targets(override_files, gsi_entries):
     """return the GSI apex entry each override replaces"""
     entries = set(gsi_entries)
@@ -464,18 +482,17 @@ def apex_override_targets(override_files, gsi_entries):
 
 
 def _build_flat_trees():
-    """build the flat trees for /system and its neighbors"""
+    """build the flat trees for /system and /system/apex"""
     net_core_snapshot = {}
     try:
         for name in os.listdir(f"{RUN_ROOT}/net_core_snapshot"):
             net_core_snapshot[name] = open(f"{RUN_ROOT}/net_core_snapshot/{name}").read()
-    except OSError as e: kmsg(f"net.core snapshot read: {e}")
+    except OSError as e: kmsg(f"failed to read the net.core snapshot ({e})")
     if not mount(None,"/",None,MS_PRIVATE|MS_REC):
-        kmsg(f"cannot make / private: {os.strerror(ctypes.get_errno())}")
+        kmsg(f"failed to set MS_PRIVATE on / ({os.strerror(ctypes.get_errno())})")
         os._exit(1)
     if not mount("tmpfs",NEWROOT,"tmpfs",MS_NOSUID|MS_NODEV,"mode=0755"):
-        kmsg(f"cannot mount a new tmpfs at {NEWROOT}: {os.strerror(ctypes.get_errno())} -- "
-             "refusing to build the sandbox")
+        kmsg(f"failed to mount tmpfs at {NEWROOT} ({os.strerror(ctypes.get_errno())})")
         os._exit(1)
     for d in TOPDIRS: os.makedirs(f"{NEWROOT}/{d}", exist_ok=True)
     os.makedirs(f"{NEWROOT}/mnt/vendor", exist_ok=True)
@@ -489,9 +506,9 @@ def _build_flat_trees():
     flatten_tree(GSI, f"{RUN_ROOT}/system_upper", f"{RUN_ROOT}/system_flat",
                  readonly_lower=True)
     if mount(f"{RUN_ROOT}/system_flat", f"{NEWROOT}/system", None, MS_BIND|MS_REC):
-        kmsg("system: flat non-overlay tree bound over the merged path")
+        kmsg("bound system_flat at /system")
     else:
-        kmsg("system: flat bind FAILED -- /system will be empty")
+        kmsg("failed to bind system_flat at /system")
     apex_flat = f"{RUN_ROOT}/system_apex_flat"
     os.makedirs(apex_flat, exist_ok=True)
     os.chmod(apex_flat, 0o755)
@@ -501,15 +518,14 @@ def _build_flat_trees():
         apex_entries = os.listdir(apex_lower)
     except OSError as e:
         apex_entries = []
-        kmsg(f"/system/apex flat rebuild: listing {apex_lower} FAILED: {e}")
+        kmsg(f"failed to list {apex_lower} ({e})")
     try:
         _override_files = sorted(os.listdir(apex_override_dir))
     except OSError:
         _override_files = []
     apex_overrides, _apex_unmatched = apex_override_targets(_override_files, apex_entries)
     for _n in _apex_unmatched:
-        kmsg(f"/system/apex override {_n}: the GSI ships no .capex or .apex of that "
-             f"stem; not bound")
+        kmsg(f"no GSI .capex or .apex for apex override {_n}")
     _apex_expect_size = {}
     for _apex_name in apex_entries:
         if _apex_name in apex_overrides:
@@ -519,7 +535,7 @@ def _build_flat_trees():
         if mount(apex_lower, apex_flat, None, MS_BIND):
             _tally("apex")
         else:
-            kmsg(f"/system/apex dir bind of {apex_lower} FAILED")
+            kmsg(f"failed to bind {apex_lower}")
     else:
         for _apex_name in _apex_expect_size:
             _apex_dst = f"{apex_flat}/{_apex_name}"
@@ -527,7 +543,7 @@ def _build_flat_trees():
             if mount(f"{apex_lower}/{_apex_name}", _apex_dst, None, MS_BIND):
                 _tally("apex")
             else:
-                kmsg(f"/system/apex flat rebuild: bind of {_apex_name} FAILED")
+                kmsg(f"failed to bind /system/apex/{_apex_name}")
     for _apex_name, _override_file in apex_overrides.items():
         apex_override_src = f"{apex_override_dir}/{_override_file}"
         _apex_dst = f"{apex_flat}/{_apex_name}"
@@ -545,23 +561,22 @@ def _build_flat_trees():
                 try:
                     label_before_policy(_apex_dst, _want)
                 except OSError as e:
-                    kmsg(f"/system/apex override setxattr FAILED: {e}")
+                    kmsg(f"setxattr of an apex override failed ({e})")
         else:
-            kmsg(f"/system/apex flat rebuild: bind of override {_override_file} over "
-                 f"{_apex_name} FAILED")
+            kmsg(f"failed to bind apex override {_override_file} over {_apex_name}")
     if RHIZO_APEX_DIR_BIND:
         try:
             _dir_label = os.getxattr(apex_flat, "security.selinux").decode(
                 errors="replace").rstrip("\x00")
         except OSError as e:
             _dir_label = f"unreadable ({e})"
-        kmsg(f"/system/apex dir bind: directory label {_dir_label}, "
-             f"expected u:object_r:system_file:s0")
+        kmsg(f"/system/apex dir bind security.selinux={_dir_label} "
+             f"expected=u:object_r:system_file:s0")
     else:
         try:
             label_before_policy(apex_flat, b"u:object_r:system_file:s0\0")
         except OSError as e:
-            kmsg(f"/system/apex flat dir setxattr FAILED: {e}")
+            kmsg(f"setxattr of system_apex_flat failed ({e})")
     if mount(apex_flat, f"{NEWROOT}/system/apex", None, MS_BIND|MS_REC):
         _tally("apex")
         _apex_bad = []
@@ -570,19 +585,18 @@ def _build_flat_trees():
             try:
                 _got = os.path.getsize(_got_path)
             except OSError as e:
-                _apex_bad.append(f"{_name} (stat FAILED: {e})"); continue
+                _apex_bad.append(f"{_name} stat failed ({e})"); continue
             if _got != _want:
-                _apex_bad.append(f"{_name} (got {_got}B, want {_want}B)")
+                _apex_bad.append(f"{_name} size={_got} expected={_want}")
         if _apex_bad:
-            kmsg(f"/system/apex flat rebuild: {len(_apex_bad)}/{len(_apex_expect_size)} "
-                 f"entries FAILED post-bind size verification through the merged path: "
-                 f"{_apex_bad}")
+            kmsg(f"/system/apex size mismatch on {len(_apex_bad)}/{len(_apex_expect_size)} "
+                 f"entries ({_apex_bad})")
         else:
-            kmsg(f"/system/apex: bound per entry ({len(apex_entries)} "
-                 f"real APEXes, {len(apex_overrides)} bound uncompressed from "
-                 f"apex_override), {len(_apex_expect_size)} entries' sizes verified")
+            kmsg(f"/system/apex entries={len(apex_entries)} "
+                 f"overrides={len(apex_overrides)} "
+                 f"verified={len(_apex_expect_size)}")
     else:
-        kmsg("/system/apex flat rebuild: final bind mount over merged path FAILED")
+        kmsg("failed to bind system_apex_flat at /system/apex")
     return net_core_snapshot
 
 
@@ -594,9 +608,9 @@ def _mount_extra_partitions(net_core_snapshot):
         flatten_tree(se_src, f"{RUN_ROOT}/system_ext_upper",
                      f"{RUN_ROOT}/system_ext_flat", readonly_lower=True)
         if mount(f"{RUN_ROOT}/system_ext_flat", f"{NEWROOT}/system_ext", None, MS_BIND|MS_REC):
-            kmsg("system_ext: flat non-overlay tree bound over the merged path")
+            kmsg("bound system_ext_flat at /system_ext")
         else:
-            kmsg("system_ext: flat bind FAILED -- system_ext will be empty")
+            kmsg("failed to bind system_ext_flat at /system_ext")
     pr_src=f"{GSI}/product"
     if os.path.isdir(pr_src):
         pb_src = product_build_prop_source()
@@ -604,24 +618,22 @@ def _mount_extra_partitions(net_core_snapshot):
             os.makedirs(f"{RUN_ROOT}/product_upper/etc", exist_ok=True)
             import shutil as _sh5
             _sh5.copy(pb_src, f"{RUN_ROOT}/product_upper/etc/build.prop")
-            kmsg("patched product/etc/build.prop staged (config.disable_* appended)")
             if core.camera_armed():
                 dropped = core.drop_prop_line(f"{RUN_ROOT}/product_upper/etc/build.prop", core.CAMERA_SERVICE_DISABLED)
-                kmsg(f"product/etc/build.prop: {core.CAMERA_SERVICE_DISABLED} dropped ({dropped}), devices.camera is on")
+                kmsg(f"deleted {core.CAMERA_SERVICE_DISABLED} from product/etc/build.prop count={dropped}")
         else:
-            kmsg(f"patched product/etc/build.prop NOT FOUND at {pb_src}")
+            kmsg(f"no patched product/etc/build.prop at {pb_src}")
         flatten_tree(pr_src, f"{RUN_ROOT}/product_upper", f"{RUN_ROOT}/product_flat",
                      readonly_lower=True)
         if mount(f"{RUN_ROOT}/product_flat", f"{NEWROOT}/product", None, MS_BIND|MS_REC):
-            kmsg("product: flat non-overlay tree bound over the merged path")
+            kmsg("bound product_flat at /product")
         else:
-            kmsg("product: flat bind FAILED -- product will be empty")
+            kmsg("failed to bind product_flat at /product")
     relabel_flat_trees_now()
     for p in ("vendor","apex","linkerconfig","mnt","data","metadata"):
         mount(f"{RUN_ROOT}/{p}",f"{NEWROOT}/{p}",None,MS_BIND | (MS_REC if p == "vendor" else 0))
     if not mount("tmpfs",f"{NEWROOT}/dev","tmpfs",MS_NOSUID|MS_NOEXEC,"mode=0755"):
-        kmsg(f"cannot mount a new tmpfs at {NEWROOT}/dev: {os.strerror(ctypes.get_errno())} "
-             "-- refusing to mknod device capabilities onto a reused /dev")
+        kmsg(f"failed to mount tmpfs at {NEWROOT}/dev ({os.strerror(ctypes.get_errno())})")
         os._exit(1)
     stage_sysctl_shadows(f"{NEWROOT}/dev")
     try:
@@ -629,7 +641,7 @@ def _mount_extra_partitions(net_core_snapshot):
         for _nm, _vv in net_core_snapshot.items():
             open(f"{NEWROOT}/dev/.rhizo_net_core/{_nm}", "w").write(_vv)
     except OSError as _e:
-        kmsg(f"net.core snapshot stage: {_e}")
+        kmsg(f"failed to stage the net.core snapshot ({_e})")
     for d in ("pts","shm","socket","binderfs"): os.makedirs(f"{NEWROOT}/dev/{d}",exist_ok=True)
     mount("devpts",f"{NEWROOT}/dev/pts","devpts",0,"newinstance,ptmxmode=0666,mode=0620")
     try: os.symlink("pts/ptmx",f"{NEWROOT}/dev/ptmx")
@@ -647,7 +659,6 @@ STAGED_DEV_PERMS = {
     "/dev/random":      (0o666, AID_ROOT, AID_ROOT, "u:object_r:random_device:s0"),
     "/dev/urandom":     (0o666, AID_ROOT, AID_ROOT, "u:object_r:random_device:s0"),
     "/dev/tty":         (0o666, AID_ROOT, AID_ROOT, "u:object_r:owntty_device:s0"),
-    "/dev/console":     (0o600, AID_ROOT, AID_ROOT, "u:object_r:console_device:s0"),
     "/dev/kmsg":        (0o600, AID_ROOT, AID_ROOT, "u:object_r:kmsg_device:s0"),
     "/dev/ashmem":      (0o666, AID_ROOT, AID_ROOT, "u:object_r:ashmem_device:s0"),
     "/dev/uinput":      (0o660, AID_UHID, AID_UHID, "u:object_r:uhid_device:s0"),
@@ -702,7 +713,7 @@ def _devnum(path):
 
 
 def plan_coldboot_nodes(sys_root="/sys", proc_root="/proc"):
-    """return each cold-boot node the sandbox opens"""
+    """return (path, type, major, minor) for each cold-boot node"""
     plan = []
     for name in COLDBOOT_MISC:
         dn = _devnum(f"{sys_root}/class/misc/{name}/dev")
@@ -730,7 +741,7 @@ def plan_coldboot_nodes(sys_root="/sys", proc_root="/proc"):
 
 
 def _stage_node(root, rel, kind, major, minor):
-    """mknod a node with its staged mode, owner and label"""
+    """mknod a node with the STAGED_DEV_PERMS mode, owner and label"""
     mode, uid, gid, label = staged_dev_perms(rel)
     dst = root + rel
     try:
@@ -740,7 +751,7 @@ def _stage_node(root, rel, kind, major, minor):
         os.chown(dst, uid, gid)
         os.chmod(dst, mode)
     except OSError as e:
-        return f"{rel}: {e}"
+        return f"{rel} ({e})"
     try:
         label_before_policy(dst, (label + "\0").encode())
     except OSError:
@@ -749,8 +760,7 @@ def _stage_node(root, rel, kind, major, minor):
 
 
 RAMDISK_PROP = "/second_stage_resources/system/etc/ramdisk/build.prop"
-RAMDISK_PROP_TEXT = ("# Rhizo's first stage staged every /dev node the cold boot would\n"
-                     "# have made, so ueventd skips it (sandbox/rootfs.py).\n"
+RAMDISK_PROP_TEXT = ("# cold boot /dev nodes staged by the Rhizo first stage\n"
                      "ro.cold_boot_done=true\n")
 
 
@@ -863,7 +873,7 @@ def plan_block_uevents(sys_root, devpath=None):
     out = []
 
     def walk(d, lvl):
-        """collect the uevent paths of d and its subdirectories"""
+        """collect the uevent paths of d and the subdirectories of d"""
         ue = os.path.join(d, "uevent")
         if os.path.isfile(ue):
             out.append(os.path.realpath(ue))
@@ -884,7 +894,7 @@ def plan_block_uevents(sys_root, devpath=None):
 
 
 def sink_block_uevents(root, targets):
-    """bind the sink over each target not already on it"""
+    """bind the sink over each target without a sink bind"""
     sink = f"{root}{UEVENT_SINK_DIR}/uevent"
     try:
         st = os.stat(sink)
@@ -916,7 +926,7 @@ def sink_late_block_uevents(root, log, devpath=None):
 
 
 def _shadow_block_uevents():
-    """overmount every uevent vold's cold boot writes"""
+    """overmount each uevent file the vold cold boot writes"""
     sink_dir = NEWROOT + UEVENT_SINK_DIR
     targets = plan_block_uevents(f"{NEWROOT}/sys")
     why, bound, mounted = "", 0, False
@@ -1005,15 +1015,163 @@ def _mask_iio_devices():
     return not failed
 
 
+SYSFS_WRITABLE = (
+    ("tree", "/sys/devices/virtual/block"),
+    ("tree", "/sys/devices/virtual/bdi"),
+    ("tree", "/sys/kernel/wakeup_reasons"),
+    ("file", "/sys/power/wake_lock"),
+    ("file", "/sys/power/wake_unlock"),
+    ("file", "/sys/power/wakeup_count"),
+    ("file", "/sys/module/dm_bufio/parameters/max_age_seconds"),
+    ("file", "/sys/module/dm_verity/parameters/prefetch_cluster"),
+)
+_SYSFS_SEAL_SET = MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV | MOUNT_ATTR_NOEXEC
+
+
+def sysfs_foreign_below(mountinfo_text, sysmp):
+    """return (fstype, mountpoint) for each mount at or under sysmp with an fstype other than sysfs and tmpfs"""
+    out = []
+    prefix = sysmp.rstrip("/") + "/"
+    for line in mountinfo_text.splitlines():
+        if " - " not in line:
+            continue
+        left, right = line.split(" - ", 1)
+        lf, rf = left.split(), right.split()
+        if len(lf) < 5 or not rf:
+            continue
+        mp, fstype = lf[4], rf[0]
+        if (mp == sysmp or mp.startswith(prefix)) and fstype not in ("sysfs", "tmpfs"):
+            out.append((fstype, mp))
+    return out
+
+
+def reopen_sysfs_file(path, log=kmsg):
+    """bind path at path, clear MOUNT_ATTR_RDONLY and return bound, absent or failed"""
+    if not os.path.exists(path):
+        return "absent"
+    if not mount(path, path, None, MS_BIND):
+        log(f"RHIZO_MARKER sysfs_rw=failed path={path} step=bind errno={ctypes.get_errno()}")
+        return "failed"
+    if not mount_setattr(path, attr_clr=MOUNT_ATTR_RDONLY):
+        err = ctypes.get_errno()
+        libc.umount2(path.encode(), 2)
+        log(f"RHIZO_MARKER sysfs_rw=failed path={path} step=clear errno={err} detached=1")
+        return "failed"
+    return "bound"
+
+
+def reopen_sysfs_tree(path, log=kmsg):
+    """bind path at path with MS_REC, clear MOUNT_ATTR_RDONLY recursively and return bound, absent or failed"""
+    if not os.path.isdir(path):
+        return "absent"
+    if not mount(path, path, None, MS_BIND | MS_REC):
+        log(f"RHIZO_MARKER sysfs_rw=failed path={path} step=bind errno={ctypes.get_errno()}")
+        return "failed"
+    if not mount_setattr(path, attr_clr=MOUNT_ATTR_RDONLY, recursive=True):
+        err = ctypes.get_errno()
+        libc.umount2(path.encode(), 2)
+        log(f"RHIZO_MARKER sysfs_rw=failed path={path} step=clear errno={err} detached=1")
+        return "failed"
+    return "bound"
+
+
+def seal_sysfs(newroot=None, log=None, mountinfo_text=None):
+    """set _SYSFS_SEAL_SET recursively on newroot/sys and reopen the SYSFS_WRITABLE paths"""
+    newroot = NEWROOT if newroot is None else newroot
+    log = log or kmsg
+    sysmp = newroot + "/sys"
+    if not RHIZO_SYSFS_RO:
+        log("RHIZO_MARKER sysfs_ro=off reason=knob")
+        return
+    text = mountinfo_text
+    if text is None:
+        try:
+            text = open("/proc/self/mountinfo").read()
+        except OSError as e:
+            log(f"failed to read /proc/self/mountinfo ({e})")
+            text = None
+    if text is not None:
+        foreign = sysfs_foreign_below(text, sysmp)
+        if foreign:
+            fs, mp = foreign[0]
+            log(f"RHIZO_MARKER sysfs_ro=refused reason=foreign-below:{fs}:{mp}")
+            os._exit(1)
+    if not mount_setattr(sysmp, attr_set=_SYSFS_SEAL_SET, recursive=True):
+        log(f"RHIZO_MARKER sysfs_ro=refused reason=seal errno={ctypes.get_errno()}")
+        os._exit(1)
+    bound, absent, failed = [], [], []
+    for kind, rel in SYSFS_WRITABLE:
+        path = newroot + rel
+        status = (reopen_sysfs_tree if kind == "tree" else reopen_sysfs_file)(path, log)
+        if status == "bound":
+            bound.append(rel)
+        elif status == "absent":
+            absent.append(rel)
+            log(f"RHIZO_MARKER sysfs_rw=absent path={rel} kind={kind}")
+        else:
+            failed.append(rel)
+            if kind == "tree":
+                log(f"RHIZO_MARKER sysfs_ro=refused reason=tree:{rel}")
+                os._exit(1)
+    log(f"RHIZO_MARKER sysfs_ro=sealed writable={len(bound)} bound={','.join(bound)} "
+        f"absent={len(absent)} failed={len(failed)}")
+
+
 AID_INPUT = 1004
 INPUT_NODE_MODE = 0o660
 INPUT_NODE_LABEL = "u:object_r:input_device:s0"
 HIDRAW_NODE_LABEL = "u:object_r:hidraw_device:s0"
 _EVENT_DEVNAME = re.compile(r"input/event[0-9]+")
 _HIDRAW_DEVNAME = re.compile(r"hidraw[0-9]+")
+_LEGACY_DEVNAME = re.compile(r"input/(mouse|js)[0-9]+")
 INPUT_MAJOR = 13
 _NODE_KIND = {"evdev": (AID_ROOT, AID_INPUT, INPUT_NODE_LABEL, False),
               "hidraw": (AID_SYSTEM, AID_SYSTEM, HIDRAW_NODE_LABEL, True)}
+_STAGE_DIR_OF = {"evdev": selinux_ns.EVDEV_STAGE_DIR, "hidraw": selinux_ns.HIDRAW_STAGE_DIR}
+_STAGE_FINAL_DIR = {"evdev": "/dev/input", "hidraw": "/dev"}
+STAGE_DIR_MODE = 0o700
+_IN_ONLYDIR, _IN_DONT_FOLLOW = 0x01000000, 0x02000000
+BPF_MAP_UPDATE_ELEM, BPF_MAP_DELETE_ELEM = 2, 3
+DEVICE_MAP_KEY = struct.Struct("<III")
+_DEVCG_CHAR = 2
+
+
+class DeviceFilterMap:
+    """cgroup device filter BPF map of admitted input and hidraw devices"""
+
+    def __init__(self, fd, bpf_fn):
+        """store the map fd and bpf_fn"""
+        self.fd, self.bpf_fn, self.admitted = fd, bpf_fn, set()
+
+    def _elem(self, cmd, dev):
+        """call bpf_fn(cmd) on the char key of dev and return 0 or the errno"""
+        key = ctypes.create_string_buffer(DEVICE_MAP_KEY.pack(_DEVCG_CHAR, os.major(dev), os.minor(dev)),
+                                          DEVICE_MAP_KEY.size)
+        value = ctypes.create_string_buffer(struct.pack("<I", 1), 4)
+        attr = struct.pack("<IxxxxQQQ", self.fd, ctypes.addressof(key),
+                           ctypes.addressof(value) if cmd == BPF_MAP_UPDATE_ELEM else 0, 0)
+        return 0 if self.bpf_fn(cmd, attr) == 0 else (ctypes.get_errno() or errno.EIO)
+
+    def admit(self, dev):
+        """add dev to the map and return 0 or the errno"""
+        err = self._elem(BPF_MAP_UPDATE_ELEM, dev)
+        if not err:
+            self.admitted.add(dev)
+        return err
+
+    def revoke(self, dev):
+        """remove dev from the map and return 0 for success or ENOENT, else the errno"""
+        err = self._elem(BPF_MAP_DELETE_ELEM, dev)
+        if err in (0, errno.ENOENT):
+            self.admitted.discard(dev)
+            return 0
+        return err
+
+    def close(self):
+        """close the map fd"""
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
 
 
 def parse_uevent(buf):
@@ -1033,27 +1191,34 @@ def parse_uevent(buf):
 
 
 def _under(devpath, owned):
-    """return whether devpath is a registered device or sits below one"""
+    """return whether devpath is a registered device or under a registered device"""
     return any(devpath == p or devpath.startswith(p + "/") for p in owned)
 
 
 class InputFence:
     """the publish or withhold decision for a sandbox's uevent stream"""
 
-    def __init__(self, sys_root="/sys"):
-        """start with no registered, seen or published devices"""
+    def __init__(self, sys_root="/sys", devmap=None):
+        """set empty owned, seen and published devices"""
         self.sys_root = sys_root
         self.owned = set()
         self.seen = {}
         self.published = {}
+        self.inodes = {}
+        self.devmap = devmap
+        self.broken = ""
+        self.stage = None
 
     def node_of(self, ev):
-        """return (kind, /dev path, dev_t) for an evdev or hidraw uevent"""
+        """return (kind, /dev path, dev_t) for an evdev, hidraw, mouse or joystick uevent"""
         name = ev.get("DEVNAME", "")
         if _EVENT_DEVNAME.fullmatch(name) and ev.get("SUBSYSTEM") == "input":
             kind = "evdev"
         elif _HIDRAW_DEVNAME.fullmatch(name) and ev.get("SUBSYSTEM") == "hidraw":
             kind = "hidraw"
+        elif (_LEGACY_DEVNAME.fullmatch(name) and ev.get("SUBSYSTEM") == "input"
+              and ev.get("MAJOR") == str(INPUT_MAJOR)):
+            kind = "legacy"
         else:
             return None
         try:
@@ -1080,14 +1245,14 @@ class InputFence:
             return [("withhold", kind, path, dev, f"major={os.major(dev)}")]
         self.seen[devpath] = node
         if _under(devpath, self.owned):
-            return [("publish", kind, path, dev, "registered")]
+            return [("publish", kind, path, dev, "registered", devpath)]
         return [("withhold", kind, path, dev, "unregistered")]
 
     def register(self, verb, devpath):
         """return the decisions for a registry message"""
         if verb == "add":
             self.owned.add(devpath)
-            return [("publish", k, p, d, "registered") for dp, (k, p, d) in self.seen.items()
+            return [("publish", k, p, d, "registered", dp) for dp, (k, p, d) in self.seen.items()
                     if _under(dp, {devpath})]
         if verb == "del":
             self.owned.discard(devpath)
@@ -1097,37 +1262,24 @@ class InputFence:
 
     def publishable(self):
         """return a publish decision for each seen registered node"""
-        return [("publish", k, p, d, "registered") for dp, (k, p, d) in self.seen.items() if _under(dp, self.owned)]
+        return [("publish", k, p, d, "registered", dp) for dp, (k, p, d) in self.seen.items()
+                if _under(dp, self.owned)]
 
-
-class _RelabelRefused(Exception):
-    """Refused label service relabel"""
-
-
-def _service_relabel(labels, path, node, dev, label, ops):
-    """relabel a new node through the label service"""
-    got, ino = labels.set(path, node, dev, ops)
-    if got == label:
-        return ino
-    raise _RelabelRefused(got)
-
-
-def _chown_node_fd(path, dev, ino, uid, gid, fd_ops):
-    """chown the verified node through an O_PATH fd"""
-    fd = fd_ops.open_path(path)
-    try:
-        st = fd_ops.fstat(fd)
-        if not stat.S_ISCHR(st.st_mode) or st.st_rdev != dev or ino not in (None, st.st_ino):
-            return None
-        fd_ops.fchown(fd, uid, gid)
-        fd_ops.fchmod(fd, INPUT_NODE_MODE)
-        return st.st_ino
-    finally:
-        fd_ops.close(fd)
+    def vanished(self):
+        """return a remove decision for each published node with a sysfs dev value other than dev"""
+        gone = []
+        for devpath, (kind, path, dev) in list(self.seen.items()):
+            if self.published.get(path) != dev:
+                continue
+            if _devnum(f"{self.sys_root}{devpath}/dev") == (os.major(dev), os.minor(dev)):
+                continue
+            self.seen.pop(devpath)
+            gone.append(("remove", kind, path, dev, "vanished"))
+        return gone
 
 
 def _make_input_node(path, dev, st, ops):
-    """mknod path or adopt the node ueventd made for dev"""
+    """mknod path unless path is a char node of dev"""
     for retry in (False, True):
         if st is not None:
             ops.unlink(path)
@@ -1148,10 +1300,213 @@ def _make_input_node(path, dev, st, ops):
             return
 
 
+def _admit_device(fence, node, dev, log):
+    """return whether fence.devmap is None or fence.devmap.admit(dev) returns 0"""
+    if fence.devmap is None:
+        return True
+    err = fence.devmap.admit(dev)
+    if err:
+        log(f"RHIZO_MARKER input_fence=failed reason=devfilter:{err} node={node}")
+    return not err
+
+
+def _revoke_device(fence, node, dev, log):
+    """call fence.devmap.revoke(dev) and set fence.broken on an error"""
+    if fence.devmap is None:
+        return
+    err = fence.devmap.revoke(dev)
+    if err:
+        fence.broken = f"devfilter-revoke:{err}"
+        log(f"RHIZO_MARKER input_fence=failed reason={fence.broken} node={node}")
+
+
+class _StageFailed(Exception):
+    """exception for a failed step of a staged publish"""
+
+
+def _break_stage(fence, why, log):
+    """set fence.broken to stage:<why> and log RHIZO_MARKER input_fence=failed"""
+    fence.broken = f"stage:{why}"
+    log(f"RHIZO_MARKER input_fence=failed reason={fence.broken}")
+
+
+def _stage_intact(stage, kind, ops):
+    """return the reason the kind staging directory differs from stage.dirs[kind], or an empty string"""
+    final_fd, stage_fd, ident = stage.dirs[kind]
+    name = _STAGE_DIR_OF[kind].rsplit("/", 1)[1]
+    try:
+        named = ops.stat(name, dir_fd=final_fd, follow_symlinks=False)
+        held = ops.fstat(stage_fd)
+    except OSError as e:
+        return f"gone:{e.errno}"
+    if (named.st_dev, named.st_ino) != ident or (held.st_dev, held.st_ino) != ident:
+        return "replaced"
+    if not stat.S_ISDIR(named.st_mode) or (held.st_uid, held.st_gid, stat.S_IMODE(held.st_mode)) != (0, 0, STAGE_DIR_MODE):
+        return "changed"
+    return ""
+
+
+def _mknodat_fresh(stage_fd, name, dev, ops):
+    """unlink name in stage_fd and mknod name in stage_fd"""
+    try:
+        ops.unlink(name, dir_fd=stage_fd)
+    except FileNotFoundError:
+        pass
+    old = ops.umask(0)
+    try:
+        ops.mknod(name, stat.S_IFCHR | INPUT_NODE_MODE, dev, dir_fd=stage_fd)
+    finally:
+        ops.umask(old)
+
+
+def _drop_staged(final_fd, stage_fd, name, ino, at, ops):
+    """unlink the staged name and the final name with inode ino after a failed publish and return the unlink failures"""
+    left = ""
+    names = ([(stage_fd, "staged")] if at in ("staged", "linked") else []) + \
+            ([(final_fd, "final")] if at == "linked" else [])
+    for dir_fd, which in names:
+        try:
+            if which == "final" and ops.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_ino != ino:
+                continue
+            ops.unlink(name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            left += f" {which}-remove-failed={e.errno}"
+    return left
+
+
+def _replace_same_device(final_fd, name, node, dev, node_fd, log, ops, fd_ops):
+    """unlink a char node of dev at the final name and link node_fd at the final name"""
+    try:
+        there = ops.stat(name, dir_fd=final_fd, follow_symlinks=False)
+    except OSError as e:
+        raise _StageFailed(f"link:{e.errno}")
+    if not stat.S_ISCHR(there.st_mode) or there.st_rdev != dev:
+        raise _StageFailed("occupied")
+    try:
+        ops.unlink(name, dir_fd=final_fd)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        raise _StageFailed(f"replace:{e.errno}")
+    try:
+        fd_ops.link_at(node_fd, final_fd, name)
+    except FileExistsError:
+        raise _StageFailed("occupied")
+    except OSError as e:
+        raise _StageFailed(f"link:{e.errno}")
+    log(f"RHIZO_MARKER input_fence=replaced node={node} dev={os.major(dev)}:{os.minor(dev)}")
+    return "linked"
+
+
+def _make_staged_node(fence, node, kind, dev, st, log, ops, labels, fd_ops):
+    """mknod the node in the staging directory, set the label and owner and link the node at the final name"""
+    stage = fence.stage if fence is not None else None
+    why = "none" if stage is None else _stage_intact(stage, kind, ops)
+    if why:
+        if fence is not None:
+            _break_stage(fence, f"{kind}:{why}", log)
+        return False
+    final_fd, stage_fd, _ident = stage.dirs[kind]
+    uid, gid, label, _host_relabel = _NODE_KIND[kind]
+    name = node.rsplit("/", 1)[1]
+    staged = f"{_STAGE_DIR_OF[kind]}/{name}"
+    node_fd, ino, at = -1, None, ""
+    try:
+        try:
+            _mknodat_fresh(stage_fd, name, dev, ops)
+            at = "staged"
+            node_fd = fd_ops.open_path_at(stage_fd, name)
+            made = fd_ops.fstat(node_fd)
+        except OSError as e:
+            raise _StageFailed(f"mknod:{e.errno}")
+        if not stat.S_ISCHR(made.st_mode) or made.st_rdev != dev or made.st_nlink != 1:
+            raise _StageFailed("label:<not-the-node>")
+        ino = made.st_ino
+        got = labels.set(staged, dev, ino, made.st_dev)
+        if got != label:
+            raise _StageFailed(f"relabel:{got}")
+        try:
+            fd_ops.fchown(node_fd, uid, gid)
+            fd_ops.fchmod(node_fd, INPUT_NODE_MODE)
+        except OSError as e:
+            raise _StageFailed(f"chown:{e.errno}")
+        try:
+            if st is not None:
+                ops.unlink(name, dir_fd=final_fd)
+            fd_ops.link_at(node_fd, final_fd, name)
+            at = "linked"
+        except FileExistsError:
+            at = _replace_same_device(final_fd, name, node, dev, node_fd, log, ops, fd_ops)
+        except OSError as e:
+            raise _StageFailed(f"link:{e.errno}")
+        try:
+            final = ops.stat(name, dir_fd=final_fd, follow_symlinks=False)
+        except OSError as e:
+            raise _StageFailed(f"final:{e.errno}")
+        if not stat.S_ISCHR(final.st_mode) or final.st_rdev != dev or final.st_ino != ino:
+            raise _StageFailed("label:<not-the-node>")
+        try:
+            ops.unlink(name, dir_fd=stage_fd)
+        except OSError as e:
+            raise _StageFailed(f"stage-unlink:{e.errno}")
+        fence.inodes[node] = (final.st_dev, final.st_ino)
+    except _StageFailed as f:
+        log(f"RHIZO_MARKER input_fence=failed reason={f.args[0]} node={node}"
+            f"{_drop_staged(final_fd, stage_fd, name, ino, at, ops)}")
+        return False
+    finally:
+        if node_fd >= 0:
+            fd_ops.close(node_fd)
+    return True
+
+
+def _make_and_label_node(node, path, dev, st, kind, log, ops, labels, fd_ops, fence=None):
+    """mknod, relabel and chown the node and return whether each step succeeded"""
+    if labels is not None:
+        if labels.unusable():
+            log(f"RHIZO_MARKER input_fence=failed reason=label:{labels.unusable()} node={node}")
+            return False
+        return _make_staged_node(fence, node, kind, dev, st, log, ops, labels, fd_ops or selinux_ns.NODE_FD)
+    uid, gid, label, host_relabel = _NODE_KIND[kind]
+    try:
+        _make_input_node(path, dev, st, ops)
+    except OSError as e:
+        log(f"RHIZO_MARKER input_fence=failed reason=mknod:{e.errno} node={node}")
+        return False
+    try:
+        if host_relabel:
+            ops.setxattr(path, "security.selinux", (label + "\0").encode())
+    except OSError as e:
+        try:
+            ops.unlink(path)
+            gone = ""
+        except OSError as u:
+            gone = f" remove-failed={u.errno}"
+        log(f"RHIZO_MARKER input_fence=failed reason=relabel:{e.errno} node={node}{gone}")
+        return False
+    try:
+        ops.chown(path, uid, gid)
+        ops.chmod(path, INPUT_NODE_MODE)
+    except OSError as e:
+        log(f"RHIZO_MARKER input_fence=failed reason=chown:{e.errno} node={node}")
+        return False
+    try:
+        got = ops.getxattr(path, "security.selinux").decode(errors="replace").rstrip("\0")
+    except OSError:
+        got = "<unread>"
+    if got != label:
+        log(f"RHIZO_MARKER input_fence=failed reason=label:{got} node={node}")
+        return False
+    return True
+
+
 def apply_input_decision(fence, decision, root="", log=None, ops=os, labels=None, fd_ops=None):
     """make or remove a node under root"""
     log = log or kmsg
-    op, kind, node, dev, why = decision
+    op, kind, node, dev, why, *extra = decision
+    devpath = extra[0] if extra else ""
     path = root + node
     try:
         st = ops.lstat(path)
@@ -1167,107 +1522,205 @@ def apply_input_decision(fence, decision, root="", log=None, ops=os, labels=None
                                       "published" if node in fence.published else "permissive-window")
             except OSError as e:
                 gone = f" remove-failed={e.errno}"
+        fence.inodes.pop(node, None)
         fence.published.pop(node, None)
+        _revoke_device(fence, node, dev, log)
         if op == "withhold":
             log(f"RHIZO_MARKER input_fence=withheld node={node} "
                 f"dev={os.major(dev)}:{os.minor(dev)} {why}{gone}")
         return
-    if ours:
+    if not _admit_device(fence, node, dev, log):
+        return
+    if devpath:
+        cur = _devnum(f"{fence.sys_root}{devpath}/dev")
+        if cur is not None and cur != (os.major(dev), os.minor(dev)):
+            _revoke_device(fence, node, dev, log)
+            log(f"RHIZO_MARKER input_fence=withheld node={node} "
+                f"dev={os.major(dev)}:{os.minor(dev)} reason=sysfs-reused")
+            return
+    if kind == "legacy":
+        fence.published[node] = dev
+        log(f"RHIZO_MARKER input_fence=admitted node={node}")
+        return
+    if ours and (labels is None or fence.inodes.get(node) == (st.st_dev, st.st_ino)):
         fence.published[node] = dev
         return
-    uid, gid, label, relabel = _NODE_KIND[kind]
-    if labels is not None and labels.unusable():
-        log(f"RHIZO_MARKER input_fence=failed reason=label:{labels.unusable()} node={node}")
-        return
-    try:
-        _make_input_node(path, dev, st, ops)
-    except OSError as e:
-        log(f"RHIZO_MARKER input_fence=failed reason=mknod:{e.errno} node={node}")
-        return
-    set_ino = None
-    try:
-        if relabel and labels is None:
-            ops.setxattr(path, "security.selinux", (label + "\0").encode())
-        elif relabel:
-            set_ino = _service_relabel(labels, path, node, dev, label, ops)
-    except (OSError, _RelabelRefused) as e:
-        try:
-            ops.unlink(path)
-            gone = ""
-        except OSError as u:
-            gone = f" remove-failed={u.errno}"
-        why = e.errno if isinstance(e, OSError) else e.args[0]
-        log(f"RHIZO_MARKER input_fence=failed reason=relabel:{why} node={node}{gone}")
-        return
-    node_ino = None
-    try:
-        if labels is None:
-            ops.chown(path, uid, gid)
-            ops.chmod(path, INPUT_NODE_MODE)
-        else:
-            node_ino = _chown_node_fd(path, dev, set_ino, uid, gid, fd_ops or selinux_ns.NODE_FD)
-    except OSError as e:
-        log(f"RHIZO_MARKER input_fence=failed reason=chown:{e.errno} node={node}")
-        return
-    if labels is not None and node_ino is None:
-        got = "<not-the-node>"
-    elif set_ino is not None:
-        got = label
-    elif labels is not None:
-        got = labels.read(path, node, dev, ops, node_ino)
-    else:
-        try:
-            got = ops.getxattr(path, "security.selinux").decode(errors="replace").rstrip("\0")
-        except OSError:
-            got = "<unread>"
-    if got != label:
-        log(f"RHIZO_MARKER input_fence=failed reason=label:{got} node={node}")
+    if not _make_and_label_node(node, path, dev, st, kind, log, ops, labels, fd_ops, fence):
+        _revoke_device(fence, node, dev, log)
         return
     fence.published[node] = dev
     log(f"RHIZO_MARKER input_fence=published node={node}")
 
 
-def _host_node_paths(root, ops):
-    """return every input and usb node path under root"""
-    out, usb = [], f"{root}/dev/bus/usb"
-    for d, pattern in ((root + "/dev/input", r"event[0-9]+"), (root + "/dev", r"hidraw[0-9]+")):
-        try:
-            out += [f"{d}/{n}" for n in ops.listdir(d) if re.fullmatch(pattern, n)]
-        except OSError:
-            pass
+def _usb_node_entries(root, ops, fds):
+    """return (bus fd, name, node) for the entries of each /dev/bus/usb/<bus> opened with O_NOFOLLOW"""
+    out = []
     try:
-        buses = ops.listdir(usb)
+        fds.append(_open_dir_at(None, root + "/dev/bus", ops, os.O_PATH))
+        fds.append(_open_dir_at(fds[-1], "usb", ops))
+        buses = ops.listdir(fds[-1])
     except OSError:
-        buses = []
+        return out
+    usb_fd = fds[-1]
     for bus in buses:
         try:
-            out += [f"{usb}/{bus}/{n}" for n in ops.listdir(f"{usb}/{bus}")]
+            fds.append(_open_dir_at(usb_fd, bus, ops))
+            out += [(fds[-1], n, f"/dev/bus/usb/{bus}/{n}") for n in ops.listdir(fds[-1])]
         except OSError:
             continue
     return out
 
 
-def reconcile_input(fence, root="", log=None, ops=os):
-    """remove every input node this fence did not publish"""
-    log = log or kmsg
-    for path in _host_node_paths(root, ops):
-        node = path[len(root):]
+def _host_node_entries(root, ops, fds):
+    """return (directory fd or None, name or path, node) for the input and usb nodes under root"""
+    out = []
+    for d, pattern in (("/dev/input", r"event[0-9]+"), ("/dev", r"hidraw[0-9]+")):
         try:
-            st = ops.lstat(path)
+            out += [(None, f"{root}{d}/{n}", f"{d}/{n}") for n in ops.listdir(root + d) if re.fullmatch(pattern, n)]
         except OSError:
-            continue
-        if not stat.S_ISCHR(st.st_mode) or fence.published.get(node) == st.st_rdev:
-            continue
-        try:
-            ops.unlink(path)
-            log(f"RHIZO_MARKER input_fence=withheld node={node} "
-                f"dev={os.major(st.st_rdev)}:{os.minor(st.st_rdev)} removed=reconcile")
-        except OSError as e:
-            log(f"RHIZO_MARKER input_fence=failed reason=unlink:{e.errno} node={node}")
+            pass
+    return out + _usb_node_entries(root, ops, fds)
+
+
+def reconcile_input(fence, root="", log=None, ops=os):
+    """remove the input nodes outside fence.published"""
+    log = log or kmsg
+    fds = []
+    try:
+        for dir_fd, name, node in _host_node_entries(root, ops, fds):
+            try:
+                st = ops.lstat(name) if dir_fd is None else ops.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISCHR(st.st_mode) or fence.published.get(node) == st.st_rdev:
+                continue
+            try:
+                if dir_fd is None:
+                    ops.unlink(name)
+                else:
+                    ops.unlink(name, dir_fd=dir_fd)
+                log(f"RHIZO_MARKER input_fence=withheld node={node} "
+                    f"dev={os.major(st.st_rdev)}:{os.minor(st.st_rdev)} removed=reconcile")
+            except OSError as e:
+                log(f"RHIZO_MARKER input_fence=failed reason=unlink:{e.errno} node={node}")
+    finally:
+        for fd in fds:
+            ops.close(fd)
+    if getattr(fence, "stage", None) is not None:
+        _sweep_stage(fence, log, ops)
     if getattr(fence, "watch", None) is not None:
         for d in ("/dev/bus", "/dev/bus/usb") + tuple(
                 "/dev/bus/usb/" + b for b in _listdir_or_empty(ops, root + "/dev/bus/usb")):
-            libc.inotify_add_watch(fence.watch, (root + d).encode(), 0x100 | 0x80)
+            libc.inotify_add_watch(fence.watch, (root + d).encode(), 0x100 | 0x80 | _IN_ONLYDIR | _IN_DONT_FOLLOW)
+
+
+class InputStage:
+    """staging directory fds and final directory fds of the input fence"""
+
+    def __init__(self):
+        """set empty dirs"""
+        self.dirs = {}
+
+    def close(self, ops=os):
+        """close the fds in dirs"""
+        for final_fd, stage_fd, _ident in self.dirs.values():
+            for fd in (final_fd, stage_fd):
+                if fd >= 0:
+                    ops.close(fd)
+        self.dirs = {}
+
+
+def _open_dir_at(dir_fd, name, ops, flags=os.O_RDONLY):
+    """open name in dir_fd with O_DIRECTORY and O_NOFOLLOW"""
+    return ops.open(name, flags | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+
+
+def _roots_0700(st, final_st):
+    """return whether st is a 0700 directory of uid 0 and gid 0 on the final_st device"""
+    return (stat.S_ISDIR(st.st_mode) and (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) == (0, 0, STAGE_DIR_MODE)
+            and st.st_dev == final_st.st_dev)
+
+
+def _clear_left_stage(final_fd, name, final_st, ops):
+    """unlink the entries of a leftover staging directory and rmdir the directory"""
+    fd = _open_dir_at(final_fd, name, ops)
+    try:
+        if not _roots_0700(ops.fstat(fd), final_st):
+            return "left:not-roots-0700"
+        for entry in ops.listdir(fd):
+            ops.unlink(entry, dir_fd=fd)
+    finally:
+        ops.close(fd)
+    ops.rmdir(name, dir_fd=final_fd)
+    return ""
+
+
+def _prepare_stage_dir(stage, kind, root, ops):
+    """create and open the kind staging directory in stage.dirs and return the failure reason, or an empty string"""
+    name = _STAGE_DIR_OF[kind].rsplit("/", 1)[1]
+    try:
+        final_fd = _open_dir_at(None, root + _STAGE_FINAL_DIR[kind], ops, os.O_PATH)
+    except OSError as e:
+        return f"final:{e.errno}"
+    stage.dirs[kind] = (final_fd, -1, None)
+    try:
+        final_st = ops.fstat(final_fd)
+        try:
+            left = ops.stat(name, dir_fd=final_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            left = None
+        if left is not None:
+            why = "left:not-a-directory" if not stat.S_ISDIR(left.st_mode) else _clear_left_stage(final_fd, name, final_st, ops)
+            if why:
+                return why
+        ops.mkdir(name, STAGE_DIR_MODE, dir_fd=final_fd)
+        fd = _open_dir_at(final_fd, name, ops)
+        stage.dirs[kind] = (final_fd, fd, None)
+        ops.fchown(fd, 0, 0)
+        ops.fchmod(fd, STAGE_DIR_MODE)
+        st = ops.fstat(fd)
+        named = ops.stat(name, dir_fd=final_fd, follow_symlinks=False)
+    except OSError as e:
+        return f"{e.errno}"
+    if not _roots_0700(st, final_st) or (named.st_dev, named.st_ino) != (st.st_dev, st.st_ino):
+        return "not-roots-0700"
+    stage.dirs[kind] = (final_fd, fd, (st.st_dev, st.st_ino))
+    return ""
+
+
+def prepare_input_stage(root="", log=None, ops=os):
+    """return an InputStage of the evdev and hidraw staging directories, or None"""
+    log = log or kmsg
+    stage = InputStage()
+    for kind in ("evdev", "hidraw"):
+        why = _prepare_stage_dir(stage, kind, root, ops)
+        if why:
+            log(f"RHIZO_MARKER input_fence=failed reason=stage:{why} path={_STAGE_DIR_OF[kind]}")
+            stage.close(ops)
+            return None
+    return stage
+
+
+def _sweep_stage(fence, log, ops):
+    """unlink the entries of the staging directories through stage_fd and call _break_stage on a failure"""
+    for kind, (_final_fd, stage_fd, _ident) in list(fence.stage.dirs.items()):
+        why = _stage_intact(fence.stage, kind, ops)
+        if why:
+            _break_stage(fence, f"{kind}:{why}", log)
+            return
+        try:
+            entries = ops.listdir(stage_fd)
+        except OSError as e:
+            _break_stage(fence, f"{kind}:list:{e.errno}", log)
+            return
+        for entry in entries:
+            staged = f"{_STAGE_DIR_OF[kind]}/{entry}"
+            try:
+                ops.unlink(entry, dir_fd=stage_fd)
+            except OSError as e:
+                _break_stage(fence, f"{kind}:entry:{e.errno}:{entry}", log)
+                return
+            log(f"RHIZO_MARKER input_fence=withheld node={staged} removed=reconcile")
 
 
 def _listdir_or_empty(ops, d):
@@ -1304,21 +1757,21 @@ def _drop_reason(msg):
 
 
 class LabelClient:
-    """Fence connection to the label service"""
+    """fence connection to the label service"""
 
     def __init__(self, listener, log=None, gone=""):
-        """store the listener, the log and why the client is gone"""
+        """store the listener, the log and the gone reason"""
         self.listener, self.conn, self.ready, self.gone = listener, None, False, gone
         self.deadline = self.deadline_s = None
         self.log = log or kmsg
 
     def start_deadline(self, seconds):
-        """set the deadline seconds from now"""
+        """set the deadline to time.monotonic() + seconds"""
         self.deadline_s = seconds
         self.deadline = time.monotonic() + seconds
 
     def _expire(self):
-        """drop the client past its deadline"""
+        """drop the client after the deadline"""
         if not self.ready and not self.gone and self.deadline is not None and time.monotonic() >= self.deadline:
             self._drop("never-connected" if self.conn is None else "never-ready")
 
@@ -1341,7 +1794,7 @@ class LabelClient:
         return not self.ready and not self.gone
 
     def unusable(self):
-        """return why no label can be read, or empty"""
+        """return the label service pending or gone reason, or an empty string"""
         if self.pending():
             return "<label-service-pending>"
         return f"<label-service-{self.gone}>" if self.gone else ""
@@ -1353,14 +1806,13 @@ class LabelClient:
                 s.close()
 
     def _drop(self, why):
-        """close the label service sockets and log why"""
+        """close the label service sockets and log the reason"""
         self.gone = why
         self.close()
-        self.log(f"RHIZO_MARKER input_fence=label-service state=gone reason={why}"
-                 " -- no evdev node is published from here on")
+        self.log(f"RHIZO_MARKER input_fence=label-service state=gone reason={why}")
 
     def handle(self):
-        """accept the label service connection or read its ready line"""
+        """call accept on the label service listener or read the ready line"""
         try:
             if self.conn is None:
                 conn, _ = self.listener.accept()
@@ -1385,34 +1837,22 @@ class LabelClient:
         self._drop(_drop_reason(msg))
         return False
 
-    def read(self, path, node, dev, ops, ino=None):
-        """return the label service's read-back of node, or <why>"""
-        return self._ask("", path, node, dev, ops, ino)[0]
-
-    def set(self, path, node, dev, ops):
-        """send a set request for node"""
-        return self._ask("set ", path, node, dev, ops)
-
-    def _ask(self, verb, path, node, dev, ops, ino=None):
-        """return the reply and inode for a request"""
+    def set(self, node, dev, ino, sdev):
+        """write a set line for node to the label service and return the label reply, or <reason>"""
         import select
         try:
-            ino = ops.lstat(path).st_ino if ino is None else ino
-        except OSError as e:
-            return f"<lstat:{e.errno}>", None
-        try:
-            self.conn.send(f"{verb}{node} {os.major(dev)}:{os.minor(dev)} {ino}".encode())
+            self.conn.send(f"set {node} {os.major(dev)}:{os.minor(dev)} {ino} {sdev}".encode())
             ready, _, _ = select.select([self.conn], [], [], LABEL_REPLY_S)
             reply = self.conn.recv(LABEL_MSG_MAX) if ready else None
         except OSError as e:
             self._drop(f"socket:{e.errno}")
-            return self.unusable(), ino
+            return self.unusable()
         if reply and reply.startswith(b"label "):
-            return _marker_text(reply[len(b"label "):].decode(errors="replace"), LABEL_TEXT_MAX), ino
+            return _marker_text(reply[len(b"label "):].decode(errors="replace"), LABEL_TEXT_MAX)
         if reply and reply.startswith((b"refused:", b"failed:")):
-            return f"<{_marker_text(reply.decode(errors='replace'), LABEL_TEXT_MAX)}>", ino
+            return f"<{_marker_text(reply.decode(errors='replace'), LABEL_TEXT_MAX)}>"
         self._drop(_drop_reason(reply))
-        return self.unusable(), ino
+        return self.unusable()
 
 
 class FenceLoop:
@@ -1431,7 +1871,7 @@ class FenceLoop:
         self.done = False
 
     def fds(self):
-        """return every fd the loop selects on"""
+        """return the fds the loop selects on"""
         return [self.sock] + ([self.watch_fd] if self.watch_fd is not None else []) + \
                ([self.registry] if self.registry is not None else []) + self.conns + \
                (self.labels.fds() if self.labels is not None else [])
@@ -1441,12 +1881,18 @@ class FenceLoop:
         return self.labels.wait_s() if self.labels is not None else None
 
     def _apply(self, decisions):
-        """apply each fence decision or defer its publish"""
+        """apply each fence decision or defer the publish, and set done on fence.broken"""
+        if self.fence.broken:
+            self.done = True
+            return
         for d in decisions:
             if d[0] == "publish" and self.labels is not None and self.labels.pending():
                 self.log(f"RHIZO_MARKER input_fence=deferred node={d[2]} reason=label-service-pending")
                 continue
             apply_input_decision(self.fence, d, self.root, self.log, self.ops, self.labels, self.fd_ops)
+            if self.fence.broken:
+                self.done = True
+                return
 
     def handle(self, ready):
         """read uevents and registrations off the ready fds"""
@@ -1459,6 +1905,9 @@ class FenceLoop:
             except BlockingIOError:
                 pass
             reconcile_input(fence, root, log, ops)
+            if fence.broken:
+                self.done = True
+                return
         if self.registry is not None and self.registry in ready:
             conn, _ = self.registry.accept()
             if _peer_uid(conn) != self.registrar_uid:
@@ -1483,11 +1932,14 @@ class FenceLoop:
             buf, addr = self.sock.recvfrom(65536)
         except OSError as e:
             if e.errno == errno.ENOBUFS:
-                log("RHIZO_MARKER input_fence=failed reason=overrun -- a uevent was lost, reconciling")
+                log("RHIZO_MARKER input_fence=failed reason=overrun")
+                self._apply(fence.vanished())
                 reconcile_input(fence, root, log, ops)
+                if fence.broken:
+                    self.done = True
                 sink_late_block_uevents(root, log)
                 return
-            log(f"RHIZO_MARKER input_fence=failed reason=recv:{e.errno} -- the fence stops")
+            log(f"RHIZO_MARKER input_fence=failed reason=recv:{e.errno}")
             self.done = True
             return
         if not buf:
@@ -1503,16 +1955,16 @@ class FenceLoop:
             self._apply(fence.decide(ev))
 
     def fail(self, why):
-        """stop the fence and withdraw every node it published"""
+        """stop the fence and remove the published nodes"""
         self.done = True
-        self.log(f"RHIZO_MARKER input_fence=failed reason={why} -- withdrawing its nodes and killing the sandbox")
+        self.log(f"RHIZO_MARKER input_fence=failed reason={why}")
         for node, dev in list(self.fence.published.items()):
             apply_input_decision(self.fence, ("withhold", None, node, dev, "fence-failed"),
                                  self.root, self.log, self.ops)
 
 
 def relay_step(relay, method, *args, default=None):
-    """run a side relay method without raising into the fence"""
+    """call getattr(relay, method)(*args) and call relay.stop on an exception"""
     if relay is None or relay.done:
         return default
     try:
@@ -1526,7 +1978,7 @@ def relay_step(relay, method, *args, default=None):
 
 
 def fence_wait_step(holder_fd, loop, timeout, kill_holder, select_fn=None, relay=None):
-    """select once on the pidfd, fence and relay descriptors"""
+    """call select on the pidfd, fence and relay descriptors"""
     if select_fn is None:
         import select
         select_fn = select.select
@@ -1566,12 +2018,11 @@ def fence_wait_step(holder_fd, loop, timeout, kill_holder, select_fn=None, relay
     return False
 
 
-def start_fence_or_kill(registry, kill_holder, start=None, log=None, labels=None):
+def start_fence_or_kill(registry, kill_holder, start=None, log=None, labels=None, devmap=None):
     """return the FenceLoop for g's wait"""
-    loop = start(registry) if start is not None else start_input_fence(registry, labels=labels)
+    loop = start(registry) if start is not None else start_input_fence(registry, labels=labels, devmap=devmap)
     if loop is None:
-        (log or kmsg)("RHIZO_MARKER input_fence=failed reason=start"
-                      " -- killing the sandbox")
+        (log or kmsg)("RHIZO_MARKER input_fence=failed reason=start")
         kill_holder()
     return loop
 
@@ -1612,7 +2063,7 @@ def cuse_devnum(name, sys_root="/sys", wait_s=10):
             return os.makedev(int(major), int(minor))
         except (OSError, ValueError):
             if time.monotonic() >= deadline:
-                raise OSError(errno.ENOENT, f"no {path} after {wait_s}s -- is rhizo-inputd-uhid@ running?")
+                raise OSError(errno.ENOENT, f"no {path} after {wait_s}s")
             time.sleep(0.1)
 
 
@@ -1668,6 +2119,11 @@ def uinput_notify_program(action=_SECCOMP_RET_USER_NOTIF):
     return _assemble_bpf(prog)
 
 
+BPF_SYSCALL_NR = {0xc000003e: (321, 0x40000000 | 321), 0x40000003: (357,),
+                  0xc00000b7: (280,), 0x40000028: (386,)}
+BPF_BY_ID_CMDS = (13, 14, 30)
+
+
 def open_by_handle_program():
     """return the BPF program failing open_by_handle_at with EPERM"""
     prog = [("ld", 4)]
@@ -1680,25 +2136,78 @@ def open_by_handle_program():
     return _assemble_bpf(prog)
 
 
+def bpf_by_id_program():
+    """return the BPF program failing a bpf() fd-by-id lookup with EPERM"""
+    prog = [("ld", 4)]
+    for i, (arch, nrs) in enumerate(BPF_SYSCALL_NR.items()):
+        prog += [("jeq", arch, f"arch{i}", f"next{i}"), ("label", f"arch{i}"), ("ld", 0)]
+        for j, nr in enumerate(nrs):
+            prog += [("jeq", nr, "cmd", f"nr{i}.{j}"), ("label", f"nr{i}.{j}")]
+        prog += [("ret", _SECCOMP_RET_ALLOW), ("label", f"next{i}")]
+    prog += [("ret", _SECCOMP_RET_ALLOW), ("label", "cmd"), ("ld", 16)]
+    for n, cmd in enumerate(BPF_BY_ID_CMDS):
+        prog += [("jeq", cmd, "deny", f"cmd{n}"), ("label", f"cmd{n}")]
+    prog += [("ret", _SECCOMP_RET_ALLOW), ("label", "deny"), ("ret", _SECCOMP_RET_ERRNO | errno.EPERM)]
+    return _assemble_bpf(prog)
+
+
+MOUNT_SETATTR_SECCOMP_NR = {0xc000003e: (442, 0x40000000 | 442), 0x40000003: (442,),
+                            0xc00000b7: (442,), 0x40000028: (442,)}
+
+
+def mount_setattr_program():
+    """return the BPF program failing mount_setattr with EPERM"""
+    prog = [("ld", 4)]
+    for i, (arch, nrs) in enumerate(MOUNT_SETATTR_SECCOMP_NR.items()):
+        prog += [("jeq", arch, f"arch{i}", f"next{i}"), ("label", f"arch{i}"), ("ld", 0)]
+        for j, nr in enumerate(nrs):
+            prog += [("jeq", nr, "deny", f"nr{i}.{j}"), ("label", f"nr{i}.{j}")]
+        prog += [("ret", _SECCOMP_RET_ALLOW), ("label", f"next{i}")]
+    prog += [("ret", _SECCOMP_RET_ALLOW), ("label", "deny"), ("ret", _SECCOMP_RET_ERRNO | errno.EPERM)]
+    return _assemble_bpf(prog)
+
+
+PERF_EVENT_OPEN_NR = {0xc000003e: (298, 0x40000000 | 298), 0x40000003: (336,),
+                      0xc00000b7: (241,), 0x40000028: (364,)}
+
+
+def perf_event_open_program():
+    """return the BPF program failing perf_event_open with EPERM"""
+    prog = [("ld", 4)]
+    for i, (arch, nrs) in enumerate(PERF_EVENT_OPEN_NR.items()):
+        prog += [("jeq", arch, f"arch{i}", f"next{i}"), ("label", f"arch{i}"), ("ld", 0)]
+        for j, nr in enumerate(nrs):
+            prog += [("jeq", nr, "deny", f"nr{i}.{j}"), ("label", f"nr{i}.{j}")]
+        prog += [("ret", _SECCOMP_RET_ALLOW), ("label", f"next{i}")]
+    prog += [("ret", _SECCOMP_RET_ALLOW), ("label", "deny"), ("ret", _SECCOMP_RET_ERRNO | errno.EPERM)]
+    return _assemble_bpf(prog)
+
+
 def install_handle_filter(log=None):
-    """install the open_by_handle_at seccomp filter on this task"""
+    """install the open_by_handle_at, bpf fd-by-id, perf_event_open and mount_setattr seccomp filters on the calling task"""
     log = log or kmsg
-    prog = open_by_handle_program()
-    buf = ctypes.create_string_buffer(prog, len(prog))
-    fprog = struct_pack_fprog(len(prog) // 8, ctypes.addressof(buf))
     nr = SECCOMP_NR.get(HOST_ARCH)
     if nr is None:
         log(f"RHIZO_MARKER handle_filter=failed reason=no-seccomp-nr arch={HOST_ARCH}")
         return False
-    if libc.syscall(nr, _SECCOMP_SET_MODE_FILTER, 0, fprog) < 0:
-        log(f"RHIZO_MARKER handle_filter=failed errno={ctypes.get_errno()}")
-        return False
-    log("RHIZO_MARKER handle_filter=installed")
+    progs = [(open_by_handle_program(), "open_by_handle_at"), (bpf_by_id_program(), "bpf-by-id")]
+    if RHIZO_PERF_FILTER:
+        progs.append((perf_event_open_program(), "perf_event_open"))
+    if RHIZO_SYSFS_RO:
+        progs.append((mount_setattr_program(), "mount_setattr"))
+    for prog, rule in progs:
+        buf = ctypes.create_string_buffer(prog, len(prog))
+        fprog = struct_pack_fprog(len(prog) // 8, ctypes.addressof(buf))
+        if libc.syscall(nr, _SECCOMP_SET_MODE_FILTER, 0, fprog) < 0:
+            log(f"RHIZO_MARKER handle_filter=failed errno={ctypes.get_errno()} rule={rule}")
+            return False
+    log(f"RHIZO_MARKER handle_filter=installed perf_filter={'on' if RHIZO_PERF_FILTER else 'off'} "
+        f"sysfs_filter={'on' if RHIZO_SYSFS_RO else 'off'}")
     return True
 
 
 def start_input_units(sandbox_id, log=None):
-    """start this instance's two rhizo-inputd units"""
+    """start rhizo-inputd@ and rhizo-inputd-uhid@ for sandbox_id"""
     log = log or kmsg
     units = [f"rhizo-inputd@{sandbox_id}.service", f"rhizo-inputd-uhid@{sandbox_id}.service"]
     try:
@@ -1712,7 +2221,7 @@ def start_input_units(sandbox_id, log=None):
 
 
 def connect_input_supervisor(sandbox_id, log=None, path=None, wait_s=10):
-    """connect to this instance's rhizo-inputd supervisor"""
+    """connect to the rhizo-inputd supervisor.sock for sandbox_id"""
     import socket
     log = log or kmsg
     path = path or f"{input_run_dir(sandbox_id)}/supervisor.sock"
@@ -1732,7 +2241,7 @@ def connect_input_supervisor(sandbox_id, log=None, path=None, wait_s=10):
 
 
 def install_uinput_filter(sup, log=None):
-    """install the seccomp filter sending UI_DEV_CREATE to the supervisor"""
+    """install the UI_DEV_CREATE seccomp filter and pass the listener fd to the supervisor"""
     import socket
     log = log or kmsg
     notify = sup is not None
@@ -1749,7 +2258,7 @@ def install_uinput_filter(sup, log=None):
         log(f"RHIZO_MARKER input_owner=failed reason=seccomp:{ctypes.get_errno()}")
         return ""
     if not notify:
-        log("RHIZO_MARKER input_owner=refusing reason=no-supervisor -- every UI_DEV_CREATE fails ENOSYS")
+        log("RHIZO_MARKER input_owner=refusing reason=no-supervisor")
         return "refusing"
     try:
         sup.sendmsg([b"listener"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, struct.pack("i", rc))])
@@ -1761,8 +2270,7 @@ def install_uinput_filter(sup, log=None):
         os.close(rc)
     if answer == b"ok":
         return "listening"
-    log(f"RHIZO_MARKER input_owner=refusing reason=handover:{answer.decode(errors='replace')}"
-        " -- every UI_DEV_CREATE fails ENOSYS")
+    log(f"RHIZO_MARKER input_owner=refusing reason=handover:{answer.decode(errors='replace')}")
     return "refusing"
 
 
@@ -1771,7 +2279,7 @@ def struct_pack_fprog(count, addr):
     return ctypes.byref(_SockFprog(count, addr))
 
 
-def start_input_fence(registry, labels=None):
+def start_input_fence(registry, labels=None, devmap=None):
     """listen on kernel uevents and the registry"""
     import socket
     try:
@@ -1781,14 +2289,29 @@ def start_input_fence(registry, labels=None):
     except OSError as e:
         kmsg(f"RHIZO_MARKER input_fence=failed reason=socket:{e.errno}")
         return None
+    stage = prepare_input_stage() if labels is not None else None
+    if labels is not None and stage is None:
+        sock.close()
+        return None
     watch = libc.inotify_init1(0o2000000 | 0o4000)
-    if watch < 0 or any(libc.inotify_add_watch(watch, d, 0x100 | 0x80) < 0
-                        for d in (b"/dev/input", b"/dev")):
+    watched = [(b"/dev/input", 0x100 | 0x80), (b"/dev", 0x100 | 0x80)] + (
+        [(d.encode(), 0x100 | 0x80 | _IN_ONLYDIR | _IN_DONT_FOLLOW) for d in selinux_ns.INPUT_STAGE_DIRS]
+        if stage is not None else [])
+    if watch < 0 or any(libc.inotify_add_watch(watch, d, mask) < 0 for d, mask in watched):
         kmsg(f"RHIZO_MARKER input_fence=failed reason=watch:{ctypes.get_errno()}")
         watch = None
-    fence = InputFence()
+    fence = InputFence(devmap=devmap)
     fence.watch = watch
+    fence.stage = stage
     reconcile_input(fence)
+    if fence.broken:
+        kmsg(f"RHIZO_MARKER input_fence=failed reason={fence.broken}")
+        sock.close()
+        if watch is not None:
+            os.close(watch)
+        if stage is not None:
+            stage.close()
+        return None
     if registry is None:
         kmsg("RHIZO_MARKER input_fence=failed reason=no-registry")
     sink_late_block_uevents("", kmsg)
@@ -1827,7 +2350,7 @@ def open_fence_registry(sandbox_id, log=None):
 
 
 def open_label_service(sandbox_id, log=None, path=None):
-    """bind the label socket and return its LabelClient"""
+    """bind the label socket and return a LabelClient"""
     log = log or kmsg
     path = path or label_socket_path(sandbox_id)
     try:
@@ -1852,16 +2375,16 @@ def coldboot_primer_spec():
 
 
 def _make_dev_nodes():
-    """mknod /dev's nodes with their mode, owner and label"""
+    """mknod the DEV_NODES entries with the STAGED_DEV_PERMS mode, owner and label"""
     import stat as _stdev
     for n in DEV_NODES:
         try:
             st = os.stat(f"/dev/{n}")
         except OSError as e:
-            kmsg(f"/dev/{n} stat (for mknod-alias): {e}"); continue
+            kmsg(f"stat of /dev/{n} failed ({e})"); continue
         err = _stage_node(NEWROOT, f"/dev/{n}", "c", os.major(st.st_rdev), os.minor(st.st_rdev))
         if err:
-            kmsg(f"/dev/{n} mknod-alias: {err}")
+            kmsg(f"mknod /dev/{n} failed ({err})")
     _stage_coldboot()
     if core.VBMETA_LOOP_DEV:
         os.makedirs(f"{NEWROOT}/dev/block/by-name", exist_ok=True)
@@ -1871,9 +2394,8 @@ def _make_dev_nodes():
             os.mknod(dst, _stdev.S_IFBLK | 0o600,
                      os.makedev(os.major(st.st_rdev), os.minor(st.st_rdev)))
             os.chmod(dst, 0o600)
-            kmsg(f"/dev/block/by-name/vbmeta mknod-alias -> {core.VBMETA_LOOP_DEV}")
         except OSError as e:
-            kmsg(f"/dev/block/by-name/vbmeta mknod-alias: {e}")
+            kmsg(f"mknod /dev/block/by-name/vbmeta failed ({e})")
     os.makedirs(f"{NEWROOT}/dev/dri", exist_ok=True)
 
 
@@ -1931,7 +2453,7 @@ def resolve_host_wayland_socket():
     return None, tried
 
 
-# raised where a node is withheld
+# exception for a withheld node
 class _Withheld(Exception):
     pass
 
@@ -1944,14 +2466,14 @@ DEVICE_NODE_CAPABILITIES = {
 
 
 DEVICE_CAPABILITIES_WITHOUT_NODE = {
-    "devices.bluetooth": "rhizo-btd's socket, bound under /dev/socket only while the capability is on",
-    "devices.camera": "rhizo-camerad's socket, bound under /dev/socket only while the capability is on",
-    "devices.location": "rhizo-locationd's socket, bound under /dev/socket only while the capability is on",
-    "devices.battery": "the host-battery file in the read-only device-state directory, written by g only while "
-                       "the capability is on",
-    "devices.sensors": "no node: each declared IIO directory is bound read-only under /dev/rhizo_iio only while "
-                       "the capability is on, and every IIO directory is masked in the sandbox's sysfs",
-    "devices.virtual": "the RhizoVirtualDevice app, staged on /product only while the capability is on",
+    "devices.bluetooth": "rhizo-btd socket under /dev/socket with the capability on",
+    "devices.camera": "rhizo-camerad socket under /dev/socket with the capability on",
+    "devices.location": "rhizo-locationd socket under /dev/socket with the capability on",
+    "devices.battery": "host-battery file in the read-only device-state directory, written by g with "
+                       "the capability on",
+    "devices.sensors": "read-only bind of each declared IIO directory under /dev/rhizo_iio with "
+                       "the capability on, and IIO directories masked in the sandbox sysfs",
+    "devices.virtual": "RhizoVirtualDevice app on /product with the capability on",
 }
 
 
@@ -1959,7 +2481,7 @@ HOST_SEAT_UEVENT_CLASSES = ("drm", "graphics")
 
 
 def shadow_host_seat_uevents(newroot, log=kmsg, mount_fn=None):
-    """bind each host display device's uevent read-only over itself"""
+    """bind-mount the uevent file of each host display device read-only at the uevent path"""
     mount_fn = mount_fn or mount
     shadowed, failed = [], []
     sys_root = os.path.realpath(f"{newroot}/sys") + "/"
@@ -1981,8 +2503,8 @@ def shadow_host_seat_uevents(newroot, log=kmsg, mount_fn=None):
                 shadowed.append(name)
             else:
                 failed.append(name)
-    log(f"host seat uevents read-only in the sandbox: {shadowed or 'none'}"
-        + (f"; FAILED, a coldboot re-announces these to the host: {failed}" if failed else ""))
+    log(f"host seat uevents read-only shadowed={shadowed or 'none'}"
+        + (f" failed={failed}" if failed else ""))
     return not failed, shadowed, failed
 
 
@@ -2003,9 +2525,9 @@ def enforce_device_node_absence(dev_dir, policy, log=lambda m: None):
         except FileNotFoundError:
             pass
         except OSError as e:
-            log(f"withheld device node {rel}: could not remove a leftover entry: {e}")
+            log(f"failed to remove withheld device node {rel} ({e})")
     if removed:
-        log(f"withheld device nodes removed: {removed}")
+        log(f"removed withheld device nodes {removed}")
     return removed
 
 
@@ -2032,11 +2554,184 @@ def withheld_device_majors(policy, log=lambda m: None, paths=None, stat_fn=os.st
         except FileNotFoundError:
             continue
         except OSError as e:
-            log(f"device cgroup filter: cannot stat {path} for {capability} ({e})")
+            log(f"stat of {path} for {capability} failed ({e})")
             return None
         major, minor = os.major(st.st_rdev), os.minor(st.st_rdev)
         withheld.append((major, None if whole_major else minor))
     return withheld
+
+
+DEVICE_ALLOW_BASE = (
+    ("c", "dev", (1, 3), ("/dev/null",)),
+    ("c", "dev", (1, 5), ("/dev/zero",)),
+    ("c", "dev", (1, 7), ("/dev/full",)),
+    ("c", "dev", (1, 8), ("/dev/random",)),
+    ("c", "dev", (1, 9), ("/dev/urandom",)),
+    ("c", "dev", (1, 11), ("/dev/kmsg",)),
+    ("c", "dev", (5, 0), ("/dev/tty",)),
+    ("c", "dev", (5, 2), ("/dev/ptmx", "/dev/pts/ptmx")),
+    ("c", "major", "pts", ("/dev/pts/[0-9]*",)),
+    ("c", "misc", "ashmem", ("/dev/ashmem", "/dev/ashmem?*")),
+    ("c", "misc", "loop-control", ("/dev/loop-control",)),
+    ("c", "misc", "device-mapper", ("/dev/device-mapper",)),
+    ("c", "misc", "fuse", ("/dev/fuse",)),
+    ("c", "misc", "hw_random", ("/dev/hw_random",)),
+    ("c", "class", "dma_heap/system", ("/dev/dma_heap/system",)),
+    ("c", "class", "dma_heap/system-uncached", ("/dev/dma_heap/system-uncached",)),
+    ("c", "major", "binder", ("/dev/binderfs/*",)),
+    ("b", "major", "loop", ("/dev/block/loop[0-9]*", "/dev/block/by-name/vbmeta")),
+    ("b", "major", "device-mapper", ("/dev/block/dm-[0-9]*",)),
+)
+
+
+DEVICE_ALLOW_CAPABILITY_NODES = {
+    "devices.uinput": (
+        ("c", "cuse", "uhid", ("/dev/uhid",)),
+        ("c", "fence", "input", ("/dev/input/event[0-9]*", "/dev/input/mouse[0-9]*")),
+        ("c", "fence", "hidraw", ("/dev/hidraw[0-9]*",)),
+    ),
+}
+FENCE_MINORS = "fence"
+
+
+def proc_device_majors(proc_root="/proc"):
+    """return {(kind, name): [major, ...]} from /proc/devices, or None"""
+    try:
+        with open(f"{proc_root}/devices") as f:
+            text = f.read()
+    except OSError:
+        return None
+    majors, kind = {}, None
+    for line in text.splitlines():
+        if line.startswith("Character devices:"):
+            kind = "c"
+        elif line.startswith("Block devices:"):
+            kind = "b"
+        else:
+            parts = line.split(None, 1)
+            if kind and len(parts) == 2 and parts[0].isdigit():
+                majors.setdefault((kind, parts[1].strip()), []).append(int(parts[0]))
+    return majors
+
+
+HOST_DM_UUID_PREFIXES = ("CRYPT-", "LVM-", "mpath-", "part")
+
+
+def host_owned_dm(name, sys_root="/sys"):
+    """return whether dm device name has a non-loop slave or a HOST_DM_UUID_PREFIXES uuid"""
+    base = f"{sys_root}/class/block/{name}"
+    try:
+        slaves = os.listdir(f"{base}/slaves")
+    except OSError:
+        slaves = []
+    try:
+        with open(f"{base}/dm/uuid") as f:
+            uuid = f.read().strip()
+    except OSError:
+        uuid = ""
+    return any(not re.fullmatch(r"loop[0-9]+", s) for s in slaves) or uuid.startswith(HOST_DM_UUID_PREFIXES)
+
+
+def host_dm_minors(major, sys_root="/sys"):
+    """return the minors of the host-owned device-mapper devices on major"""
+    try:
+        names = sorted(n for n in os.listdir(f"{sys_root}/class/block") if n.startswith("dm-"))
+    except OSError:
+        return []
+    found = ((_devnum(f"{sys_root}/class/block/{n}/dev"), n) for n in names)
+    return sorted(dn[1] for dn, n in found if dn and dn[0] == major and host_owned_dm(n, sys_root))
+
+
+def _allow_entry_devices(entry, majors, sys_root, sandbox_id, uhid_wait_s, stat_fn, log):
+    """return the (kind, major, minor[, excluded minors]) devices of an allow-list entry"""
+    kind, how, what, _nodes = entry
+    if how == "dev":
+        return [(kind,) + tuple(what)]
+    if how in ("misc", "class"):
+        dn = _devnum(f"{sys_root}/class/{'misc/' if how == 'misc' else ''}{what}/dev")
+        return [(kind,) + dn] if dn else []
+    if how == "fence":
+        return [(kind, major, FENCE_MINORS) for major in majors.get((kind, what), ())]
+    if how == "major":
+        out = []
+        for major in majors.get((kind, what), ()):
+            excluded = tuple(host_dm_minors(major, sys_root)) if (kind, what) == ("b", "device-mapper") else ()
+            out.append((kind, major, None, excluded) if excluded else (kind, major, None))
+        return out
+    if how == "cuse":
+        name = f"rhizo-{sandbox_id}-{what}"
+        try:
+            dev = cuse_devnum(name, sys_root=sys_root, wait_s=uhid_wait_s)
+        except OSError as e:
+            if uhid_wait_s:
+                log(f"cuse_devnum({name}) failed ({e})")
+            return []
+        return [(kind, os.major(dev), os.minor(dev))]
+    path, whole_major = what
+    if "*" in path:
+        hits = sorted(glob.glob(path))
+        if not hits:
+            return []
+        path = hits[0]
+    try:
+        st = stat_fn(path)
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        log(f"stat of {path} failed ({e})")
+        return []
+    return [(kind, os.major(st.st_rdev), None if whole_major else os.minor(st.st_rdev))]
+
+
+def _allow_key(dev):
+    """return the sort key of an allow-list device"""
+    return dev[0], dev[1], -2 if dev[2] == FENCE_MINORS else -1 if dev[2] is None else dev[2]
+
+
+def device_allowlist(policy, log=lambda m: None, paths=None, stat_fn=os.stat, sys_root="/sys",
+                     proc_root="/proc", sandbox_id=0, uhid_wait_s=0):
+    """return the allowed devices as (kind, major, minor[, excluded]), minor None for a whole major or FENCE_MINORS"""
+    paths = paths or DEVICE_FILTER_HOST_PATHS
+    entries = []
+    for capability in sorted(set(paths) | set(DEVICE_ALLOW_CAPABILITY_NODES)):
+        if not policy.allows(capability):
+            continue
+        if capability in paths:
+            entries.append(("c", "host", paths[capability], ()))
+        entries += DEVICE_ALLOW_CAPABILITY_NODES.get(capability, ())
+    devices = set()
+    for entry in [e for e in entries if e[1] == "cuse"]:
+        devices.update(_allow_entry_devices(entry, {}, sys_root, sandbox_id, uhid_wait_s, stat_fn, log))
+    majors = proc_device_majors(proc_root)
+    if majors is None:
+        log(f"failed to read {proc_root}/devices")
+        return None
+    absent = []
+    for entry in DEVICE_ALLOW_BASE:
+        found = _allow_entry_devices(entry, majors, sys_root, sandbox_id, uhid_wait_s, stat_fn, log)
+        if not found:
+            absent.append(f"{entry[1]}:{entry[2]}")
+        devices.update(found)
+    for entry in [e for e in entries if e[1] != "cuse"]:
+        devices.update(_allow_entry_devices(entry, majors, sys_root, sandbox_id, uhid_wait_s, stat_fn, log))
+    if absent:
+        log(f"RHIZO_MARKER device_allowlist_absent={','.join(absent)}")
+    whole = {(d[0], d[1]) for d in devices if d[2] is None}
+    return sorted((d for d in devices if d[2] is None or (d[0], d[1]) not in whole), key=_allow_key)
+
+
+def allowlist_admits(allowed, kind, major, minor):
+    """return whether allowed admits a device, minor None for any minor of major"""
+    for dev in allowed:
+        if dev[0] != kind or dev[1] != major:
+            continue
+        if dev[2] == FENCE_MINORS:
+            return True
+        if dev[2] is None and (minor is None or minor not in (dev[3] if len(dev) > 3 else ())):
+            return True
+        if dev[2] is not None and (minor is None or dev[2] == minor):
+            return True
+    return False
 
 
 _HOST_DRI_SOURCES = []
@@ -2046,7 +2741,7 @@ _HOST_GPU_VARIANT = []
 
 
 def host_dri_sources(env=None, resolver=None, log=kmsg):
-    """map the sandbox's dri names to the host's device nodes"""
+    """map each sandbox dri node to a host device node"""
     if env is None and resolver is None:
         if not _HOST_DRI_SOURCES:
             _HOST_DRI_SOURCES.append(_resolve_dri_sources(None, None, log))
@@ -2055,13 +2750,13 @@ def host_dri_sources(env=None, resolver=None, log=kmsg):
 
 
 def host_gpu_variant(log=kmsg):
-    """return the build variant detect-gpu-driver.sh named, or None"""
+    """return the variant field of detect-gpu-driver.sh --node, or None"""
     host_dri_sources(log=log)
     return _HOST_GPU_VARIANT[0] if _HOST_GPU_VARIANT else None
 
 
 def _resolve_dri_sources(env, resolver, log):
-    """map the gpu resolver's chosen device to its host nodes"""
+    """map the detect-gpu-driver.sh --node device to host nodes"""
     try:
         r = subprocess.run(["bash", resolver or beside("detect-gpu-driver.sh"), "--node"],
                            capture_output=True, text=True, timeout=30, env=env)
@@ -2090,7 +2785,7 @@ def dri_node_plan(sources, stat_fn=os.stat, log=kmsg):
         try:
             rdev = stat_fn(host).st_rdev
         except OSError as e:
-            log(f"/dev/dri/{name}: cannot stat the host's {host}: {e}")
+            log(f"stat of {host} for /dev/dri/{name} failed ({e})")
             continue
         plan.append((name, os.major(rdev), os.minor(rdev)))
     return plan
@@ -2103,7 +2798,7 @@ def _bind_sockets_and_shadows(mount_proc):
     enforce_device_node_absence(f"{NEWROOT}/dev", policy, log=kmsg)
     dri_nodes = ("renderD128", "card0") if policy.allows("devices.dri") else ()
     if not dri_nodes:
-        kmsg("devices.dri is off: /dev/dri/renderD128 and /dev/dri/card0 are not created")
+        kmsg("no /dev/dri/renderD128 or /dev/dri/card0 with devices.dri off")
     for n, major, minor in dri_node_plan(host_dri_sources() if dri_nodes else {}):
         try:
             os.mknod(f"{NEWROOT}/dev/dri/{n}", _stdri.S_IFCHR | 0o666, os.makedev(major, minor))
@@ -2111,7 +2806,7 @@ def _bind_sockets_and_shadows(mount_proc):
             os.chmod(f"{NEWROOT}/dev/dri/{n}", 0o666)
             label_before_policy(f"{NEWROOT}/dev/dri/{n}", b"u:object_r:gpu_device:s0\0")
         except OSError as e:
-            kmsg(f"/dev/dri/{n} mknod: {e}")
+            kmsg(f"/dev/dri/{n} mknod failed ({e})")
     _op = "stat of the host node"
     try:
         if not policy.allows("devices.uinput"):
@@ -2125,10 +2820,10 @@ def _bind_sockets_and_shadows(mount_proc):
         _op = "chmod"
         os.chmod(f"{NEWROOT}/dev/uinput", 0o660)
     except _Withheld as w:
-        kmsg(f"{w} is off: /dev/uinput is not created")
+        kmsg(f"no /dev/uinput with {w} off")
     except OSError as e:
-        kmsg(f"/dev/uinput {_op}: {e}")
-    _op = "read the CUSE device's number"
+        kmsg(f"{_op} of /dev/uinput failed ({e})")
+    _op = "cuse_devnum"
     try:
         if not policy.allows("devices.uinput"):
             raise _Withheld("devices.uinput")
@@ -2141,7 +2836,7 @@ def _bind_sockets_and_shadows(mount_proc):
         os.chmod(f"{NEWROOT}/dev/uhid", 0o660)
         kmsg(f"RHIZO_MARKER input_owner=uhid-node dev={os.major(dev)}:{os.minor(dev)}")
     except _Withheld as w:
-        kmsg(f"{w} is off: /dev/uhid is not created")
+        kmsg(f"no /dev/uhid with {w} off")
     except OSError as e:
         kmsg(f"RHIZO_MARKER input_owner=failed reason=uhid-node:{e.errno} op={_op}")
     _op = "stat of the host node"
@@ -2156,12 +2851,12 @@ def _bind_sockets_and_shadows(mount_proc):
         os.chmod(f"{NEWROOT}/dev/tun", 0o660)
         _op = "chown"
         os.chown(f"{NEWROOT}/dev/tun", 1000, 1016)
-        _op = "relabel to tun_device"
+        _op = "setxattr"
         label_before_policy(f"{NEWROOT}/dev/tun", b"u:object_r:tun_device:s0\0")
     except _Withheld as w:
-        kmsg(f"{w} is off: /dev/tun is not created")
+        kmsg(f"no /dev/tun with {w} off")
     except OSError as e:
-        kmsg(f"/dev/tun {_op}: {e}")
+        kmsg(f"{_op} of /dev/tun failed ({e})")
     os.makedirs(f"{NEWROOT}/dev/input", exist_ok=True)
     mount("tmpfs", f"{NEWROOT}/dev/input", "tmpfs", MS_NOSUID|MS_NOEXEC, "mode=02755,uid=0,gid=1004")
     host_wayland_socket, wayland_tried = resolve_host_wayland_socket()
@@ -2170,52 +2865,47 @@ def _bind_sockets_and_shadows(mount_proc):
         dst = f"{NEWROOT}/dev/socket/rhizo_wayland/wayland-0"
         open(dst, "w").close()
         if core.bind_as_owner(host_wayland_socket, dst):
-            kmsg(f"wayland socket bind-mounted: {host_wayland_socket} -> /dev/socket/rhizo_wayland/wayland-0")
+            kmsg(f"wayland socket bind-mounted {host_wayland_socket} -> /dev/socket/rhizo_wayland/wayland-0")
         else:
-            kmsg(f"wayland socket bind mount FAILED: {host_wayland_socket}")
+            kmsg(f"wayland socket bind mount FAILED {host_wayland_socket}")
     else:
-        kmsg(f"wayland socket NOT FOUND -- tried {', '.join(wayland_tried)}; "
-             "name it with RHIZO_WAYLAND_HOST_SOCKET or WAYLAND_DISPLAY")
+        kmsg(f"wayland socket NOT FOUND in {', '.join(wayland_tried)}")
     host_audio_socket = os.environ.get("RHIZO_AUDIO_HOST_SOCKET", "/run/rhizo-audio/audiod")
     host_audio_dir = os.path.dirname(host_audio_socket)
     os.makedirs(f"{NEWROOT}/dev/socket/rhizo_audio", exist_ok=True)
     if not os.path.isdir(host_audio_dir):
-        kmsg(f"audio socket dir {host_audio_dir} missing on the host -- audio discards")
+        kmsg(f"no audio socket dir {host_audio_dir}")
     elif mount(host_audio_dir, f"{NEWROOT}/dev/socket/rhizo_audio", None, MS_BIND):
-        kmsg(f"audio socket dir bind-mounted: {host_audio_dir} -> /dev/socket/rhizo_audio "
-             f"(socket may appear later)")
+        kmsg(f"audio socket dir bind-mounted {host_audio_dir} -> /dev/socket/rhizo_audio")
     else:
-        kmsg(f"audio socket dir bind mount FAILED: {host_audio_dir} -- audio discards")
+        kmsg(f"failed to bind audio socket dir {host_audio_dir}")
     device_state_dst = NEWROOT + DEVICE_STATE_MOUNT
     os.makedirs(device_state_dst, exist_ok=True)
     os.makedirs(RHIZO_DEVICE_STATE_DIR, exist_ok=True)
     if mount(RHIZO_DEVICE_STATE_DIR, device_state_dst, None, MS_BIND):
-        kmsg(f"device-state dir bind-mounted: {RHIZO_DEVICE_STATE_DIR} -> {DEVICE_STATE_MOUNT}")
+        kmsg(f"device-state dir bind-mounted {RHIZO_DEVICE_STATE_DIR} -> {DEVICE_STATE_MOUNT}")
     else:
-        kmsg(f"device-state dir bind mount FAILED: {RHIZO_DEVICE_STATE_DIR} -- "
-             "every device-state HAL keeps its fixed default")
+        kmsg(f"failed to bind device-state dir {RHIZO_DEVICE_STATE_DIR}")
     host_stream_socket = os.environ.get("RHIZO_STREAM_HOST_SOCKET", "/run/rhizo-stream/streamd")
     host_stream_dir = os.path.dirname(host_stream_socket)
     os.makedirs(f"{NEWROOT}/dev/socket/rhizo_stream", exist_ok=True)
     if not os.path.isdir(host_stream_dir):
-        kmsg(f"stream socket dir {host_stream_dir} missing on the host -- streaming discards")
+        kmsg(f"no stream socket dir {host_stream_dir}")
     elif mount(host_stream_dir, f"{NEWROOT}/dev/socket/rhizo_stream", None, MS_BIND):
-        kmsg(f"stream socket dir bind-mounted: {host_stream_dir} -> /dev/socket/rhizo_stream "
-             f"(socket may appear later)")
+        kmsg(f"stream socket dir bind-mounted {host_stream_dir} -> /dev/socket/rhizo_stream")
     else:
-        kmsg(f"stream socket dir bind mount FAILED: {host_stream_dir} -- streaming discards")
+        kmsg(f"failed to bind stream socket dir {host_stream_dir}")
     host_rt_socket = os.environ.get("RHIZO_RT_HOST_SOCKET", "/run/rhizo-rt/rtd")
     host_rt_dir = os.path.dirname(host_rt_socket)
     rt_mountpoint = f"{NEWROOT}/dev/socket/rhizo_rt"
     if not os.path.isdir(host_rt_dir):
-        kmsg(f"rt socket dir {host_rt_dir} missing on the host -- rt.budgets sessions stay unsupported")
+        kmsg(f"no rt socket dir {host_rt_dir}")
     else:
         os.makedirs(rt_mountpoint, exist_ok=True)
         if mount(host_rt_dir, rt_mountpoint, None, MS_BIND):
-            kmsg(f"rt socket dir bind-mounted: {host_rt_dir} -> /dev/socket/rhizo_rt "
-                 f"(socket may appear later)")
+            kmsg(f"rt socket dir bind-mounted {host_rt_dir} -> /dev/socket/rhizo_rt")
         else:
-            kmsg(f"rt socket dir bind mount FAILED: {host_rt_dir} -- rt.budgets sessions stay unsupported")
+            kmsg(f"failed to bind rt socket dir {host_rt_dir}")
     if not policy.allows("trace.host_delay"):
         delay_state = "withheld"
     elif not os.path.isdir("/run/rhizo-delay"):
@@ -2273,7 +2963,7 @@ def _bind_sockets_and_shadows(mount_proc):
     except FileExistsError: pass
     if mount_proc:
         mount("proc",f"{NEWROOT}/proc","proc",0,f"hidepid=2,gid={AID_READPROC}")
-    mount("sysfs",f"{NEWROOT}/sys","sysfs",0)
+    mount("sysfs",f"{NEWROOT}/sys","sysfs",MS_NOSUID|MS_NODEV|MS_NOEXEC)
     _shadow_sys_devices()
     _shadow_block_uevents()
     _mask_iio_devices()
@@ -2281,7 +2971,7 @@ def _bind_sockets_and_shadows(mount_proc):
     _cap_ok = mount(f"{NEWROOT}/sys/kernel", "/rhizoroot/real_sys_kernel", None, MS_BIND|MS_REC)
     _real_kernel_children = os.listdir("/rhizoroot/real_sys_kernel")
     _tmpfs_ok = mount("tmpfs", f"{NEWROOT}/sys/kernel", "tmpfs", 0)
-    kmsg(f"wakeup_reasons shadow: capture_bind={_cap_ok} children={len(_real_kernel_children)} tmpfs_over={_tmpfs_ok}")
+    kmsg(f"wakeup_reasons shadow capture_bind={_cap_ok} children={len(_real_kernel_children)} tmpfs_over={_tmpfs_ok}")
     _child_fail = 0
     _keep = _sys_kernel_keep() if RHIZO_SYSKERNEL_SUBSET else None
     _dropped = []
@@ -2299,20 +2989,36 @@ def _bind_sockets_and_shadows(mount_proc):
             os.makedirs(_dst, exist_ok=True)
         else:
             open(_dst, "w").close()
-        if not mount(_src, _dst, None, MS_BIND|MS_REC):
+        if not bind_sys_kernel_child(_src, _dst, _name):
             _child_fail += 1
         else:
             _tally("syskernel")
     if _dropped:
-        kmsg(f"sys/kernel subset: bound {len(_real_kernel_children) - len(_dropped)}, "
-             f"dropped {len(_dropped)}: {sorted(_dropped)}")
+        kmsg(f"sys/kernel subset bound={len(_real_kernel_children) - len(_dropped)} "
+             f"dropped={len(_dropped)} {sorted(_dropped)}")
+    _side_err = 0
+    if _cap_ok:
+        if libc.umount2(b"/rhizoroot/real_sys_kernel", 2) != 0:
+            _side_err = ctypes.get_errno()
+        else:
+            try:
+                os.rmdir("/rhizoroot/real_sys_kernel")
+            except OSError:
+                pass
+    kmsg(f"RHIZO_MARKER sys_kernel_side=detached errno={_side_err} rmdir_left={os.path.exists('/rhizoroot/real_sys_kernel')}")
+    if _side_err:
+        kmsg(f"RHIZO_MARKER sysfs_ro=refused reason=side-detach errno={_side_err}")
+        os._exit(1)
     os.makedirs(f"{NEWROOT}/sys/kernel/wakeup_reasons", exist_ok=True)
     open(f"{NEWROOT}/sys/kernel/wakeup_reasons/last_resume_reason", "w").close()
     open(f"{NEWROOT}/sys/kernel/wakeup_reasons/last_suspend_time", "w").write("0 0.001\n")
-    kmsg(f"wakeup_reasons shadow: child_binds_failed={_child_fail} "
+    kmsg(f"wakeup_reasons shadow child_binds_failed={_child_fail} "
          f"final_exists={os.path.exists(f'{NEWROOT}/sys/kernel/wakeup_reasons/last_resume_reason')}")
-    if not RHIZO_ENFORCING and _ftrace:
+    _debugfs = (not RHIZO_ENFORCING) and _ftrace
+    if _debugfs:
         os.makedirs(f"{NEWROOT}/sys/kernel/debug", exist_ok=True)
+    seal_sysfs()
+    if _debugfs:
         mount("debugfs",f"{NEWROOT}/sys/kernel/debug","debugfs",0)
     os.makedirs(f"{NEWROOT}/sys/fs/cgroup",exist_ok=True); mount("cgroup2",f"{NEWROOT}/sys/fs/cgroup","cgroup2",0)
     os.chmod(f"{NEWROOT}/sys/fs/cgroup", 0o775)
@@ -2325,12 +3031,12 @@ def _setup_cgroups_and_selinuxfs(handoff=False):
     try:
         cgroup_write(f"{NEWROOT}/sys/fs/cgroup/cgroup.subtree_control", "+memory +cpu")
     except OSError as e:
-        kmsg(f"cgroup root memory/cpu activation FAILED ({e})")
+        kmsg(f"failed to write +memory +cpu to the cgroup root subtree_control ({e})")
     _cgroot = f"{NEWROOT}/sys/fs/cgroup"
     _borrowed = False
     try:
         _st = os.stat(_cgroot)
-        kmsg("cgroup root before apps mkdir: mode=%o uid=%d gid=%d writable_by_uid0=%s"
+        kmsg("cgroup root before apps mkdir mode=%o uid=%d gid=%d writable_by_uid0=%s"
              % (_st.st_mode & 0o7777, _st.st_uid, _st.st_gid,
                 os.access(_cgroot, os.W_OK)))
         _borrowed = _st.st_uid != 0
@@ -2338,7 +3044,7 @@ def _setup_cgroups_and_selinuxfs(handoff=False):
             os.chown(_cgroot, 0, 0)
     except OSError as e:
         _borrowed = False
-        kmsg(f"cgroup root ownership fixup failed ({e})")
+        kmsg(f"failed to chown the cgroup root ({e})")
     try:
         os.makedirs(f"{NEWROOT}/sys/fs/cgroup/apps", exist_ok=True)
     finally:
@@ -2346,7 +3052,6 @@ def _setup_cgroups_and_selinuxfs(handoff=False):
             _owner = 0 if RHIZO_UNDER_UNIT else 1000
             os.chown(_cgroot, _owner, 1000)
             os.chmod(_cgroot, 0o775)
-            kmsg(f"cgroup root borrowed for the apps mkdir and returned to {_owner}:1000 0775")
     os.chmod(f"{NEWROOT}/sys/fs/cgroup/apps", 0o775)
     os.chown(f"{NEWROOT}/sys/fs/cgroup/apps", 1000, 1000)
     os.chown(f"{NEWROOT}/sys/fs/cgroup/apps/cgroup.procs", 1000, 1000)
@@ -2354,7 +3059,7 @@ def _setup_cgroups_and_selinuxfs(handoff=False):
         try:
             cgroup_write(f"{NEWROOT}/sys/fs/cgroup/{_cg}/cgroup.subtree_control", "+memory +cpu")
         except OSError as e:
-            kmsg(f"cgroup {_cg} memory/cpu activation FAILED ({e})")
+            kmsg(f"failed to write +memory +cpu to cgroup {_cg} subtree_control ({e})")
     holder = handoff and not host_selinux_mode()
     if holder:
         os.makedirs(f"{NEWROOT}/sys/fs/selinux", exist_ok=True)
@@ -2366,10 +3071,10 @@ def _setup_cgroups_and_selinuxfs(handoff=False):
         try:
             label_before_policy("/rhizoroot/tmp_enforce", b"u:object_r:rhizo_enforce_shadow:s0\0")
         except OSError as e:
-            kmsg(f"decoy enforce node setxattr: {e}")
+            kmsg(f"setxattr of the decoy enforce node failed ({e})")
         mount("/rhizoroot/tmp_enforce", f"{NEWROOT}/sys/fs/selinux/enforce", None, MS_BIND)
         if RHIZO_ENFORCING:
-            kmsg("RHIZO_ENFORCING: decoy enforce-node mount kept")
+            kmsg("RHIZO_ENFORCING=1 with the decoy enforce node mount")
     open("/rhizoroot/tmp_power_state","w").write("")
     os.chmod("/rhizoroot/tmp_power_state", 0o644)
     mount("/rhizoroot/tmp_power_state", f"{NEWROOT}/sys/power/state", None, MS_BIND)
@@ -2377,9 +3082,9 @@ def _setup_cgroups_and_selinuxfs(handoff=False):
         open("/rhizoroot/tmp_zram_reset","w").write("")
         os.chmod("/rhizoroot/tmp_zram_reset", 0o644)
         if mount("/rhizoroot/tmp_zram_reset", f"{NEWROOT}/sys/block/zram0/reset", None, MS_BIND):
-            kmsg("zram0 reset node shadowed")
+            kmsg("bound the zram0 reset shadow")
         else:
-            kmsg("zram0 reset node EXISTS and could NOT be shadowed")
+            kmsg("failed to bind the zram0 reset shadow")
     shadow_host_seat_uevents(NEWROOT)
     relabel_root_objects_now(NEWROOT, staged=coldboot_primer_spec())
     device_state_dst = NEWROOT + DEVICE_STATE_MOUNT
@@ -2413,11 +3118,11 @@ def _setup_cgroups_and_selinuxfs(handoff=False):
     elif selinux_ns.state()["unshared"]:
         selinux_ns.start_relabeller(NEWROOT, coldboot_primer_spec(), core.WRITE_PRIMER_SCRIPT,
                                          core.RELABELLER_DONE_FD)
-    if not pivot_root(NEWROOT,f"{NEWROOT}/oldroot"): kmsg("pivot FAIL"); os._exit(1)
+    if not pivot_root(NEWROOT,f"{NEWROOT}/oldroot"): kmsg("pivot_root failed"); os._exit(1)
 
 
 def _detach_if_mounted(path):
-    """detach whatever is mounted at path"""
+    """call umount2(path, MNT_DETACH)"""
     libc.umount2(path.encode(), 2)
 
 
@@ -2438,13 +3143,13 @@ def sysctl_shadow_spec():
 
 
 def _sysctl_shadow_label(real):
-    """return the real proc node's label or Android's"""
+    """return the label of real, or the ANDROID_PROC_LABELS label"""
     try:
         return os.getxattr(real, "security.selinux")
     except OSError as e:
         key = real.removeprefix("/proc/sys/") if real.startswith("/proc/sys/") else real.removeprefix("/proc/")
         label = (ANDROID_PROC_LABELS.get(key, "u:object_r:proc_security:s0") + "\0").encode()
-        kmsg(f"real-node label unreadable ({real}: {e}), labeling its shadow {label!r}")
+        kmsg(f"failed to read the label of {real} ({e}), shadow label {label!r}")
         return label
 
 
@@ -2457,7 +3162,7 @@ def _label_of(path):
 
 
 def _label_kept(path, want):
-    """return whether path keeps its wanted label"""
+    """return whether the label of path is want"""
     if selinux_ns.state()["unshared"]:
         return os.path.exists(path)
     return _label_of(path) is not None and _label_of(path) == want
@@ -2478,15 +3183,15 @@ def stage_sysctl_shadows(devroot):
             label_before_policy(dummy, _sysctl_shadow_label(real))
             n += 1
         except OSError as e:
-            kmsg(f"stage shadow {s}: {e}")
+            kmsg(f"failed to stage shadow {s} ({e})")
     sink = f"{devroot}/{SYSRQ_SINK}"
     try:
         open(sink, "w").close(); os.chmod(sink, 0o644)
         label_before_policy(sink, os.getxattr("/proc/sysrq-trigger", "security.selinux"))
         n += 1
     except OSError as e:
-        kmsg(f"stage sysrq sink: {e}")
-    kmsg(f"sysctl shadows staged under {devroot}: {n} of {len(SYSCTL_SHADOWS) + 1}")
+        kmsg(f"failed to stage the sysrq sink ({e})")
+    kmsg(f"sysctl shadows under {devroot} staged={n} total={len(SYSCTL_SHADOWS) + 1}")
 
 
 def _mask_sysrq_trigger():
@@ -2497,7 +3202,7 @@ def _mask_sysrq_trigger():
         cur, snk = os.stat(dst), os.stat(sink)
         if ((cur.st_dev, cur.st_ino) == (snk.st_dev, snk.st_ino)
                 and os.statvfs(dst).f_flag & os.ST_RDONLY):
-            kmsg("sysrq-trigger: already masked read-only by this sink, left in place")
+            kmsg("/proc/sysrq-trigger is already the read-only sysrq sink")
             return True, True
     except OSError:
         pass
@@ -2512,12 +3217,12 @@ def _mask_sysrq_trigger():
             try:
                 labeled = label_before_policy(sink, os.getxattr(dst, "security.selinux")) or "deferred"
             except OSError as e:
-                kmsg(f"sysrq-sink label not copied ({e})")
+                kmsg(f"failed to copy the sysrq sink label ({e})")
         if not mount(sink, dst, None, MS_BIND):
             return False, labeled
         return bool(mount(None, dst, None, MS_BIND|MS_REMOUNT|MS_RDONLY)), labeled
     except OSError as e:
-        kmsg(f"sysrq-sink: {e}")
+        kmsg(f"failed to mask /proc/sysrq-trigger ({e})")
         return False, labeled
 
 
@@ -2543,20 +3248,20 @@ def harden_proc_sys():
                 mount(dummy,dst,None,MS_BIND)
                 n_shadow += 1
                 continue
-            kmsg(f"shadow {s}: dummy {'absent' if _label_of(dummy) is None else 'mislabeled'} "
-                 f"at hardening time, /dev is {_label_of('/dev')!r} -- recreating")
+            kmsg(f"shadow {s} dummy={'absent' if _label_of(dummy) is None else 'mislabeled'} "
+                 f"dev_label={_label_of('/dev')!r}")
             open(dummy,"w").write(cur+"\n"); os.chmod(dummy,0o644)
             try:
                 written = label_before_policy(dummy, _label)
                 n_labeled += written
                 n_deferred += not written
             except OSError as _e:
-                kmsg(f"shadow {s} setxattr: {_e}")
+                kmsg(f"setxattr of shadow {s} failed ({_e})")
             mount(dummy,dst,None,MS_BIND)
             n_shadow += 1
-        except OSError as e: kmsg(f"shadow {s}: {e}")
+        except OSError as e: kmsg(f"failed to bind shadow {s} ({e})")
     sysrq_ok, sysrq_labeled = _mask_sysrq_trigger()
-    kmsg(f"proc-sys hardened by owner: ro={'ok' if ro_ok else 'FAIL'} "
+    kmsg(f"harden_proc_sys ro={'ok' if ro_ok else 'FAIL'} "
          f"shadows={n_shadow} labeled={n_labeled} deferred={n_deferred} sysrq={'ok' if sysrq_ok else 'FAIL'} "
          f"sysrq_labeled={sysrq_labeled}")
     return ro_ok and n_labeled + n_deferred == n_shadow and sysrq_ok
@@ -2572,7 +3277,7 @@ def pid_max_is_per_namespace(release):
 
 
 def cap_pid_namespace_pid_max(value=ANDROID_PID_MAX):
-    """write this pid namespace's pid_max from a child"""
+    """write pid_max of the calling pid namespace from a child"""
     release = os.uname().release
     if not pid_max_is_per_namespace(release):
         kmsg(f"RHIZO_MARKER pid_max=unset reason=global-on-kernel-{release}")
@@ -2590,11 +3295,11 @@ def cap_pid_namespace_pid_max(value=ANDROID_PID_MAX):
             unshare(CLONE_NEWNS)
             step = "make-private"
             if not mount(None, "/", None, MS_REC | MS_PRIVATE):
-                kmsg("pid_max: making / private failed")
+                kmsg("failed to set MS_PRIVATE on / for pid_max")
             else:
                 step = "mount-proc"
                 if not mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC):
-                    kmsg("pid_max: mounting proc failed")
+                    kmsg("failed to mount proc for pid_max")
                 else:
                     step = "write"
                     with open("/proc/sys/kernel/pid_max", "w") as f:
@@ -2604,9 +3309,9 @@ def cap_pid_namespace_pid_max(value=ANDROID_PID_MAX):
                         got = f.read().strip()
                     ok = got == str(value)
                     if not ok:
-                        kmsg(f"pid_max reads {got} after writing {value}")
+                        kmsg(f"pid_max is {got} after a write of {value}")
         except Exception as e:
-            kmsg(f"pid_max {step} raised {type(e).__name__}: {e}")
+            kmsg(f"pid_max {step} failed with {type(e).__name__} ({e})")
         finally:
             os._exit(0 if ok else 1)
     _, status = os.waitpid(child, 0)
@@ -2620,12 +3325,12 @@ def _pivot_and_harden(mount_proc=True):
     """pivot_root, drop the old root and harden /proc/sys"""
     os.chdir("/"); libc.umount2(b"/oldroot",2)
     if mount_proc and not harden_proc_sys():
-        kmsg("FATAL: harden_proc_sys() did not land -- refusing to pivot")
+        kmsg("harden_proc_sys() failed")
         os._exit(1)
 
 
 def build_root_and_pivot(mount_proc=True, handoff=False):
-    """assemble the root init will see and pivot into it"""
+    """build the root filesystem for init and call pivot_root"""
     phase("B", "build_root_and_pivot")
     why = device_state_dir_refusal(RHIZO_DEVICE_STATE_DIR, RHIZO_STATE_DIR)
     if why:
@@ -2653,17 +3358,17 @@ def setup_net_core_sysctls():
     while not os.path.isdir("/proc/sys/net/core") and time.time() < _deadline:
         time.sleep(0.005)
     if not os.path.isdir("/proc/sys/net/core"):
-        kmsg("net.core setup: /proc/sys/net/core never appeared")
+        kmsg("no /proc/sys/net/core after 60s")
         return
     _detach_if_mounted("/proc/sys/net/core")
     if not mount("tmpfs", "/proc/sys/net/core", "tmpfs", MS_NOSUID|MS_NODEV|MS_NOEXEC, "mode=0755"):
-        kmsg("net.core setup: tmpfs mount FAILED")
+        kmsg("failed to mount tmpfs at /proc/sys/net/core")
         return
     mount(None, "/proc/sys/net/core", None, MS_SHARED)
     try:
         _names = os.listdir(_src)
     except OSError as _e:
-        kmsg(f"net.core setup: snapshot unreadable ({_e})")
+        kmsg(f"failed to read the net.core snapshot ({_e})")
         return
     _label_here = host_selinux_mode()
     _n = _n_net = _n_bpf = 0
@@ -2682,25 +3387,25 @@ def setup_net_core_sysctls():
             if _nm.startswith("bpf_"): _n_bpf += 1
             else: _n_net += 1
         except OSError as _e:
-            kmsg(f"net.core setup: LABEL FAILED {_nm}: {_e}")
+            kmsg(f"setxattr of /proc/sys/net/core/{_nm} failed ({_e})")
     if "bpf_jit_enable" not in _names:
-        kmsg("net.core setup: WARNING bpf_jit_enable absent from snapshot")
+        kmsg("no bpf_jit_enable in the net.core snapshot")
     if not _label_here:
-        kmsg(f"net.core setup: {_n} repopulated, labeled by the relabeller in Android's namespace")
+        kmsg(f"net.core files={_n}")
         return
     try:
         os.setxattr("/proc/sys/net/core", "security.selinux",
                      b"u:object_r:proc_net:s0\0")
     except OSError as _e:
-        kmsg(f"net.core setup: LABEL FAILED <dir>: {_e}")
-    kmsg(f"net.core setup: {_n} repopulated, {_n_net} proc_net, {_n_bpf} proc_bpf, dir ok")
+        kmsg(f"setxattr of /proc/sys/net/core failed ({_e})")
+    kmsg(f"net.core files={_n} proc_net={_n_net} proc_bpf={_n_bpf}")
 
 
 DATA_RELEASE_MARKER_NAME = ".rhizo_data_release"
 
 
 def data_root_label(mount_point):
-    """return /data's root inode label"""
+    """return the root inode label of mount_point"""
     try:
         return os.getxattr(mount_point, "security.selinux").decode(
             errors="replace").rstrip("\0")
@@ -2709,7 +3414,7 @@ def data_root_label(mount_point):
 
 
 def data_unreadable_by_this_launch(mount_point):
-    """return whether a sandbox already labeled this /data"""
+    """return whether own_domain() is rhizo_host and the mount_point root label is a system data label"""
     return (own_domain() == "u:r:rhizo_host:s0"
             and data_root_label(mount_point) in ("u:object_r:system_data_root_file:s0",
                                                  "u:object_r:system_data_file:s0"))
@@ -2717,11 +3422,10 @@ def data_unreadable_by_this_launch(mount_point):
 
 def check_data_release_marker(mount_point, release, wipe_requested,
                               change_requested=False, log=kmsg):
-    """check /data's release marker against the booting release"""
+    """compare the /data release marker with release"""
     marker = os.path.join(mount_point, DATA_RELEASE_MARKER_NAME)
     if data_unreadable_by_this_launch(mount_point):
-        log(f"/data release marker at {marker} not read: this launch is rhizo_host and a "
-            "sandbox has labeled this /data already; marker left as it is")
+        log(f"skipped {marker} with own_domain() rhizo_host and a sandbox /data label")
         log(f"RHIZO_MARKER data_release=unverifiable release={release}")
         return True
     try:
@@ -2729,18 +3433,17 @@ def check_data_release_marker(mount_point, release, wipe_requested,
     except FileNotFoundError:
         prev = ""
     except PermissionError as e:
-        log(f"/data release marker at {marker} unreadable in this launch ({e}); "
-            "marker left as it is")
+        log(f"failed to read {marker} ({e})")
         log(f"RHIZO_MARKER data_release=unverifiable release={release}")
         return True
     except OSError as e:
-        log(f"/data release marker at {marker} unreadable ({e}) -- treating as absent")
+        log(f"failed to read {marker} ({e})")
         prev = ""
     if prev and prev != release and not wipe_requested:
         if not change_requested:
             instance = os.environ.get("RHIZO_INSTANCE", "?")
-            log(f"/data was last booted with release {prev}; refusing to boot release "
-                f"{release} onto it on instance {instance} without RHIZO_WIPE_DATA=1")
+            log(f"/data release is {prev}, expected "
+                f"{release} on instance {instance} without RHIZO_WIPE_DATA=1")
             log(f"RHIZO_MARKER data_release_refused={prev}-vs-{release}")
             return False
         log(f"RHIZO_MARKER data_release_changed={prev}-to-{release}")
@@ -2748,7 +3451,7 @@ def check_data_release_marker(mount_point, release, wipe_requested,
         with open(marker, "w") as f:
             f.write(release)
     except OSError as e:
-        log(f"/data release marker write failed ({e})")
+        log(f"failed to write the /data release marker ({e})")
     log(f"RHIZO_MARKER data_release={release}")
     return True
 
@@ -2763,7 +3466,7 @@ def sync_release_switch_marker(data_img, switching, log=kmsg):
         open(pending, "w").close()
         return
     if os.path.exists(pending):
-        log(f"RHIZO_MARKER release_switch_pending=found -- discarding {data_img}")
+        log(f"RHIZO_MARKER release_switch_pending=found data_img={data_img}")
         for path in (data_img, data_img + ".meta", pending):
             try:
                 os.unlink(path)
@@ -2783,7 +3486,7 @@ _KEYMINT_NO_KEY_STAMP = "no-master-key"
 
 
 def _keymint_key_generation(master_key_path):
-    """return a hash of master.key's bytes"""
+    """return the sha256 of master_key_path"""
     try:
         with open(master_key_path, "rb") as f:
             return hashlib.sha256(f.read()).hexdigest()
@@ -2792,13 +3495,13 @@ def _keymint_key_generation(master_key_path):
 
 
 def _remove_prefixed(directory, prefix, log):
-    """remove every entry under directory starting with prefix"""
+    """remove the entries of directory with prefix"""
     try:
         entries = os.listdir(directory)
     except FileNotFoundError:
         return []
     except OSError as e:
-        log(f"{directory} unreadable ({e}) -- treating its sweep as a no-op")
+        log(f"failed to list {directory} ({e})")
         return []
     removed = []
     for name in sorted(entries):
@@ -2809,19 +3512,19 @@ def _remove_prefixed(directory, prefix, log):
             os.remove(path)
             removed.append(name)
         except OSError as e:
-            log(f"keystore migration: failed to remove {path}: {e}")
+            log(f"failed to remove {path} ({e})")
     return removed
 
 
 def _remove_spblob_dirs(mount_point, log):
-    """remove every user's spblob directory"""
+    """remove the spblob directory of each user"""
     system_de = os.path.join(mount_point, "system_de")
     try:
         users = os.listdir(system_de)
     except FileNotFoundError:
         return []
     except OSError as e:
-        log(f"{system_de} unreadable ({e}) -- treating the LockSettings sweep as a no-op")
+        log(f"failed to list {system_de} ({e})")
         return []
     removed = []
     for user in sorted((u for u in users if u.isdigit()), key=int):
@@ -2832,7 +3535,7 @@ def _remove_spblob_dirs(mount_point, log):
             shutil.rmtree(spblob_dir)
             removed.append(user)
         except OSError as e:
-            log(f"keystore migration: failed to remove {spblob_dir}: {e}")
+            log(f"failed to remove {spblob_dir} ({e})")
     return removed
 
 
@@ -2844,13 +3547,12 @@ _KEYENTRY_LIVE = 1
 
 def _keymint_unverifiable(path, err, log):
     """log an unreadable keystore migration store"""
-    log(f"keystore migration: {path} unreadable in this launch ({err}) -- nothing "
-        "swept, stamped or cleared")
+    log(f"failed to read {path} ({err})")
     log("RHIZO_MARKER keymint_migration=unverifiable")
 
 
 def _live_keystore_aliases(mount_point):
-    """return every alias keystore2 holds a Live key under"""
+    """return the keyentry aliases with state Live in persistent.sqlite"""
     keystore_dir = os.path.join(mount_point, "misc", "keystore")
     try:
         names = set(os.listdir(keystore_dir))
@@ -2875,7 +3577,7 @@ def _live_keystore_aliases(mount_point):
 
 
 def _repair_orphaned_lockstate(mount_point, log):
-    """clear LockSettings state whose protector keys are gone"""
+    """clear LockSettings spblob state with protector aliases missing from keystore2"""
     system_de = os.path.join(mount_point, "system_de")
     protectors = {}
     try:
@@ -2921,8 +3623,7 @@ def _repair_orphaned_lockstate(mount_point, log):
         else:
             mixed.append(user)
     if mixed:
-        log(f"LockSettings: user(s) {', '.join(mixed)} hold a protector whose keystore alias is gone "
-            "beside one whose alias is live -- neither is touched")
+        log(f"LockSettings users {', '.join(mixed)} have live and missing protector aliases")
         log(f"RHIZO_MARKER keymint_migration=lockstate-mixed users={','.join(mixed)}")
     if not orphaned:
         return
@@ -2933,20 +3634,20 @@ def _repair_orphaned_lockstate(mount_point, log):
             shutil.rmtree(spblob_dir)
             cleared.append(user)
         except OSError as e:
-            log(f"keystore migration: failed to remove {spblob_dir}: {e}")
+            log(f"failed to remove {spblob_dir} ({e})")
     db_removed = _remove_prefixed(os.path.join(mount_point, "system"), _LOCKSETTINGS_DB_PREFIX, log)
-    log(f"LockSettings named protector key(s) keystore2 no longer holds ({', '.join(gone_aliases)}): "
-        f"spblob cleared for user(s) {', '.join(cleared) or '(none)'}; locksettings.db "
-        f"{'removed (' + ', '.join(db_removed) + ')' if db_removed else 'not present'}")
+    log(f"LockSettings protector aliases missing from keystore2 ({', '.join(gone_aliases)}), "
+        f"spblob removed for users {', '.join(cleared) or '(none)'}, locksettings.db "
+        f"{'removed (' + ', '.join(db_removed) + ')' if db_removed else 'absent'}")
     log("RHIZO_MARKER keymint_migration=lockstate-repaired spblob=removed-%d locksettings_db=removed-%d"
         % (len(cleared), len(db_removed)))
 
 
 def migrate_keystore_for_keymint_persistence(mount_point, log=kmsg):
-    """sweep keystore and LockSettings state from an old KeyMint key"""
+    """remove the keystore and LockSettings state of an old KeyMint key"""
     master_key = os.path.join(mount_point, "rhizo_keymint", "master.key")
     if data_unreadable_by_this_launch(mount_point):
-        _keymint_unverifiable(master_key, "rhizo_host launch, /data labeled by a sandbox", log)
+        _keymint_unverifiable(master_key, "own_domain() rhizo_host and a sandbox /data label", log)
         return
     try:
         generation = _keymint_key_generation(master_key)
@@ -2969,7 +3670,7 @@ def migrate_keystore_for_keymint_persistence(mount_point, log=kmsg):
             with open(marker, "w") as f:
                 f.write(generation)
         except OSError as e:
-            log(f"keystore migration marker write failed ({e}) -- a later launch records the key")
+            log(f"failed to write the keystore migration marker ({e})")
             log("RHIZO_MARKER keymint_migration=key-record-failed")
         else:
             log("RHIZO_MARKER keymint_migration=key-recorded")
@@ -2984,17 +3685,14 @@ def migrate_keystore_for_keymint_persistence(mount_point, log=kmsg):
         with open(marker, "w") as f:
             f.write(generation)
     except OSError as e:
-        log(f"keystore migration marker write failed ({e})")
+        log(f"failed to write the keystore migration marker ({e})")
     if removed:
-        log("/data predates KeyMint master-key persistence: "
-            f"{len(removed)} keystore file(s) wrapped by its gone key "
-            f"({', '.join(removed)}) removed; the rest of misc/keystore/ "
-            "left untouched")
+        log(f"removed {len(removed)} keystore files "
+            f"({', '.join(removed)}) from misc/keystore")
     if spblob_removed or locksettings_removed:
-        log("LockSettings' own synthetic-password state cited the same "
-            "now-gone keystore alias(es): spblob cleared for user(s) "
-            f"{', '.join(spblob_removed) if spblob_removed else '(none present)'}; "
-            f"locksettings.db {'removed (' + ', '.join(locksettings_removed) + ')' if locksettings_removed else 'not present'}")
+        log("spblob removed for users "
+            f"{', '.join(spblob_removed) if spblob_removed else '(none)'}, "
+            f"locksettings.db {'removed (' + ', '.join(locksettings_removed) + ')' if locksettings_removed else 'absent'}")
     if removed or spblob_removed or locksettings_removed:
         log("RHIZO_MARKER keymint_migration=removed-%d spblob=removed-%d locksettings_db=removed-%d"
             % (len(removed), len(spblob_removed), len(locksettings_removed)))
@@ -3003,7 +3701,7 @@ def migrate_keystore_for_keymint_persistence(mount_point, log=kmsg):
 
 
 def _per_dir_counts(ops):
-    """return how many mounts each directory of the plan costs"""
+    """return the bind count per directory of the plan"""
     out = {}
     for op in ops:
         if op["op"] != "bind":
@@ -3022,36 +3720,36 @@ def _mb(delta, ns):
 
 
 def plan_mounts_report(lower, upper, flat, ns, top=20):
-    """report what each mount lever is worth"""
+    """return the mount count lines and data for each mount lever"""
     off_ops, off, off_err = plan_flat_tree(lower, upper, flat, dir_binds=False)
     on_ops, on, on_err = plan_flat_tree(lower, upper, flat, dir_binds=True)
     lines = ["flat tree %s + %s -> %s" % (lower, upper, flat),
-             "  levers off: %d mounts (%d per-file, %d subtree)"
+             "  levers_off mounts=%d per_file=%d subtree=%d"
              % (off["mounts"], off["files"], off["subtrees"]),
-             "  dir binds : %d mounts (%d per-file, %d subtree, %d dir, %d overmount)"
+             "  dir_binds mounts=%d per_file=%d subtree=%d dir=%d overmount=%d"
              % (on["mounts"], on["files"], on["subtrees"], on["dirbinds"], on["overmounts"]),
-             "  lever 1 flat trees per directory: " + _mb(off["mounts"] - on["mounts"], ns)]
+             "  lever1_flat_dir_binds " + _mb(off["mounts"] - on["mounts"], ns)]
     off_dirs, on_dirs = _per_dir_counts(off_ops), _per_dir_counts(on_ops)
     ranked = sorted(((k, off_dirs.get(k, 0)) for k in set(off_dirs) | set(on_dirs)),
                     key=lambda kv: (-max(kv[1], on_dirs.get(kv[0], 0)), kv[0]))[:top]
-    lines.append("  per directory (top %d by mounts off/on):" % top)
+    lines.append("  per_directory top=%d columns=off,on" % top)
     for name, n in ranked:
         lines.append("    %-52s %5d %5d" % (name[:52], n, on_dirs.get(name, 0)))
     apex_dir = os.path.join(lower, "apex")
     if os.path.isdir(apex_dir):
         entries = len(os.listdir(apex_dir))
-        lines.append("  lever 2 apex one bind: %d -> 3 mounts, %s"
+        lines.append("  lever2_apex_dir_bind mounts=%d->3 %s"
                      % (entries + 1, _mb(entries + 1 - 3, ns)))
     keep = _sys_kernel_keep()
     if keep and os.path.isdir("/sys/kernel"):
         children = os.listdir("/sys/kernel")
         kept = [c for c in children if c in keep]
-        lines.append("  lever 3 sys/kernel subset (this machine's /sys/kernel): "
-                     "%d -> %d mounts, %s"
+        lines.append("  lever3_sys_kernel_subset "
+                     "mounts=%d->%d %s"
                      % (len(children), len(kept), _mb(len(children) - len(kept), ns)))
     for label, errs in (("off", off_err), ("dir binds", on_err)):
         if errs:
-            lines.append("  WALK ERRORS (%s): %d, first %s" % (label, len(errs), errs[0]))
+            lines.append("  walk_errors lever=%s count=%d first=%s" % (label, len(errs), errs[0]))
     return lines, {"off": off, "dir_binds": on, "ns": ns,
                    "bytes_per_mount_ns": MNT_CACHE_BYTES,
                    "per_dir_off": off_dirs, "per_dir_on": on_dirs,

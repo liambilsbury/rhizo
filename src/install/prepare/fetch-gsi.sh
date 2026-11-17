@@ -1,18 +1,18 @@
 #!/bin/bash
-# fetch and stage the GSI system image
+# GSI system image fetch and staging
 set -uo pipefail
 
 PROG=rhizo-host-fetch-gsi
 log() { echo "[$PROG] $*" >&2; }
 # print a refusal reason and exit 1
-refuse() { local t="$1"; shift; log "REFUSED: $*"; echo "RHIZO_GSI_REFUSED reason=$t"; exit 1; }
+refuse() { local t="$1"; shift; log "$*"; echo "RHIZO_GSI_REFUSED reason=$t"; exit 1; }
 # print a failure reason and exit 1
-failstop() { local t="$1"; shift; log "FAILED: $*"; echo "RHIZO_GSI_FAILED reason=$t"; exit 1; }
+failstop() { local t="$1"; shift; log "$*"; echo "RHIZO_GSI_FAILED reason=$t"; exit 1; }
 # print the usage text
 usage() {
   cat <<'EOF'
-usage: fetch-gsi.sh [--release LABEL] [--from-zip PATH] [--verify | --fetch-only | --derive-only] [--offline]
-                    [-h | --help]
+fetch-gsi.sh [--release LABEL] [--from-zip PATH] [--verify | --fetch-only | --derive-only] [--offline]
+             [-h | --help]
 EOF
 }
 
@@ -24,14 +24,14 @@ GSI_URL[a17]="https://github.com/liambilsbury/rhizo/releases/download/gsi-a17-CP
 GSI_SHA[a17]="302bb7605f62f96a37afedb045ca0b5f955179e1d2d64b2ae6b4bea3ada3e1c9"
 GSI_DESC[a17]="Android 17 CP2A.260605.016, Rhizo's gsi_x86_64 build"
 
-# add the release pins a test rig lists in a tab-separated file
+# add the release pins in the tab-separated file $1
 load_extra_pins() {
   local f="$1" rel url sha desc
   [[ -f "$f" ]] || return 0
   while IFS=$'\t' read -r rel url sha desc || [[ -n "$rel" ]]; do
     [[ -z "$rel" || "$rel" == \#* ]] && continue
     [[ "$rel" =~ ^[a-z0-9][a-z0-9-]*$ && "$rel" != a16 && "$rel" != a17 && "$sha" =~ ^[0-9a-f]{64}$ && "$url" == https://* ]] \
-      || { log "skipping a bad pin row for '$rel' in $f"; continue; }
+      || { log "skipped invalid pin row '$rel' in $f"; continue; }
     GSI_URL[$rel]="$url"; GSI_SHA[$rel]="$sha"; GSI_DESC[$rel]="$desc"
   done < "$f"
 }
@@ -49,12 +49,12 @@ while [[ $# -gt 0 ]]; do
     --derive-only) MODE=derive-only; shift ;;
     --offline) OFFLINE=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "[$PROG] FAIL: unknown argument '$1'" >&2; exit 2 ;;
+    *) echo "[$PROG] unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
 load_extra_pins "${RHIZO_GSI_PINS:-/etc/rhizo/gsi-pins.tsv}"
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/host-flavor.sh" \
-  || refuse "library-unreadable" "cannot read host-flavor.sh beside $0"
+  || refuse "library-unreadable" "failed to source host-flavor.sh beside $0"
 why=$(host_state_subvolume_check) || refuse "root-snapshot-boot" "$why"
 # print the current release label
 current_release() {
@@ -70,7 +70,7 @@ if [[ "$RELEASE" == current ]]; then
   RELEASE=$(current_release)
   log "the current release is $RELEASE"
 fi
-[[ -n "${GSI_URL[$RELEASE]:-}" ]] || refuse "unknown-release" "no GSI pin for '$RELEASE' -- known: ${!GSI_URL[*]}"
+[[ -n "${GSI_URL[$RELEASE]:-}" ]] || refuse "unknown-release" "no GSI pin for '$RELEASE' in ${!GSI_URL[*]}"
 
 SRV="${RHIZO_GSI_ROOT:-/srv/rhizo}"
 TREE="$SRV/gsi_system"
@@ -84,10 +84,10 @@ DERIVE_PATCHES="${RHIZO_DERIVE_PATCHES:-$(dirname "${BASH_SOURCE[0]}")/../../too
 ZIP="$CACHE/gsi_$RELEASE.zip"
 WANT="${GSI_SHA[$RELEASE]}"
 
-# check whether the GSI tree is staged
+# return whether $TREE/bin/init is non-empty
 staged() { [[ -s "$TREE/bin/init" ]]; }
 
-# check for android's policy loaded on this boot
+# return whether Android's policy is loaded
 policy_loaded() {
   local ctx
   ctx=$(tr -d '\0' < "${RHIZO_ATTR_CURRENT:-/proc/self/attr/current}" 2>/dev/null) || return 1
@@ -103,11 +103,10 @@ cleanup_gsi_zip_cache() {
 
 if [[ "$MODE" == verify ]]; then
   if staged; then
-    log "staged: $TREE ($(du -sh "$TREE" 2>/dev/null | cut -f1))"
+    log "staged $TREE ($(du -sh "$TREE" 2>/dev/null | cut -f1))"
     echo "RHIZO_GSI_VERIFIED=1"; exit 0
   fi
-  log "no staged tree at $TREE"
-  failstop "not-staged" "$TREE carries no bin/init"
+  failstop "not-staged" "$TREE has no bin/init"
 fi
 
 GSI_LIB_NAMES=(
@@ -138,11 +137,11 @@ derive_gsi_libs() {
   local name src d copied=0 kept=0 missing="" fp
   fp=$(tree_fingerprint)
   [[ -n "$fp" ]] \
-    || failstop "gsi-libs-fingerprint" "$TREE/build.prop carries no ro.system.build.fingerprint or ro.build.fingerprint"
-  mkdir -p "$GSI_LIBS" || failstop "gsi-libs-mkdir" "cannot create $GSI_LIBS"
-  exec 8>"$GSI_LIBS_ROOT/.lock" || failstop "gsi-libs-lock" "cannot open $GSI_LIBS_ROOT/.lock"
-  flock 8 || failstop "gsi-libs-lock" "cannot lock $GSI_LIBS_ROOT/.lock"
-  rm -f "$GSI_LIBS/$GSI_LIBS_SOURCE" || failstop "gsi-libs-stamp" "cannot clear $GSI_LIBS/$GSI_LIBS_SOURCE"
+    || failstop "gsi-libs-fingerprint" "$TREE/build.prop has no ro.system.build.fingerprint or ro.build.fingerprint"
+  mkdir -p "$GSI_LIBS" || failstop "gsi-libs-mkdir" "failed to create $GSI_LIBS"
+  exec 8>"$GSI_LIBS_ROOT/.lock" || failstop "gsi-libs-lock" "failed to open $GSI_LIBS_ROOT/.lock"
+  flock 8 || failstop "gsi-libs-lock" "failed to lock $GSI_LIBS_ROOT/.lock"
+  rm -f "$GSI_LIBS/$GSI_LIBS_SOURCE" || failstop "gsi-libs-stamp" "failed to remove $GSI_LIBS/$GSI_LIBS_SOURCE"
   for name in "${GSI_LIB_NAMES[@]}"; do
     src=""
     for d in lib64 system/lib64; do
@@ -150,18 +149,18 @@ derive_gsi_libs() {
     done
     if [[ -z "$src" ]]; then missing="$missing $name"; continue; fi
     if cmp -s "$src" "$GSI_LIBS/$name"; then kept=$((kept + 1)); continue; fi
-    cp "$src" "$GSI_LIBS/$name" || failstop "gsi-libs-copy" "cannot copy $src into $GSI_LIBS"
+    cp "$src" "$GSI_LIBS/$name" || failstop "gsi-libs-copy" "failed to copy $src to $GSI_LIBS"
     copied=$((copied + 1))
   done
   [[ -z "$missing" ]] \
-    || failstop "gsi-libs-missing" "this GSI has no:$missing"
+    || failstop "gsi-libs-missing" "$TREE has no$missing"
   { printf 'tree=%s\nfingerprint=%s\n' "$TREE" "$fp" > "$GSI_LIBS/$GSI_LIBS_SOURCE.tmp" \
       && mv "$GSI_LIBS/$GSI_LIBS_SOURCE.tmp" "$GSI_LIBS/$GSI_LIBS_SOURCE"; } \
-    || failstop "gsi-libs-stamp" "cannot write $GSI_LIBS/$GSI_LIBS_SOURCE"
+    || failstop "gsi-libs-stamp" "failed to write $GSI_LIBS/$GSI_LIBS_SOURCE"
   for name in "${GSI_LIB_NAMES[@]}"; do rm -f "$GSI_LIBS_ROOT/$name"; done
   derive_stock_patches
   exec 8>&-
-  log "took $copied of ${#GSI_LIB_NAMES[@]} glue librar(ies) out of $TREE into $GSI_LIBS, $kept already there; stock patches in $PATCHES"
+  log "copied $copied of ${#GSI_LIB_NAMES[@]} libraries from $TREE to $GSI_LIBS, $kept identical, patches in $PATCHES"
 }
 
 STOCK_PATCH_NAMES=(netd.rc surfaceflinger.rc vold.rc init.vndk-nodef.rc cameraserver.rc wificond.rc
@@ -169,46 +168,45 @@ STOCK_PATCH_NAMES=(netd.rc surfaceflinger.rc vold.rc init.vndk-nodef.rc camerase
 # derive the stock patches from the tree
 derive_stock_patches() {
   local out name
-  [[ -f "$DERIVE_PATCHES" ]] || failstop "stock-patches" "no $DERIVE_PATCHES to derive $TREE's stock patches with"
-  rm -rf "$PATCHES.part" || failstop "stock-patches" "cannot clear $PATCHES.part"
+  [[ -f "$DERIVE_PATCHES" ]] || failstop "stock-patches" "no $DERIVE_PATCHES"
+  rm -rf "$PATCHES.part" || failstop "stock-patches" "failed to remove $PATCHES.part"
   out=$(bash "$DERIVE_PATCHES" "$RELEASE" --from-tree "$TREE" --out "$PATCHES.part" 2>&1) \
-    || failstop "stock-patches" "$DERIVE_PATCHES could not derive $TREE's stock patches: $(tail -3 <<<"$out" | tr '\n' ' ')"
+    || failstop "stock-patches" "$DERIVE_PATCHES --from-tree $TREE failed ($(tail -3 <<<"$out" | tr '\n' ' '))"
   { rm -rf "$PATCHES" && mv "$PATCHES.part" "$PATCHES"; } \
-    || failstop "stock-patches" "cannot move $PATCHES.part into place"
+    || failstop "stock-patches" "failed to move $PATCHES.part to $PATCHES"
   for name in "${STOCK_PATCH_NAMES[@]}"; do rm -f "${PATCHES_ROOT%/patches}/$name"; done
 }
 
-[[ $EUID -eq 0 ]] || refuse "not-root" "must run as root (it writes $SRV and mounts the image)"
+[[ $EUID -eq 0 ]] || refuse "not-root" "EUID $EUID is not 0"
 if [[ -n "$FROM_ZIP" ]]; then
   [[ -f "$FROM_ZIP" ]] || refuse "no-such-zip" "--from-zip '$FROM_ZIP' does not exist"
   have=$(sha256sum "$FROM_ZIP" | cut -d' ' -f1)
   [[ "$have" == "$WANT" ]] || failstop "sha256-mismatch" "$FROM_ZIP is $have, the pin is $WANT"
 fi
 if [[ "$MODE" == derive-only ]]; then
-  staged || failstop "not-staged" "$TREE carries no bin/init"
+  staged || failstop "not-staged" "$TREE has no bin/init"
   derive_gsi_libs
   echo "RHIZO_GSI_DERIVED release=$RELEASE dir=$GSI_LIBS"
   exit 0
 fi
 staged && { log "$TREE is already staged"; derive_gsi_libs; cleanup_gsi_zip_cache "$ZIP" "$FROM_ZIP"; echo "RHIZO_GSI_ALREADY_STAGED=1"; exit 0; }
 [[ "$MODE" == apply ]] && policy_loaded \
-  && refuse "policy-loaded" "Android's SELinux policy is loaded host-wide -- $TREE stages on the next boot, before the load; rhizo gsi update arranges that"
+  && refuse "policy-loaded" "Android's SELinux policy is loaded host-wide"
 
-command -v python3 >/dev/null 2>&1 || refuse "no-python3" "python3 is required to extract the image"
-command -v curl >/dev/null 2>&1 || [[ -n "$FROM_ZIP" ]] || refuse "no-curl" "curl is required to download the image"
+command -v python3 >/dev/null 2>&1 || refuse "no-python3" "no python3"
+command -v curl >/dev/null 2>&1 || [[ -n "$FROM_ZIP" ]] || refuse "no-curl" "no curl"
 
-mkdir -p "$CACHE" "$SRV" || failstop "mkdir-failed" "cannot create $CACHE and $SRV"
+mkdir -p "$CACHE" "$SRV" || failstop "mkdir-failed" "failed to create $CACHE and $SRV"
 
 if [[ -n "$FROM_ZIP" ]]; then
   ZIP="$FROM_ZIP"
-  log "using $ZIP (its sha256 is still checked against the pin below)"
 elif [[ -f "$ZIP" ]] && [[ "$(sha256sum "$ZIP" | cut -d' ' -f1)" == "$WANT" ]]; then
-  log "cached zip already matches the pin"
+  log "cached zip matches the pin"
 else
-  (( OFFLINE )) && failstop "no-cached-zip" "--offline and no cached ${GSI_DESC[$RELEASE]} zip matching the pin"
-  log "downloading ${GSI_DESC[$RELEASE]}"
+  (( OFFLINE )) && failstop "no-cached-zip" "--offline without a cached ${GSI_DESC[$RELEASE]} zip matching the pin"
+  log "curl ${GSI_URL[$RELEASE]}"
   curl -fsS -L --retry 3 --retry-delay 5 -o "$ZIP.part" "${GSI_URL[$RELEASE]}" \
-    || failstop "download-failed" "could not fetch ${GSI_URL[$RELEASE]}"
+    || failstop "download-failed" "curl ${GSI_URL[$RELEASE]} failed"
   mv "$ZIP.part" "$ZIP"
 fi
 
@@ -216,59 +214,57 @@ have=$(sha256sum "$ZIP" | cut -d' ' -f1)
 [[ "$have" == "$WANT" ]] || failstop "sha256-mismatch" "$ZIP is $have, the pin is $WANT"
 log "sha256 verified against the pin"
 if [[ "$MODE" == fetch-only ]]; then
-  log "keeping the verified zip for the staging to come"
   echo "RHIZO_GSI_FETCHED release=$RELEASE sha256=$WANT"
   exit 0
 fi
 
-# check for a policy the host loaded itself
+# return whether /proc/self/attr/current has a context
 host_policy() {
   local ctx
   ctx=$(tr -d '\0' < "${RHIZO_ATTR_CURRENT:-/proc/self/attr/current}" 2>/dev/null) || return 1
   [[ "$ctx" == *:* ]]
 }
 LAUNCHER="${RHIZO_LAUNCHER:-$(dirname "${BASH_SOURCE[0]}")/../../launcher3.py}"
-# run a hostops.py operation in this script's domain
+# run a hostops.py operation in the caller's SELinux domain
 hostops() { python3 "${RHIZO_HOSTOPS:-$(dirname "${BASH_SOURCE[0]}")/../../hostops.py}" "$@"; }
 
 # copy the image's system tree to $TREE.part with the image's labels
 copy_tree() {
   if host_policy; then
-    log "the host has its own SELinux policy: copying with the image's labels in a namespace that loads Android's policy"
     python3 "$LAUNCHER" stage-gsi-labeled "$TMP/system.img" "$TREE.part" "$TMP" \
-      || failstop "labeled-copy-failed" "could not copy the tree with the image's labels in a namespace that loads Android's policy"
+      || failstop "labeled-copy-failed" "stage-gsi-labeled failed"
     return 0
   fi
   mkdir -p "$TMP/mnt"
-  LOOP=$(hostops loop-attach -r "$TMP/system.img") || failstop "mount-failed" "could not attach the extracted system.img to a loop device"
-  hostops mount -r -t ext4 "$LOOP" "$TMP/mnt" || failstop "mount-failed" "could not mount the extracted system.img"
-  [[ -d "$TMP/mnt/system" ]] || failstop "no-system-dir" "the image has no system/ directory"
-  cp -a "$TMP/mnt/system" "$TREE.part" || failstop "copy-failed" "could not copy the tree out of the image"
+  LOOP=$(hostops loop-attach -r "$TMP/system.img") || failstop "mount-failed" "hostops loop-attach -r $TMP/system.img failed"
+  hostops mount -r -t ext4 "$LOOP" "$TMP/mnt" || failstop "mount-failed" "failed to mount $TMP/system.img"
+  [[ -d "$TMP/mnt/system" ]] || failstop "no-system-dir" "no system/ in $TMP/system.img"
+  cp -a "$TMP/mnt/system" "$TREE.part" || failstop "copy-failed" "cp -a $TMP/mnt/system $TREE.part failed"
   hostops umount "$TMP/mnt"
   hostops loop-detach "$LOOP"
   LOOP=""
 }
 
-# print the directory that holds scratch images
+# print the scratch image directory
 scratch_root() { echo "${RHIZO_STATE_DIR:-/var/lib/rhizo}/fetch-scratch"; }
 
-# remove scratch directories an earlier run left
+# remove gsi.* scratch directories older than 1440 minutes
 sweep_stale_scratch() {
   local root d loop loops
   root=$(scratch_root)
   [[ -d "$root" ]] || return 0
   while IFS= read -r -d '' d; do
     if hostops is-mount "$d/mnt"; then
-      hostops umount "$d/mnt" || { log "leaving $d: its mount would not unmount"; continue; }
+      hostops umount "$d/mnt" || { log "hostops umount $d/mnt failed"; continue; }
     fi
     if ! loops=$(hostops loop-find "$d/system.img"); then
-      log "leaving $d: hostops loop-find failed"
+      log "hostops loop-find $d/system.img failed"
       continue
     fi
     while read -r loop; do
-      [[ -n "$loop" ]] && { hostops loop-detach "$loop" || { log "leaving $d: $loop would not detach"; continue 2; }; }
+      [[ -n "$loop" ]] && { hostops loop-detach "$loop" || { log "hostops loop-detach $loop failed"; continue 2; }; }
     done <<<"$loops"
-    rm -rf --one-file-system -- "$d" || log "could not remove $d"
+    rm -rf --one-file-system -- "$d" || log "failed to remove $d"
   done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -name 'gsi.*' -user "$(id -u)" -mmin +1440 -print0)
 }
 
@@ -281,13 +277,12 @@ make_scratch() {
 }
 
 sweep_stale_scratch
-TMP=$(make_scratch) || failstop "mktemp-failed" "cannot create a scratch directory below $(scratch_root)"
+TMP=$(make_scratch) || failstop "mktemp-failed" "failed to create a scratch directory in $(scratch_root)"
 LOOP=""
 # unmount and remove the scratch directory
 cleanup() { hostops is-mount "$TMP/mnt" && hostops umount "$TMP/mnt"; [[ -n "$LOOP" ]] && hostops loop-detach "$LOOP"; rm -rf --one-file-system "$TMP"; rmdir -- "$(scratch_root)" 2>/dev/null; }
 trap cleanup EXIT
 
-log "extracting system.img"
 python3 - "$ZIP" "$TMP/system.img" <<'PYEOF' || failstop "extract-failed" "system.img is not in the archive"
 import shutil, sys, zipfile
 with zipfile.ZipFile(sys.argv[1]) as z, open(sys.argv[2], "wb") as out:
@@ -297,9 +292,9 @@ PYEOF
 
 rm -rf "$TREE.part"
 copy_tree
-[[ -s "$TREE.part/bin/init" ]] || failstop "no-init" "the copied tree has no bin/init"
+[[ -s "$TREE.part/bin/init" ]] || failstop "no-init" "$TREE.part has no bin/init"
 rm -rf "$TREE"
-mv "$TREE.part" "$TREE" || failstop "rename-failed" "could not move $TREE.part into place"
+mv "$TREE.part" "$TREE" || failstop "rename-failed" "failed to move $TREE.part to $TREE"
 sync
 cleanup_gsi_zip_cache "$ZIP" "$FROM_ZIP"
 derive_gsi_libs

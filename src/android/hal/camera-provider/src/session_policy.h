@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_SESSION_POLICY_H
 #define RHIZO_CAMERA_SESSION_POLICY_H
 
-// compute a camera session's frame pacing and reopen timing
+// frame pacing and reopen timing of a camera session
 
 #include <stdint.h>
 
@@ -10,7 +10,7 @@ namespace rhizo::camera {
 constexpr int kReopenIntervalMs = 500;
 constexpr int kSilentTimeoutsBeforeReopen = 2;
 
-// drop host frames to hold delivery under a rate
+// pacer that drops host frames above maxFps
 class FramePacer {
  public:
   void reset() { started_ = false; }

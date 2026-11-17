@@ -57,7 +57,7 @@ const char* hd_table_thread_name(const struct hd_table* t, int32_t pid, int32_t 
 
 char* hd_table_dump(const struct hd_table* t, bool connected, size_t* len);
 
-// track descriptors sent to a trace
+// track descriptor keys passed to hd_sink_fn
 struct hd_incr {
   uint64_t* keys;
   size_t n, cap;

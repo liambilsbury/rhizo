@@ -66,7 +66,7 @@ struct Radio {
     if (!nl_ready) {
       int rc = nl.Init();
       if (rc != 0) {
-        *why = std::string("nl80211 unavailable: ") + strerror(-rc);
+        *why = std::string("Nl80211::Init failed with ") + strerror(-rc);
         return false;
       }
       nl_ready = true;
@@ -79,7 +79,7 @@ struct Radio {
     rhizo_wifi::IfaceInfo info;
     int rc = nl.GetInterface(ifindex, &info);
     if (rc != 0) {
-      *why = iface + " is not a cfg80211 netdev: " + strerror(-rc);
+      *why = iface + " NL80211_CMD_GET_INTERFACE failed with " + strerror(-rc);
       return false;
     }
     wiphy = info.wiphy;
@@ -92,7 +92,7 @@ class RhizoWifiStaIface : public BnWifiStaIface {
  public:
   explicit RhizoWifiStaIface(std::shared_ptr<Radio> radio) : radio_(std::move(radio)), name_(radio_->iface) {}
 
-  // drop this object from service
+  // set valid_ false and clear the callbacks
   void Invalidate() {
     valid_ = false;
     callbacks_.Clear();
@@ -120,7 +120,7 @@ class RhizoWifiStaIface : public BnWifiStaIface {
     int rc = -ENODEV;
     if (radio_->CheckLocked(&why)) rc = radio_->nl.GetWiphy(radio_->wiphy, &w);
     if (rc != 0) {
-      klogf("getFeatureSet: wiphy unreadable: %s", why.empty() ? strerror(-rc) : why.c_str());
+      klogf("failed to read wiphy (%s)", why.empty() ? strerror(-rc) : why.c_str());
       return Status(WifiStatusCode::ERROR_UNKNOWN);
     }
     int32_t f = 0;
@@ -144,7 +144,7 @@ class RhizoWifiStaIface : public BnWifiStaIface {
       *out = mac;
       return ScopedAStatus::ok();
     }
-    klogf("getFactoryMacAddress: %s has no permanent address (ethtool: %s)", name_.c_str(),
+    klogf("%s has no permanent address (ETHTOOL_GPERMADDR %s)", name_.c_str(),
           rc ? strerror(-rc) : "all zero");
     return Status(WifiStatusCode::ERROR_UNKNOWN);
   }
@@ -156,21 +156,21 @@ class RhizoWifiStaIface : public BnWifiStaIface {
     short flags = 0;
     int rc = rhizo_wifi::GetFlags(name_, &flags);
     if (rc != 0) {
-      klogf("setMacAddress: %s flags unreadable: %s", name_.c_str(), strerror(-rc));
+      klogf("failed to read %s flags (%s)", name_.c_str(), strerror(-rc));
       return Status(WifiStatusCode::ERROR_UNKNOWN);
     }
     const bool was_up = flags & IFF_UP;
     if (was_up && (rc = rhizo_wifi::SetUp(name_, false)) != 0) {
-      klogf("setMacAddress: %s down FAILED: %s", name_.c_str(), strerror(-rc));
+      klogf("failed to set %s down (%s)", name_.c_str(), strerror(-rc));
       return Status(WifiStatusCode::ERROR_UNKNOWN);
     }
     const int set_rc = rhizo_wifi::SetHwAddr(name_, mac);
     if (was_up && (rc = rhizo_wifi::SetUp(name_, true)) != 0) {
-      klogf("setMacAddress: %s up FAILED: %s", name_.c_str(), strerror(-rc));
+      klogf("failed to set %s up (%s)", name_.c_str(), strerror(-rc));
       return Status(WifiStatusCode::ERROR_UNKNOWN);
     }
     if (set_rc != 0) {
-      klogf("setMacAddress: %s SIOCSIFHWADDR FAILED: %s", name_.c_str(), strerror(-set_rc));
+      klogf("SIOCSIFHWADDR failed for %s (%s)", name_.c_str(), strerror(-set_rc));
       return Status(WifiStatusCode::ERROR_UNKNOWN);
     }
     klogf("%s address set to %02x:%02x:%02x:%02x:%02x:%02x", name_.c_str(), mac[0], mac[1], mac[2], mac[3],
@@ -243,7 +243,7 @@ class RhizoWifiChip : public BnWifiChip {
  public:
   explicit RhizoWifiChip(std::shared_ptr<Radio> radio) : radio_(std::move(radio)) {}
 
-  // drop the chip and its iface from service
+  // invalidate the chip and the STA iface
   void Invalidate() {
     std::shared_ptr<RhizoWifiStaIface> sta;
     {
@@ -319,13 +319,13 @@ class RhizoWifiChip : public BnWifiChip {
       std::lock_guard<std::mutex> lg(mu_);
       if (!configured_ || sta_) return Status(WifiStatusCode::ERROR_NOT_AVAILABLE);
       if (if_nametoindex(radio_->iface.c_str()) == 0) {
-        klogf("createStaIface: no netdev %s", radio_->iface.c_str());
+        klogf("no netdev %s", radio_->iface.c_str());
         return Status(WifiStatusCode::ERROR_UNKNOWN);
       }
       sta_ = ndk::SharedRefBase::make<RhizoWifiStaIface>(radio_);
       sta = sta_;
     }
-    klogf("sta iface %s claimed", sta->name().c_str());
+    klogf("sta iface %s created", sta->name().c_str());
     callbacks_.ForEach([&](const auto& cb) { cb->onIfaceAdded(IfaceType::STA, sta->name()); });
     *out = sta;
     return ScopedAStatus::ok();
@@ -340,7 +340,7 @@ class RhizoWifiChip : public BnWifiChip {
       sta.swap(sta_);
     }
     sta->Invalidate();
-    klogf("sta iface %s released", name.c_str());
+    klogf("sta iface %s removed", name.c_str());
     callbacks_.ForEach([&](const auto& cb) { cb->onIfaceRemoved(IfaceType::STA, name); });
     return ScopedAStatus::ok();
   }
@@ -376,7 +376,7 @@ class RhizoWifiChip : public BnWifiChip {
     std::lock_guard<std::mutex> lg(mu_);
     if (code != country_) {
       country_ = code;
-      klogf("chip country code recorded as %c%c, not forwarded to cfg80211", code[0], code[1]);
+      klogf("chip country_=%c%c", code[0], code[1]);
     }
     return ScopedAStatus::ok();
   }
@@ -496,7 +496,7 @@ class RhizoWifi : public BnWifi {
     {
       std::lock_guard<std::mutex> rl(radio_->mu);
       if (!radio_->CheckLocked(&why)) {
-        klogf("start FAILED: %s", why.c_str());
+        klogf("start failed (%s)", why.c_str());
         return Status(WifiStatusCode::ERROR_UNKNOWN);
       }
     }
@@ -513,7 +513,7 @@ class RhizoWifi : public BnWifi {
     chip_->Invalidate();
     chip_.reset();
     int rc = rhizo_wifi::SetUp(radio_->iface, false);
-    if (rc != 0 && rc != -ENODEV) klogf("stop: %s down FAILED: %s", radio_->iface.c_str(), strerror(-rc));
+    if (rc != 0 && rc != -ENODEV) klogf("failed to set %s down (%s)", radio_->iface.c_str(), strerror(-rc));
     klog("stopped");
     callbacks_.ForEach([](const auto& cb) { cb->onStop(); });
     return ScopedAStatus::ok();
@@ -552,19 +552,19 @@ class RhizoWifi : public BnWifi {
     if (monitor_.joinable()) return;
     auto group = radio_->nl.family().groups.find(NL80211_MULTICAST_GROUP_CONFIG);
     if (group == radio_->nl.family().groups.end() || !events_.Open(0) || !events_.Join(group->second)) {
-      klog("nl80211 config group unavailable, wiphy loss will not be reported");
+      klog("failed to join nl80211 config group");
       return;
     }
     monitor_ = std::thread([this] { MonitorLoop(); });
   }
 
-  // report a vanished netdev or wiphy as a failure
+  // call OnRadioLost on NL80211_CMD_DEL_INTERFACE or NL80211_CMD_DEL_WIPHY
   void MonitorLoop() {
     for (;;) {
       pollfd pfd{events_.fd(), POLLIN, 0};
       if (poll(&pfd, 1, -1) < 0) {
         if (errno == EINTR) continue;
-        klogf("nl80211 monitor poll FAILED: %s", strerror(errno));
+        klogf("nl80211 monitor poll failed (%s)", strerror(errno));
         return;
       }
       uint32_t ifindex, wiphy;
@@ -578,20 +578,20 @@ class RhizoWifi : public BnWifi {
             if (r.cmd == NL80211_CMD_DEL_INTERFACE && r.attrs.U32(NL80211_ATTR_IFINDEX) == ifindex) lost = true;
             if (r.cmd == NL80211_CMD_DEL_WIPHY && r.attrs.U32(NL80211_ATTR_WIPHY, UINT32_MAX) == wiphy) lost = true;
           })) {
-        klogf("nl80211 monitor read FAILED: %s", strerror(errno));
+        klogf("failed to read nl80211 monitor events (%s)", strerror(errno));
         return;
       }
       if (lost) OnRadioLost();
     }
   }
 
-  // drop the chip and report the radio as lost
+  // invalidate the chip and call onFailure
   void OnRadioLost() {
     std::lock_guard<std::mutex> lg(mu_);
     if (!chip_) return;
     chip_->Invalidate();
     chip_.reset();
-    klogf("%s or its wiphy went away, reporting failure", radio_->iface.c_str());
+    klogf("NL80211_CMD_DEL_INTERFACE or NL80211_CMD_DEL_WIPHY for %s", radio_->iface.c_str());
     callbacks_.ForEach([](const auto& cb) { cb->onFailure(WifiStatusCode::ERROR_UNKNOWN); });
   }
 
@@ -606,18 +606,16 @@ class RhizoWifi : public BnWifi {
 }
 
 int main() {
-  klog("main() entered");
   ABinderProcess_setThreadPoolMaxThreadCount(4);
   auto wifi = ndk::SharedRefBase::make<RhizoWifi>();
   const std::string instance = std::string(RhizoWifi::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(wifi->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
-    klogf("addService FAILED status=%d", status);
+    klogf("AServiceManager_addService failed with status %d", status);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_startThreadPool();
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

@@ -1,8 +1,8 @@
 diff --git a/security/selinux/avc.c b/security/selinux/avc.c
-index fe09ce623..e93135d94 100644
+index 59e84532c..b3011ae79 100644
 --- a/security/selinux/avc.c
 +++ b/security/selinux/avc.c
-@@ -1549,17 +1549,23 @@ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
+@@ -1531,17 +1531,23 @@ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
   * @tclass: target security class
   * @requested: requested permissions, interpreted based on @tclass
   * @avd: access vector decisions
@@ -28,7 +28,7 @@ index fe09ce623..e93135d94 100644
  {
  	struct cred_security_struct *crsec;
  	struct selinux_state *state;
-@@ -1567,14 +1573,19 @@ int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
+@@ -1549,14 +1555,19 @@ int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
  	u32 ssid;
  	int rc;
  
@@ -38,7 +38,7 @@ index fe09ce623..e93135d94 100644
  	state = crsec->state;
  
  	rc = avc_has_perm_noaudit(state, ssid, tsid, tclass,
- 				requested, 0, avd);
+ 				  requested, 0, avd);
 -	if (rc)
 +	if (rc) {
 +		/* no ancestor decided, so a cached entry may allow nothing below them */
@@ -49,7 +49,7 @@ index fe09ce623..e93135d94 100644
  
  	cred = crsec->parent_cred;
  	while (cred) {
-@@ -1587,10 +1598,22 @@ int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
+@@ -1569,10 +1580,22 @@ int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
  
  		/* skip the all-allowed decision of an ancestor with no policy */
  		if (selinux_initialized(state)) {
@@ -73,65 +73,63 @@ index fe09ce623..e93135d94 100644
 +				}
 +			}
  		}
- 
- 		if (rc)
+ 		/*
+ 		 * NB avd->seqno is left with the leaf namespace's value.
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 9fa03e8d6..64814fc7c 100644
+index 2315df191..ec4522d0d 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -3803,7 +3803,7 @@ static int selinux_inode_permission(struct inode *inode, int requested)
- 	struct task_security_struct *tsec;
+@@ -3795,7 +3795,7 @@ static int selinux_inode_permission(struct inode *inode, int requested)
  	struct inode_security_struct *isec;
  	struct avdc_entry *avdc;
+ 	struct av_decision avd, *avdp = &avd;
 -	int rc, rc2;
-+	int rc, rc2, arc = 0;
++	int rc, rc2, arc;
  	u32 audited, denied;
  
  	mask = requested & (MAY_READ|MAY_WRITE|MAY_EXEC|MAY_APPEND);
-@@ -3822,6 +3822,10 @@ static int selinux_inode_permission(struct inode *inode, int requested)
+@@ -3814,6 +3814,10 @@ static int selinux_inode_permission(struct inode *inode, int requested)
  	perms = file_mask_to_av(inode->i_mode, mask);
  
  	rc = task_avdcache_search(tsec, isec, &avdc);
 +	/* a denial with ancestors above is decided again in every namespace */
-+	if (likely(!rc) && unlikely(perms & ~avdc->allowed) &&
++	if (likely(!rc) && unlikely(perms & ~avdc->avd.allowed) &&
 +	    selinux_cred(current_cred())->parent_cred)
 +		rc = -ENOENT;
  	if (likely(!rc)) {
  		/* Cache hit. */
- 		audited = perms & avdc->audited;
-@@ -3829,22 +3833,34 @@ static int selinux_inode_permission(struct inode *inode, int requested)
- 		if (unlikely(denied && enforcing_enabled(current_selinux_state) &&
- 			     !avdc->permissive))
+ 		avdp = &avdc->avd;
+@@ -3822,20 +3826,34 @@ static int selinux_inode_permission(struct inode *inode, int requested)
+ 		    enforcing_enabled(current_selinux_state) &&
+ 		    !(avdp->flags & AVD_FLAGS_PERMISSIVE))
  			rc = -EACCES;
 +		arc = rc;
  	} else {
- 		struct av_decision avd;
 +		struct common_audit_data ad;
 +		u32 ancestors_allowed;
- 
++
  		/* Cache miss. */
 +		ad.type = LSM_AUDIT_DATA_INODE;
 +		ad.u.inode = inode;
  		rc = cred_tsid_has_perm_noaudit(current_cred(), isec->sid,
--						isec->sclass, perms, &avd);
--		audited = avc_audit_required(perms, &avd, rc,
--			(requested & MAY_ACCESS) ? FILE__AUDIT_ACCESS : 0,
--			&denied);
--		task_avdcache_update(tsec, isec, &avd, audited);
-+						isec->sclass, perms, &avd, &ad,
+-						isec->sclass, perms, avdp);
+-		task_avdcache_update(tsec, isec, avdp);
++						isec->sclass, perms, avdp, &ad,
 +						&ancestors_allowed);
 +		/* an enforcing ancestor's denial is audited by it and never cached */
-+		arc = (avd.flags & AVD_FLAGS_UNCACHED) ? 0 : rc;
-+		audited = avc_audit_required(perms, &avd, arc,
-+					     (requested & MAY_ACCESS) ?
-+					     FILE__AUDIT_ACCESS : 0,
-+					     &denied);
-+		if (!(avd.flags & AVD_FLAGS_UNCACHED)) {
-+			avd.allowed &= ancestors_allowed;
-+			task_avdcache_update(tsec, isec, &avd, audited);
++		arc = (avdp->flags & AVD_FLAGS_UNCACHED) ? 0 : rc;
++		if (!(avdp->flags & AVD_FLAGS_UNCACHED)) {
++			struct av_decision cached = *avdp;
++
++			cached.allowed &= ancestors_allowed;
++			task_avdcache_update(tsec, isec, &cached);
 +		}
  	}
  
+-	audited = avc_audit_required(perms, avdp, rc,
++	audited = avc_audit_required(perms, avdp, arc,
+ 				     (requested & MAY_ACCESS) ?
+ 				     FILE__AUDIT_ACCESS : 0, &denied);
  	if (likely(!audited))
  		return rc;
  
@@ -141,10 +139,10 @@ index 9fa03e8d6..64814fc7c 100644
  		return rc2;
  
 diff --git a/security/selinux/include/avc.h b/security/selinux/include/avc.h
-index 081354fef..887cb10ce 100644
+index a42e83677..b92eeeae4 100644
 --- a/security/selinux/include/avc.h
 +++ b/security/selinux/include/avc.h
-@@ -167,7 +167,9 @@ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
+@@ -169,7 +169,9 @@ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
  		       u32 requested, struct common_audit_data *ad);
  
  int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
@@ -156,10 +154,10 @@ index 081354fef..887cb10ce 100644
  int cred_obj_has_perm(const struct cred *cred, u32 ssid, u32 tsid, u16 tclass,
  		      u32 requested, struct common_audit_data *ad);
 diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
-index 08b42f2e9..304516732 100644
+index cba2cd4ed..e9209382b 100644
 --- a/security/selinux/include/security.h
 +++ b/security/selinux/include/security.h
-@@ -350,6 +350,8 @@ struct extended_perms {
+@@ -344,6 +344,8 @@ struct extended_perms {
  /* definitions of av_decision.flags */
  #define AVD_FLAGS_PERMISSIVE 0x0001
  #define AVD_FLAGS_NEVERAUDIT  0x0002

@@ -1,5 +1,5 @@
 #!/bin/bash
-# sign a Rhizo kernel image for Secure Boot with a given key and certificate
+# Secure Boot sbsign of a Rhizo kernel image
 set -euo pipefail
 img=$1 key=$2 cert=$3
 trap 'rm -f "$img.signed"' EXIT

@@ -10,7 +10,7 @@
 
 namespace rhizo::c2va::av1 {
 
-// record each parsed element and structure boundary
+// receiver of the parsed elements and structure boundaries
 class Trace {
  public:
   virtual ~Trace() = default;

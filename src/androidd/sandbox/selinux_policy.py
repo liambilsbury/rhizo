@@ -29,15 +29,16 @@ NAMESPACE_LABEL_SERVICE = (
     "(allow rhizo_input_label rootfs (dir (search)))\n"
     "(allow rhizo_input_label device (dir (search)))\n"
     "(allow rhizo_input_label input_device (dir (search)))\n"
-    "(allow rhizo_input_label input_device (chr_file (getattr)))\n"
-    "(allow rhizo_input_label rhizo_host_device (chr_file (getattr relabelfrom)))\n"
+    "(allow rhizo_input_label tmpfs (dir (search)))\n"
+    "(allow rhizo_input_label tmpfs (chr_file (getattr relabelfrom)))\n"
+    "(allow rhizo_input_label input_device (chr_file (getattr relabelto)))\n"
     "(allow rhizo_input_label hidraw_device (chr_file (getattr relabelto)))\n"
     "(allow rhizo_input_label proc (filesystem (getattr)))\n"
     "(allow rhizo_input_label proc (dir (search)))\n"
     "(allow rhizo_input_label proc (lnk_file (read)))\n"
     "(allow rhizo_input_label self (dir (search)))\n"
     "(allow rhizo_input_label self (lnk_file (read)))\n"
-    "(validatetrans chr_file (or (not (eq t3 rhizo_input_label)) (eq t2 hidraw_device)))\n"
+    "(validatetrans chr_file (or (not (eq t3 rhizo_input_label)) (or (eq t2 hidraw_device) (eq t2 input_device))))\n"
     "(deny domain rhizo_input_label (process (ptrace sigkill sigstop signal)))\n"
     "(typeattribute rhizo_input_label_guard)\n"
     "(typeattributeset rhizo_input_label_guard (all))\n"
@@ -86,7 +87,7 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allow kernel self (process (setcurrent)))
 (allow kernel rhizo_ns_helper (process (dyntransition)))
 
-; rights of all of the helper domains
+; rhizo_ns_helper rules
 (allow rhizo_ns_helper self (process (fork sigchld getattr getcap setcap getpgid setpgid getsession setrlimit signull)))
 (allow rhizo_ns_helper self (fd (use)))
 (allow rhizo_ns_helper self (dir (getattr open read search)))
@@ -101,12 +102,12 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allowx rhizo_ns_helper kernel (ioctl fifo_file (0x5401)))
 (allow rhizo_ns_helper unlabeled (file (getattr open read map execute execute_no_trans ioctl)))
 (allowx rhizo_ns_helper unlabeled (ioctl file (0x5401)))
-; allow FIOCLEX on host scripts
+; 0x5451 FIOCLEX
 (allowx rhizo_ns_helper unlabeled (ioctl file (0x5451)))
 (allow rhizo_ns_helper unlabeled (dir (getattr open read search)))
 (allow rhizo_ns_helper unlabeled (lnk_file (getattr read)))
 (allow rhizo_ns_helper init (process (sigchld)))
-; setpcap for the verbs' capability drops
+; setpcap for PR_CAPBSET_DROP
 (allow rhizo_ns_helper self (capability (setpcap)))
 ; probes of proc, sysfs and selinuxfs
 (allow rhizo_ns_helper proc (dir (search)))
@@ -116,10 +117,9 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allow rhizo_ns_helper sysfs (dir (search)))
 (allow rhizo_ns_helper selinuxfs (filesystem (getattr)))
 
-; rights of stage-gsi-labeled and its cp -a
+; rhizo_ns_stage rules for stage-gsi-labeled and cp -a
 (allow rhizo_ns_stage self (process (setfscreate)))
 (allow rhizo_ns_stage self (capability (chown fowner fsetid)))
-; leave dac_read_search and setfcap unlogged
 (dontaudit rhizo_ns_stage self (capability (dac_read_search setfcap)))
 (allow rhizo_ns_stage unlabeled (dir (add_name write)))
 (allow rhizo_ns_stage rootfs (dir (search)))
@@ -134,15 +134,15 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allowx rhizo_ns_stage exec_type (ioctl file (0x9409)))
 (allowx rhizo_ns_stage vendor_file_type (ioctl file (0x9409)))
 
-; rights of the relabeller, its primer, the stagers and the vendor prelabel
+; rhizo_ns_relabel rules for the relabeller, the host primer, the stagers and the vendor prelabel
 (allow rhizo_ns_relabel self (capability (chown fowner sys_admin sys_chroot)))
 (dontaudit rhizo_ns_relabel self (capability (dac_read_search)))
 (dontaudit rhizo_ns_relabel kernel (security (setenforce)))
-; allow the cpu affinity read of python's start
+; sched_getaffinity at python startup
 (allow rhizo_ns_relabel self (process (getsched)))
-; allow the overcommit sysctl read of python's allocator
+; /proc/sys/vm/overcommit_memory read by the python allocator
 (allow rhizo_ns_relabel proc_overcommit_memory (file (open read)))
-; allow the terminal probes of python's stdio
+; 0x5401 TCGETS, 0x542a TCGETS2, 0x5413 TIOCGWINSZ on python stdio
 (allow rhizo_ns_relabel self (file (ioctl)))
 (allowx rhizo_ns_relabel self (ioctl file (0x5401)))
 (allowx rhizo_ns_relabel self (ioctl fifo_file (0x542a)))
@@ -171,7 +171,7 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allow rhizo_ns_relabel rhizo_enforce_shadow (file (relabelto getattr)))
 (allow rhizo_ns_relabel rhizo_power_shadow (file (relabelto getattr)))
 (allow rhizo_ns_relabel apex_data_file (dir (relabelto)))
-; allow the bound host socket directories and their sockets
+; bound host socket directories and sockets
 (allow rhizo_ns_relabel rhizo_bluetooth_socket (dir (relabelto)))
 (allow rhizo_ns_relabel rhizo_bluetooth_socket (sock_file (relabelto)))
 (allow rhizo_ns_relabel rhizo_location_socket (dir (relabelto)))
@@ -212,7 +212,7 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allow rhizo_ns_relabel selinuxfs (file (getattr open read write)))
 (allow rhizo_ns_relabel selinuxfs (dir (getattr open read search)))
 (allow rhizo_ns_relabel tmpfs (filesystem (unmount)))
-; allow the walk's probes of mounts and symlinks
+; statfs and readlink in the relabel walk
 (allow rhizo_ns_relabel tmpfs (filesystem (getattr)))
 (allow rhizo_ns_relabel device (filesystem (getattr)))
 (allow rhizo_ns_relabel devpts (filesystem (getattr)))
@@ -231,26 +231,26 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allow rhizo_ns_relabel system_lib_file (lnk_file (read)))
 (allow rhizo_ns_relabel system_linker_exec (lnk_file (read)))
 (allow rhizo_ns_relabel self (unix_stream_socket (create connect)))
-; allow the primer's ctypes closure mapping
+; execmem for ctypes closures in the host primer
 (allow rhizo_ns_relabel self (process (execmem)))
-; allow stdio writes to /dev/null
+; stdio writes to /dev/null
 (allow rhizo_ns_relabel null_device (chr_file (write)))
 (allow rhizo_ns_relabel tmpfs (chr_file (write)))
-; allow primer script and symlink reads on tmpfs
+; the host primer and symlinks on tmpfs
 (allow rhizo_ns_relabel tmpfs (file (open read ioctl write map execute)))
 (allowx rhizo_ns_relabel tmpfs (ioctl file (0x5401 0x5451 0x542a)))
 (allow rhizo_ns_relabel tmpfs (lnk_file (read)))
-; allow the relabeled host device nodes
+; relabeled host device nodes
 (allow rhizo_ns_relabel rhizo_host_kmsg_device (chr_file (relabelto open write ioctl)))
 (allowx rhizo_ns_relabel rhizo_host_kmsg_device (ioctl chr_file (0x5401 0x542a)))
 (allow rhizo_ns_relabel null_device (chr_file (ioctl)))
 (allowx rhizo_ns_relabel null_device (ioctl chr_file (0x5401 0x542a)))
 (allow null_device device (filesystem (associate)))
 
-; rights of the label, label-fd and hostfs-label-lower verbs
+; rhizo_ns_label rules for the label, label-fd and hostfs-label-lower verbs
 (allow rhizo_ns_label self (capability (setuid sys_ptrace sys_admin sys_chroot)))
 (allow rhizo_ns_label rhizo_inbox_file (file (getattr relabelto)))
-; allow labeling files in the device-state directory
+; files in the device-state directory
 (allow rhizo_ns_label rhizo_device_state_file (dir (search)))
 (allow rhizo_ns_label rhizo_device_state_file (file (getattr relabelto)))
 (allow rhizo_ns_label unlabeled (file (relabelfrom)))
@@ -262,7 +262,7 @@ NAMESPACE_HELPER_DOMAINS = RELABEL_WALKED_DIR_RULES + """; the helper types are 
 (allow rhizo_ns_label rootfs (dir (search)))
 (allow rhizo_ns_label self (capability (setgid)))
 (allow rhizo_ns_label self (unix_stream_socket (create connect)))
-; allow the terminal probes of the verbs' stdio
+; 0x5401 TCGETS, 0x5413 TIOCGWINSZ on verb stdio
 (allow rhizo_ns_label unlabeled (chr_file (getattr ioctl)))
 (allowx rhizo_ns_label unlabeled (ioctl chr_file (0x5401)))
 (allowx rhizo_ns_label kernel (ioctl fifo_file (0x5413)))
@@ -291,19 +291,19 @@ FTRACE_GUARD = (
 
 
 def declares_type(cils, type_name):
-    """search the CILs for a type declaration"""
+    """return whether a CIL in cils contains (type type_name)"""
     needle = f"(type {type_name})"
     return any(needle in open(c).read() for c in cils)
 
 
 def declares_policycap(cils, cap):
-    """search the CILs for a policy capability"""
+    """return whether a CIL in cils contains (policycap cap)"""
     needle = f"(policycap {cap})"
     return any(needle in open(c).read() for c in cils)
 
 
 def platform_opens_ashmem(cils):
-    """search the CILs for an open of the libcutils ashmem device granted to domain"""
+    """return whether a CIL in cils allows domain open on ashmem_libcutils_device"""
     rule = re.compile(r"\(allow domain ashmem_libcutils_device \(chr_file \(([^)]*)\)\)\)")
     return any("open" in m.group(1).split() for c in cils for m in rule.finditer(open(c).read()))
 
@@ -312,12 +312,12 @@ ASHMEM_OPEN_NEVERALLOW = re.compile(r"^\(neverallow \S+ ashmem_libcutils_device 
 
 
 def platform_bars_ashmem(cils):
-    """search the CILs for a neverallow on opening the libcutils ashmem device"""
+    """return whether a CIL in cils matches ASHMEM_OPEN_NEVERALLOW"""
     return any(ASHMEM_OPEN_NEVERALLOW.search(open(c).read()) for c in cils)
 
 
 def compile_input(cil, out_dir):
-    """return the CIL secilc compiles, dropping the ashmem open neverallows when the vendor policy grants that open"""
+    """return cil, or a copy of cil without the ASHMEM_OPEN_NEVERALLOW lines"""
     if platform_opens_ashmem([cil]) or not platform_bars_ashmem([cil]):
         return cil
     out = os.path.join(out_dir, os.path.basename(cil))
@@ -327,7 +327,7 @@ def compile_input(cil, out_dir):
 
 
 def declares_perm(cils, common_name, perm):
-    """search the common for a permission"""
+    """return whether perm is in the common_name common of cils"""
     needle = f"(common {common_name} ("
     for c in cils:
         text = open(c).read()
@@ -346,7 +346,7 @@ def derive(cils):
     declared = {p for p in CAP2_ALL if declares_perm(cils, "cap2", p)}
 
     def cap2(*wanted):
-        """return the wanted capabilities the policy declares"""
+        """return the permissions in wanted that are in declared"""
         return " ".join(p for p in wanted if p in declared)
 
     return dev_carveout, cap2
@@ -379,7 +379,7 @@ def wakeup_genfscons(texts, class_dir, log):
     except FileNotFoundError:
         return ""
     except OSError as e:
-        log(f"RHIZO_MARKER wakeup_genfs=failed reason=cannot list {class_dir}: {e.strerror}")
+        log(f"RHIZO_MARKER wakeup_genfs=failed reason=listdir path={class_dir} ({e.strerror})")
         return ""
     genfs = sysfs_genfs(texts)
     root = os.path.realpath(os.path.join(class_dir, "..", ".."))
@@ -389,8 +389,7 @@ def wakeup_genfscons(texts, class_dir, log):
         if sysfs_label(genfs, path) != "sysfs":
             continue
         if not _SYSFS_DEVICE_PATH.fullmatch(path) or not _WAKEUP_SOURCE_DIR.fullmatch(os.path.basename(path)):
-            log(f"RHIZO_MARKER wakeup_genfs=skipped source={name} path={path!r} -- not labeled: "
-                "not a plain /devices/.../wakeupN path")
+            log(f"RHIZO_MARKER wakeup_genfs=skipped source={name} path={path!r}")
             continue
         parent = os.path.dirname(path)
         labeled.add(parent if os.path.basename(parent) == "wakeup" else parent + "/wakeup")
@@ -403,7 +402,7 @@ def vendor_property_contexts(namespace):
 
 
 def domain_walked_dir_rules(cils):
-    """return the walk rules for the types the cils let domain walk"""
+    """return the walk rules for the DOMAIN_WALKED_DIRS types that domain walks in cils"""
     walked = set()
     for c in cils:
         for m in _DOMAIN_DIR_RULE.finditer(open(c).read()):
@@ -496,7 +495,7 @@ AV_RULE_HEADS = ("allow", "allowx", "auditallow", "deny", "dontaudit", "neverall
 
 
 def _drop_statements_naming(rendered, types):
-    """remove the AV rules naming one of types"""
+    """remove the AV rules that contain a type in types"""
     if not types:
         return rendered
     out, depth, start, kept_to, head, prev, names = [], 0, 0, 0, None, None, set()
@@ -511,11 +510,11 @@ def _drop_statements_naming(rendered, types):
         elif token == ")":
             depth -= 1
             if depth < 0:
-                raise ValueError(f"a ) at offset {m.start()} closes no statement")
+                raise ValueError(f"unmatched ) at offset {m.start()}")
             if depth == 0 and names & types:
                 if head not in AV_RULE_HEADS:
                     raise ValueError(
-                        f"{rendered[start:m.end()]} names {sorted(names & types)} outside an AV rule "
+                        f"{rendered[start:m.end()]} contains {sorted(names & types)} outside an AV rule "
                         f"({', '.join(AV_RULE_HEADS)})")
                 out.append(rendered[kept_to:start])
                 kept_to = m.end() + (rendered[m.end():m.end() + 1] == "\n")
@@ -543,8 +542,7 @@ def cts_vendor_adapt(rendered, public_cils=None):
     n = rendered.count(LIVE_KEYMINT_TT)
     if n != 1:
         raise ValueError(
-            f"keymint typetransition appears {n} times in the rendered policy, "
-            f"expected exactly 1; update LIVE_KEYMINT_TT")
+            f"LIVE_KEYMINT_TT appears {n} times in the rendered policy, expected 1")
     rendered = rendered.replace(LIVE_KEYMINT_TT, CTS_KEYMINT_BLOCK)
     cils = [public_cil_path()] if public_cils is None else public_cils
     lacking = {t for t in OPTIONAL_TYPES if not declares_type(cils, t)}
@@ -585,7 +583,7 @@ def _attribute_sets(texts):
 
 
 def _includes(expr, type_name, sets, memo):
-    """search an expression for type_name"""
+    """return whether expr includes type_name"""
     if isinstance(expr, str):
         if expr == type_name:
             return True
@@ -610,7 +608,7 @@ def _includes(expr, type_name, sets, memo):
 
 SYSFS_MIRROR_TYPE = "rhizo_sysfs_uinput"
 SYSFS_MIRROR_CLASSES = ("dir", "file", "lnk_file")
-SYSFS_MIRROR_ANCHOR = "; rhizo_sysfs_uinput holds every sysfs rule\n"
+SYSFS_MIRROR_ANCHOR = "; rhizo_sysfs_uinput rules\n"
 _AV_RULE = re.compile(r"^\((allow|deny|dontaudit)\s+(\S+)\s+(\S+)\s+\((\w+)\s+\(([^()]*)\)\)\)", re.M)
 _ANY_AV = re.compile(r"\((allow|deny|dontaudit)\s+(\S+)\s+(\S+)\s")
 _AVX_RULE = re.compile(r"^\((allowx|dontauditx|auditallowx)\s+(\S+)\s+(\S+)\s+(\(\w+\s+(\w+)\s.*\))\)$", re.M)
@@ -626,7 +624,7 @@ def _mirror_name(name):
 
 
 def _cil_expression(expr):
-    """write a parsed set expression as CIL"""
+    """return a parsed set expression as CIL text"""
     if isinstance(expr, str):
         return _mirror_name(expr)
     return "(" + " ".join(_cil_expression(e) for e in expr) + ")"
@@ -642,7 +640,7 @@ def _mirror_attributes(sources, sets):
         seen.add(name)
         exprs = sets(name)
         if not exprs:
-            raise ValueError(f"{name} names a sysfs rule's subject but no typeattributeset defines it")
+            raise ValueError(f"no typeattributeset defines {name}, the subject of a sysfs rule")
         out.append(f"(optional {_mirror_name(name)}_block\n(typeattribute {_mirror_name(name)})\n"
                    + "".join(f"(typeattributeset {_mirror_name(name)} {_cil_expression(e)})\n" for e in exprs)
                    + ")\n")
@@ -651,7 +649,7 @@ def _mirror_attributes(sources, sets):
 
 
 def _flatten(expr):
-    """yield the names in a set expression"""
+    """yield the strings in a set expression"""
     if isinstance(expr, str):
         yield expr
     else:
@@ -670,8 +668,7 @@ def sysfs_mirror(cils, policy):
             if (m.start() not in read and _includes(m.group(3), "sysfs", sets, on_sysfs)
                     and not _includes(m.group(3), SYSFS_MIRROR_TYPE, sets, on_mirror)):
                 rule = text[m.start():text.find("\n", m.start())]
-                raise ValueError(f"{rule} is a rule on sysfs in a form the {SYSFS_MIRROR_TYPE} mirror cannot "
-                                 "read; give it one class and one permission list")
+                raise ValueError(f"{rule} is a sysfs rule without one class and one permission list")
         for kind, source, target, cls, names in _AV_RULE.findall(text):
             if (cls in SYSFS_MIRROR_CLASSES and _includes(target, "sysfs", sets, on_sysfs)
                     and not _includes(target, SYSFS_MIRROR_TYPE, sets, on_mirror)):
@@ -690,11 +687,10 @@ def sysfs_mirror(cils, policy):
 
 
 def render_sysfs_mirror(cils, rendered):
-    """replace the mirror marker with this release's sysfs mirror"""
+    """replace SYSFS_MIRROR_ANCHOR with sysfs_mirror(cils, rendered)"""
     count = rendered.count(SYSFS_MIRROR_ANCHOR)
     if count != 1:
-        raise ValueError(f"the rendered policy holds {count} sysfs_uinput_mirror markers, not one; "
-                         f"restore the marker in {CIL_FILENAME}")
+        raise ValueError(f"the rendered policy has {count} sysfs_uinput_mirror markers, expected 1")
     return rendered.replace(SYSFS_MIRROR_ANCHOR, sysfs_mirror(cils, rendered))
 
 

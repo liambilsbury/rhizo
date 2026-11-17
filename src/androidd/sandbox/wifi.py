@@ -44,17 +44,17 @@ _NB_WLAN = []
 
 
 def secret_path():
-    """return the per-install BSSID secret's path"""
+    """return the BSSID secret path"""
     return os.path.join(core.RHIZO_STATE_DIR, WIFI_SECRET_NAME)
 
 
 def mirror_state_path():
-    """return the file netbridged writes the mirrored SSID to"""
+    """return the netbridged mirrored SSID state file path"""
     return f"/run/{core.NETBRIDGED_RUNTIME_DIR}/{MIRROR_STATE_NAME}"
 
 
 def netbridged_main():
-    """return netbridged's entry point"""
+    """return the netbridged.py path"""
     return NETBRIDGED_PAYLOAD if os.path.exists(NETBRIDGED_PAYLOAD) else beside("netbridged", "netbridged.py")
 
 
@@ -74,7 +74,7 @@ def nb_wlan():
 
 
 def _wlan_error(mod):
-    """return the exception class nb_wlan raises"""
+    """return nb_wlan.WlanError, or OSError"""
     return getattr(mod, "WlanError", OSError)
 
 
@@ -84,7 +84,7 @@ def module_loaded():
 
 
 def refusal(policy, release=None, prepared=None, exists=os.path.exists, payload=None, root=None):
-    """return why this launch gives Android no Wi-Fi, or None"""
+    """return the Wi-Fi refusal reason, or None"""
     release = core.RHIZO_RELEASE if release is None else release
     prepared = core.prepared_key() if prepared is None else prepared
     payload = payload or beside()
@@ -114,27 +114,27 @@ def refusal(policy, release=None, prepared=None, exists=os.path.exists, payload=
 
 
 def load_module(run=subprocess.run):
-    """load rhizo_wlan and return why its family is unusable"""
+    """load rhizo_wlan and return the refusal reason, or None"""
     try:
         wlan = nb_wlan()
     except (ImportError, OSError, SyntaxError) as e:
-        kmsg(f"nb_wlan could not be loaded: {e!r}")
+        kmsg(f"failed to load nb_wlan ({e!r})")
         return "nb_wlan-unavailable"
     r = run(["modprobe", WLAN_MODULE], capture_output=True, text=True)
     if r.returncode != 0:
-        kmsg(f"modprobe {WLAN_MODULE} rc={r.returncode}: {(r.stderr or '').strip()}")
+        kmsg(f"modprobe {WLAN_MODULE} failed with exit status {r.returncode} ({(r.stderr or '').strip()})")
         return "module-unavailable"
     try:
         if not wlan.wlan_available():
             return "family-unavailable"
     except (OSError, _wlan_error(wlan)) as e:
-        kmsg(f"nb_wlan.wlan_available() raised {e!r}")
+        kmsg(f"nb_wlan.wlan_available() failed ({e!r})")
         return "family-unavailable"
     return None
 
 
 def untraversable_parent(path, uid, gid, lstat=os.lstat):
-    """return the first directory above path uid:gid cannot search"""
+    """return the first directory above path without search permission for uid:gid"""
     d = os.path.dirname(os.path.abspath(path))
     while True:
         st = lstat(d)
@@ -147,19 +147,19 @@ def untraversable_parent(path, uid, gid, lstat=os.lstat):
 
 
 def ensure_secret(path=None, account=NETBRIDGED_ACCOUNT):
-    """create the per-install BSSID secret readable by netbridged's group"""
+    """create the BSSID secret with mode 0640 and the NETBRIDGED_ACCOUNT group"""
     path = path or secret_path()
     entry = pwd.getpwnam(account)
     gid = entry.pw_gid
     blocked = untraversable_parent(path, entry.pw_uid, gid)
     if blocked:
-        raise PermissionError(f"{account} cannot search {blocked}, so it could not read {path}")
+        raise PermissionError(f"{account} has no search permission on {blocked} for {path}")
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         st = None
     if st is not None and not (stat.S_ISREG(st.st_mode) and st.st_size == WIFI_SECRET_BYTES):
-        kmsg(f"{path} is not a {WIFI_SECRET_BYTES}-byte file -- replacing it")
+        kmsg(f"{path} is not a {WIFI_SECRET_BYTES}-byte file")
         st = None
     if st is None:
         tmp = path + ".part"
@@ -189,7 +189,7 @@ def ensure_secret(path=None, account=NETBRIDGED_ACCOUNT):
 
 
 def plan(policy=None, run=subprocess.run):
-    """record whether this launch gives Android Wi-Fi"""
+    """set the Wi-Fi armed flag and log RHIZO_MARKER wifi"""
     policy = policy or capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID)
     mode = policy.scope("network.wifi")
     why = refusal(policy)
@@ -199,7 +199,7 @@ def plan(policy=None, run=subprocess.run):
         try:
             ensure_secret()
         except (OSError, KeyError) as e:
-            kmsg(f"{secret_path()} could not be made: {e!r}")
+            kmsg(f"failed to create {secret_path()} ({e!r})")
             why = "secret-failed"
     core.set_wifi_armed(why is None)
     if why is None:
@@ -210,14 +210,14 @@ def plan(policy=None, run=subprocess.run):
 
 
 def _write(path, text):
-    """write text to path, making its directory"""
+    """create the parent directory of path and write text to path"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(text)
 
 
 def _unlink(path):
-    """remove path if it exists"""
+    """remove path if path exists"""
     try:
         os.unlink(path)
     except FileNotFoundError:
@@ -232,7 +232,7 @@ def _copy(src, dst):
 
 
 def _stage_hal_rcs(on, root):
-    """stage or remove the Wi-Fi HALs' init files"""
+    """stage or remove the Wi-Fi HAL init files"""
     for name, guest, exe in HAL_RCS:
         dst = f"{root}/vendor/etc/init/{name}"
         if on:
@@ -248,7 +248,7 @@ WIFICOND_RCS = (("wificond.rc", "system_upper/etc/init/wificond.rc", "etc/init/w
 
 
 def _stage_wificond_rc(on, root, payload):
-    """disable the GSI's wificond.rc while Wi-Fi is off"""
+    """stage or remove the patched wificond.rc files"""
     if on:
         for _name, rel, _label in WIFICOND_RCS:
             _unlink(os.path.join(root, rel))
@@ -263,12 +263,11 @@ def _stage_wificond_rc(on, root, payload):
         if os.path.exists(src):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy(src, dst)
-            kmsg(f"patched {label} staged")
             staged.append(label)
         else:
             _unlink(dst)
     if not staged:
-        kmsg(f"patched wificond.rc NOT FOUND in {patches} or {payload}")
+        kmsg(f"no patched wificond.rc in {patches} or {payload}")
 
 
 def _stage_network_app(on, root, payload):
@@ -290,13 +289,13 @@ def _stage_network_app(on, root, payload):
         if os.path.exists(src):
             _copy(src, dst)
         else:
-            kmsg(f"{os.path.basename(src)} NOT FOUND at {src}")
+            kmsg(f"no {os.path.basename(src)} at {src}")
     with open(f"{root}/vendor/etc/selinux/vendor_file_contexts", "a") as f:
         f.write(APP_CONTEXTS)
 
 
 def apply_shape(rewrite_manifest=False, root=None, payload=None):
-    """stage or remove this launch's Wi-Fi files"""
+    """stage or remove the Wi-Fi files"""
     root = root or RUN_ROOT
     payload = payload or beside()
     on = core.wifi_armed()
@@ -321,7 +320,7 @@ def apply_shape(rewrite_manifest=False, root=None, payload=None):
 
 
 def disarm(reason):
-    """fall back to ethernet without the wireless pair"""
+    """clear the Wi-Fi armed flag and call apply_shape(rewrite_manifest=True)"""
     core.set_wifi_armed(False)
     kmsg(f"RHIZO_MARKER wifi=off reason={reason}")
     apply_shape(rewrite_manifest=True)
@@ -334,33 +333,33 @@ def create_pair(host_if, mac, netns_pid, account=NETBRIDGED_ACCOUNT):
         owner = pwd.getpwnam(account).pw_uid
         wlan.create(host_if, GUEST_WLAN_IF, mac, netns_pid, owner)
     except Exception as e:  # noqa: BLE001
-        kmsg(f"nb_wlan.create({host_if}, {GUEST_WLAN_IF}, {mac}, {netns_pid}) failed: {e!r}")
+        kmsg(f"nb_wlan.create({host_if}, {GUEST_WLAN_IF}, {mac}, {netns_pid}) failed ({e!r})")
         return "create-failed"
     kmsg(f"RHIZO_MARKER wifi_pair=created host={host_if} guest={GUEST_WLAN_IF} netns_pid={netns_pid}")
     return None
 
 
 def destroy_pair(host_if):
-    """destroy host_if's wireless pair"""
+    """destroy the wireless pair of host_if"""
     if not module_loaded():
         return False
     try:
         wlan = nb_wlan()
     except (ImportError, OSError, SyntaxError) as e:
-        kmsg(f"nb_wlan could not be loaded to destroy {host_if}'s pair: {e!r}")
+        kmsg(f"failed to load nb_wlan for {host_if} ({e!r})")
         return False
     try:
         wlan.destroy(host_if)
     except OSError as e:
         if e.errno not in (errno.ENODEV, errno.ENOENT):
-            kmsg(f"nb_wlan.destroy({host_if}) failed: {e!r}")
+            kmsg(f"nb_wlan.destroy({host_if}) failed ({e!r})")
         return False
     kmsg(f"RHIZO_MARKER wifi_pair=destroyed host={host_if}")
     return True
 
 
 def clear_pair(host_if, attempts=10, delay=0.5, exists=os.path.lexists):
-    """destroy host_if's pair after a timed-out create"""
+    """destroy the pair of host_if after a timed-out create"""
     for _ in range(attempts):
         destroy_pair(host_if)
         if not exists(f"/sys/class/net/{host_if}"):
@@ -370,26 +369,26 @@ def clear_pair(host_if, attempts=10, delay=0.5, exists=os.path.lexists):
 
 
 def netbridged_args(policy):
-    """return netbridged's Wi-Fi arguments"""
+    """return the netbridged Wi-Fi arguments"""
     if not core.wifi_armed():
         return []
     return ["--wifi-mode", policy.scope("network.wifi"), "--wifi-secret-file", secret_path()]
 
 
 def push_unit_argv():
-    """return the push helper's command line"""
+    """return the rhizo-wifi-mirror-push argv"""
     return [beside(PUSH_SCRIPT), mirror_state_path(), f"{RUN_ROOT}/data/local/tmp/rhizo-probe.sock"]
 
 
 def stop_push_unit(run, block=True):
-    """stop a previous launch's push unit"""
+    """stop the WIFI_PUSH_UNIT path and service"""
     units = [f"{core.WIFI_PUSH_UNIT}.path", f"{core.WIFI_PUSH_UNIT}.service"]
     run("systemctl", "stop", *(() if block else ("--no-block",)), *units, check=False)
     run("systemctl", "reset-failed", *units, check=False)
 
 
 def start_push_unit(run):
-    """start the path-activated push of the mirrored SSID into Android"""
+    """start WIFI_PUSH_UNIT as a path unit on mirror_state_path()"""
     run("systemd-run", f"--unit={core.WIFI_PUSH_UNIT}", "--collect",
         f"--path-property=PathModified={mirror_state_path()}",
         "-p", "Type=oneshot",
@@ -403,18 +402,17 @@ def start_push_unit(run):
         "-p", f"StandardError=append:{core.WIFI_PUSH_LOG}",
         *push_unit_argv(),
         check=True)
-    # a state file written before the path unit existed triggers nothing
     run("systemctl", "start", "--no-block", f"{core.WIFI_PUSH_UNIT}.service", check=False)
     kmsg(f"RHIZO_MARKER wifi_push={core.WIFI_PUSH_UNIT} path={mirror_state_path()}")
 
 
 def release_instance(log=kmsg):
-    """destroy this instance's pair and stop its push unit"""
+    """destroy the VETH_HOST_IF pair and stop WIFI_PUSH_UNIT"""
     def run(*args, check=False):
-        """run a command and log a failure"""
+        """run a command and log a nonzero exit status"""
         r = subprocess.run(list(args), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
-            log(f"{' '.join(args)} -> rc={r.returncode} {r.stderr.strip()[:200]}")
+            log(f"{' '.join(args)} failed with exit status {r.returncode} ({r.stderr.strip()[:200]})")
         return r
     stop_push_unit(run, block=False)
     destroy_pair(core.VETH_HOST_IF)

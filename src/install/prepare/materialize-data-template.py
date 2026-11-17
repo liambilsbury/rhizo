@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the decompressed seed set for a directory of capex files"""
+"""decompressed APEX seed writer for a directory of capex files"""
 import argparse
 import hashlib
 import os
@@ -78,7 +78,7 @@ def parse_apex_manifest(buf):
     try:
         name = name_raw.decode("utf-8")
     except UnicodeDecodeError as e:
-        raise ManifestError("field 1 (name) is not valid UTF-8: %s" % e)
+        raise ManifestError("failed to decode field 1 (name) as UTF-8 (%s)" % e)
     if not name:
         raise ManifestError("field 1 (name) is empty")
     if version_raw <= 0:
@@ -91,25 +91,25 @@ def read_capex(path):
     try:
         zf = zipfile.ZipFile(path)
     except (zipfile.BadZipFile, OSError) as e:
-        raise ManifestError("%s: not a readable zip: %s" % (path, e))
+        raise ManifestError("failed to open %s as a zip (%s)" % (path, e))
     with zf:
         names = set(zf.namelist())
         if MANIFEST_ENTRY not in names:
-            raise ManifestError("%s: no %s entry" % (path, MANIFEST_ENTRY))
+            raise ManifestError("%s has no %s entry" % (path, MANIFEST_ENTRY))
         if ORIGINAL_APEX_ENTRY not in names:
-            raise ManifestError("%s: no %s entry -- not a compressed APEX" % (path, ORIGINAL_APEX_ENTRY))
+            raise ManifestError("%s has no %s entry" % (path, ORIGINAL_APEX_ENTRY))
         try:
             manifest_bytes = zf.read(MANIFEST_ENTRY)
         except (zipfile.BadZipFile, OSError, RuntimeError) as e:
-            raise ManifestError("%s: could not read %s: %s" % (path, MANIFEST_ENTRY, e))
+            raise ManifestError("failed to read %s!%s (%s)" % (path, MANIFEST_ENTRY, e))
         try:
             name, version = parse_apex_manifest(manifest_bytes)
         except ManifestError as e:
-            raise ManifestError("%s: %s" % (path, e))
+            raise ManifestError("%s (%s)" % (path, e))
         try:
             payload = zf.read(ORIGINAL_APEX_ENTRY)
         except (zipfile.BadZipFile, OSError, RuntimeError) as e:
-            raise ManifestError("%s: could not read %s: %s" % (path, ORIGINAL_APEX_ENTRY, e))
+            raise ManifestError("failed to read %s!%s (%s)" % (path, ORIGINAL_APEX_ENTRY, e))
     return name, version, payload
 
 
@@ -237,57 +237,57 @@ def selftest():
 
         results, skipped = materialize(apex_dir, out_dir, exclude={"excluded.capex"},
                                        set_labels=have_xattr, apex_root_dir=apex_root_dir)
-        assert skipped == ["excluded.capex"], "exclude list not honored: %r" % skipped; n += 1
+        assert skipped == ["excluded.capex"], "skipped == [excluded.capex], got %r" % skipped; n += 1
         assert [r[0] for r in results] == ["com.android.selftesta@7", "com.android.selftestb@42"], \
-            "wrong package ids or wrong order: %r" % ([r[0] for r in results],); n += 1
+            "package ids == [com.android.selftesta@7, com.android.selftestb@42], got %r" % ([r[0] for r in results],); n += 1
 
         dest_a = os.path.join(out_dir, "com.android.selftesta@7.decompressed.apex")
         dest_b = os.path.join(out_dir, "com.android.selftestb@42.decompressed.apex")
-        assert os.path.exists(dest_a) and os.path.exists(dest_b), "expected output files missing"; n += 1
-        assert open(dest_a, "rb").read() == payload_a, "payload a not byte-exact"; n += 1
-        assert open(dest_b, "rb").read() == payload_b, "payload b not byte-exact"; n += 1
+        assert os.path.exists(dest_a) and os.path.exists(dest_b), "os.path.exists(dest_a) and os.path.exists(dest_b)"; n += 1
+        assert open(dest_a, "rb").read() == payload_a, "dest_a bytes == payload_a"; n += 1
+        assert open(dest_b, "rb").read() == payload_b, "dest_b bytes == payload_b"; n += 1
         assert not os.path.exists(os.path.join(out_dir, "com.android.excluded@1.decompressed.apex")), \
-            "excluded module was written anyway"; n += 1
-        assert oct(os.stat(dest_a).st_mode & 0o777) == "0o644", "wrong mode on payload"; n += 1
-        assert os.stat(dest_a).st_mtime == DEFAULT_MTIME, "mtime is not the deterministic sentinel"; n += 1
+            "not os.path.exists(com.android.excluded@1.decompressed.apex)"; n += 1
+        assert oct(os.stat(dest_a).st_mode & 0o777) == "0o644", "dest_a mode == 0o644"; n += 1
+        assert os.stat(dest_a).st_mtime == DEFAULT_MTIME, "dest_a st_mtime == DEFAULT_MTIME"; n += 1
         assert hashlib.sha256(payload_a).hexdigest() == \
             [r[1] for r in results if r[0] == "com.android.selftesta@7"][0], \
-            "manifest sha does not match the written payload"; n += 1
+            "sha256(payload_a) == the com.android.selftesta@7 result sha"; n += 1
 
         if have_xattr:
-            assert os.getxattr(dest_a, "security.selinux") == PAYLOAD_LABEL, "wrong payload label"; n += 1
-            assert os.getxattr(out_dir, "security.selinux") == DIR_LABEL, "wrong dir label"; n += 1
+            assert os.getxattr(dest_a, "security.selinux") == PAYLOAD_LABEL, "dest_a label == PAYLOAD_LABEL"; n += 1
+            assert os.getxattr(out_dir, "security.selinux") == DIR_LABEL, "out_dir label == DIR_LABEL"; n += 1
             assert os.getxattr(apex_root_dir, "security.selinux") == DIR_LABEL, \
-                "wrong (or missing) apex_root_dir label"; n += 1
+                "apex_root_dir label == DIR_LABEL"; n += 1
 
         manifest_path = os.path.join(d, "manifest.tsv")
         write_manifest(manifest_path, results, skipped)
         manifest_text = open(manifest_path).read()
-        assert "com.android.selftesta@7" in manifest_text, "manifest missing a real module"; n += 1
-        assert "excluded.capex" in manifest_text, "manifest does not record the exclusion"; n += 1
+        assert "com.android.selftesta@7" in manifest_text, "com.android.selftesta@7 in manifest_text"; n += 1
+        assert "excluded.capex" in manifest_text, "excluded.capex in manifest_text"; n += 1
 
         out_dir2 = os.path.join(d, "out2")
         os.makedirs(out_dir2)
         results2, _ = materialize(apex_dir, out_dir2, exclude={"excluded.capex"}, write=False,
                                   set_labels=have_xattr)
-        assert results2 == results, "manifest-only pass disagrees with the write pass: %r vs %r" % (results2, results); n += 1
-        assert os.listdir(out_dir2) == [], "manifest-only pass wrote a file anyway"; n += 1
+        assert results2 == results, "results2 == results, got %r and %r" % (results2, results); n += 1
+        assert os.listdir(out_dir2) == [], "os.listdir(out_dir2) == []"; n += 1
 
         root3 = os.path.join(d, "data-apex-noseed")
         out_dir3 = os.path.join(root3, "decompressed")
         active3 = os.path.join(root3, "active")
         results3, skipped3 = materialize(apex_dir, out_dir3, exclude=set(), active_dir=active3,
                                          set_labels=have_xattr, apex_root_dir=root3, seed="none")
-        assert os.listdir(out_dir3) == [], "--seed none wrote a payload: %r" % os.listdir(out_dir3); n += 1
-        assert os.path.isdir(active3), "--seed none did not create active/"; n += 1
-        assert skipped3 == [], "--seed none skipped something: %r" % skipped3; n += 1
+        assert os.listdir(out_dir3) == [], "os.listdir(out_dir3) == [], got %r" % os.listdir(out_dir3); n += 1
+        assert os.path.isdir(active3), "os.path.isdir(active3)"; n += 1
+        assert skipped3 == [], "skipped3 == [], got %r" % skipped3; n += 1
         assert [r[0] for r in results3] == ["com.android.excluded@1", "com.android.selftesta@7",
                                             "com.android.selftestb@42"], \
-            "--seed none does not enumerate every module: %r" % ([r[0] for r in results3],); n += 1
+            "results3 package ids == the 3 modules, got %r" % ([r[0] for r in results3],); n += 1
         if have_xattr:
             for _p in (root3, out_dir3, active3):
                 assert os.getxattr(_p, "security.selinux") == DIR_LABEL, \
-                    "--seed none left %s unlabeled or mislabeled" % _p
+                    "%s label == DIR_LABEL" % _p
             n += 1
 
         bad_dir = os.path.join(d, "bad")
@@ -299,7 +299,7 @@ def selftest():
         try:
             materialize_one(os.path.join(bad_dir, "truncated.capex"), out_dir, DEFAULT_MTIME,
                             set_labels=have_xattr)
-            raise AssertionError("truncated apex_manifest.pb did not raise")
+            raise AssertionError("materialize_one(truncated.capex) raises ManifestError")
         except ManifestError:
             pass
         n += 1
@@ -309,43 +309,43 @@ def selftest():
         try:
             materialize_one(os.path.join(bad_dir, "uncompressed.capex"), out_dir, DEFAULT_MTIME,
                             set_labels=have_xattr)
-            raise AssertionError("missing original_apex entry did not raise")
+            raise AssertionError("materialize_one(uncompressed.capex) raises ManifestError")
         except ManifestError:
             pass
         n += 1
 
         try:
             materialize(bad_dir, os.path.join(d, "bad_out"), exclude=set(), set_labels=have_xattr)
-            raise AssertionError("materialize() over an all-bad directory did not raise")
+            raise AssertionError("materialize(bad_dir) raises ManifestError")
         except ManifestError:
             pass
         n += 1
 
-    print("materialize-data-template selftest: %d assertions passed%s"
-          % (n, "" if have_xattr else " (label assertions skipped -- not privileged)"))
+    print("%d assertions passed%s"
+          % (n, "" if have_xattr else ", label assertions skipped"))
     return 0
 
 
 def main():
     """materialize the modules"""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--apex-dir", metavar="DIR", help="the directory of *.capex files to read")
+    ap.add_argument("--apex-dir", metavar="DIR", help="directory of *.capex files")
     ap.add_argument("--out-dir", metavar="DIR",
-                    help="where each decompressed payload goes; must already exist and be writable")
-    ap.add_argument("--active-dir", metavar="DIR", help="also create and label this directory (/data/apex/active)")
+                    help="directory for the decompressed payloads")
+    ap.add_argument("--active-dir", metavar="DIR", help="active directory to create and label, /data/apex/active")
     ap.add_argument("--apex-root-dir", metavar="DIR",
-                    help="also create and label this parent directory (/data/apex)")
+                    help="parent directory to create and label, /data/apex")
     ap.add_argument("--exclude", metavar="NAME", action="append", default=[],
-                    help="a .capex file name to leave out; repeatable")
+                    help=".capex file name to exclude, repeatable")
     ap.add_argument("--manifest-out", metavar="FILE",
                     help="write each module's name, version, sha256 and size to FILE")
     ap.add_argument("--manifest-only", action="store_true",
-                    help="read the modules and print the manifest only; write and label nothing")
+                    help="print the manifest without writing or labelling files")
     ap.add_argument("--mtime", metavar="EPOCH", type=int, default=DEFAULT_MTIME,
-                    help="the mtime every written payload gets (default %(default)s)")
+                    help="mtime of the written payloads, default %(default)s")
     ap.add_argument("--seed", choices=("decompressed", "none"), default="decompressed",
-                    help="decompressed writes every payload; none writes only the labeled directories, "
-                         "which is what Rhizo builds (default %(default)s)")
+                    help="decompressed writes all payloads, none writes the labeled directories only, "
+                         "default %(default)s")
     ap.add_argument("--selftest", action="store_true", help="run the built-in tests")
     a = ap.parse_args()
 
@@ -353,7 +353,7 @@ def main():
         sys.exit(selftest())
 
     if not a.apex_dir or (not a.manifest_only and not a.out_dir):
-        ap.error("need --apex-dir and --out-dir (or --manifest-only), or --selftest")
+        ap.error("requires --apex-dir with --out-dir or --manifest-only, or --selftest")
 
     try:
         results, skipped = materialize(a.apex_dir, a.out_dir or "", set(a.exclude),
@@ -361,7 +361,7 @@ def main():
                                        write=not a.manifest_only,
                                        apex_root_dir=a.apex_root_dir, seed=a.seed)
     except ManifestError as e:
-        print("MATERIALIZE_FAILED: %s" % e, file=sys.stderr)
+        print("MATERIALIZE_FAILED %s" % e, file=sys.stderr)
         sys.exit(1)
 
     if a.manifest_out:

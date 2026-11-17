@@ -1,5 +1,5 @@
 #!/bin/bash
-# build rhizo-audio-effect-service and stage it
+# var/share/gfx_hal/rhizo-audio-effect-service RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT="$(cd "." && pwd)"
@@ -29,7 +29,7 @@ tools/build/hal/hal.sh rhizo-audio-effect-service \
 OUT_SUB=""; [[ "${RHIZO_HAL_ABI:-}" == arm64-v8a ]] && OUT_SUB="arm64/"
 install -D -m 0755 "$ROOT/toolchain/out/${OUT_SUB}rhizo-audio-effect-service" \
   "$ROOT/var/share/$STAGE/rhizo-audio-effect-service"
-echo "[build-audio-effect] staged -> var/share/$STAGE/rhizo-audio-effect-service"
+echo "staged var/share/$STAGE/rhizo-audio-effect-service"
 
 if [[ -z "${RHIZO_HAL_ABI:-}" && -z "${RHIZO_HAL_STAGE:-}" ]]; then
   python3 tools/build/stamps.py stamp gfx_hal/rhizo-audio-effect-service || exit 1

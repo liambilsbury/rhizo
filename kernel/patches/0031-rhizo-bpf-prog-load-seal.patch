@@ -1,0 +1,119 @@
+diff --git a/include/linux/pid_namespace.h b/include/linux/pid_namespace.h
+index b20baaa7e..5e521287f 100644
+--- a/include/linux/pid_namespace.h
++++ b/include/linux/pid_namespace.h
+@@ -47,6 +47,8 @@ struct pid_namespace {
+ 	int reboot;	/* group exit code if this pidns was rebooted */
+ 	struct ns_common ns;
+ 	struct work_struct	work;
++	/* Rhizo: set once the sandbox has booted; refuses later bpf(BPF_PROG_LOAD) */
++	bool rhizo_bpf_load_sealed;
+ } __randomize_layout;
+ 
+ extern struct pid_namespace init_pid_ns;
+diff --git a/kernel/bpf/syscall.c b/kernel/bpf/syscall.c
+index ba60a3756..c7dd2d10c 100644
+--- a/kernel/bpf/syscall.c
++++ b/kernel/bpf/syscall.c
+@@ -40,6 +40,10 @@
+ #include <linux/tracepoint.h>
+ #include <linux/overflow.h>
+ #include <linux/cookie.h>
++#include <linux/pid_namespace.h>
++#include <linux/security.h>
++#include <linux/capability.h>
++#include <linux/uaccess.h>
+ #include <linux/btf_ids.h>
+ #include <linux/nsproxy.h>
+ 
+@@ -6365,6 +6369,23 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
+ 	if (err < 0)
+ 		return err;
+ 
++	/*
++	 * Rhizo: once a sandbox has booted, its pid namespace is sealed from
++	 * outside (write-once, see rhizo_bpf_seal_write below). After that,
++	 * refuse bpf(BPF_PROG_LOAD) in the sealed namespace and in any
++	 * descendant of it -- the boot-time loaders (netbpfload, bpfloader,
++	 * netd) have already run and nothing legitimate loads a program
++	 * afterwards. Walking ancestors stops an unshared child pid namespace
++	 * from dodging the seal. Costs nothing unless the command is a load.
++	 */
++	if (cmd == BPF_PROG_LOAD) {
++		struct pid_namespace *pidns;
++
++		for (pidns = task_active_pid_ns(current); pidns; pidns = pidns->parent)
++			if (pidns->rhizo_bpf_load_sealed)
++				return -EPERM;
++	}
++
+ 	switch (cmd) {
+ 	case BPF_MAP_CREATE:
+ 		err = map_create(&attr, uattr, &attr_common, uattr_common, size_common);
+@@ -6512,6 +6533,66 @@ SYSCALL_DEFINE5(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
+ 	return __sys_bpf(cmd, USER_BPFPTR(uattr), size, USER_BPFPTR(uattr_common), size_common);
+ }
+ 
++/*
++ * Rhizo bpf(BPF_PROG_LOAD) seal.
++ *
++ * securityfs node /sys/kernel/security/rhizo/bpf_load_seal: a process holding
++ * CAP_SYS_ADMIN in the initial user namespace (the Rhizo launcher, which lives
++ * outside the sandbox pid namespace) writes the sandbox init's global pid once
++ * the sandbox has booted. That seals the init's pid namespace against further
++ * BPF_PROG_LOAD. It never un-seals, and a sandboxed root -- which cannot reach
++ * this host securityfs node, and does not hold CAP_SYS_ADMIN in the initial
++ * user namespace -- can neither clear nor forge it.
++ */
++static ssize_t rhizo_bpf_seal_write(struct file *file, const char __user *buf,
++				    size_t count, loff_t *ppos)
++{
++	struct task_struct *task;
++	struct pid *pid;
++	char kbuf[16];
++	int pid_nr;
++
++	if (!capable(CAP_SYS_ADMIN))
++		return -EPERM;
++	if (count == 0 || count >= sizeof(kbuf))
++		return -EINVAL;
++	if (copy_from_user(kbuf, buf, count))
++		return -EFAULT;
++	kbuf[count] = '\0';
++	if (kstrtoint(strim(kbuf), 10, &pid_nr) || pid_nr <= 0)
++		return -EINVAL;
++
++	pid = find_get_pid(pid_nr);
++	if (!pid)
++		return -ESRCH;
++	task = get_pid_task(pid, PIDTYPE_PID);
++	put_pid(pid);
++	if (!task)
++		return -ESRCH;
++	task_active_pid_ns(task)->rhizo_bpf_load_sealed = true;
++	put_task_struct(task);
++
++	return count;
++}
++
++static const struct file_operations rhizo_bpf_seal_fops = {
++	.write	= rhizo_bpf_seal_write,
++	.llseek	= noop_llseek,
++};
++
++static int __init rhizo_bpf_seal_init(void)
++{
++	struct dentry *dir;
++
++	dir = securityfs_create_dir("rhizo", NULL);
++	if (IS_ERR(dir))
++		return 0;
++	securityfs_create_file("bpf_load_seal", 0200, dir, NULL,
++			       &rhizo_bpf_seal_fops);
++	return 0;
++}
++late_initcall(rhizo_bpf_seal_init);
++
+ static bool syscall_prog_is_valid_access(int off, int size,
+ 					 enum bpf_access_type type,
+ 					 const struct bpf_prog *prog,

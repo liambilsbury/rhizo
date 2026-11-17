@@ -1,7 +1,7 @@
 #!/bin/bash
-# stage the AOSP rhizo-keymint-service build
+# var/share/rhizo-keymint-service var/share/gfx_hal/rhizo-keymint-service var/bin/rhizo-keymint-service
 set -euo pipefail
-USAGE="usage: keymint.sh [--rebuild] [--patch-only] [--arch=aarch64 | aarch64] [-h | --help]"
+USAGE="keymint.sh [--rebuild] [--patch-only] [--arch=aarch64 | aarch64] [-h | --help]"
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT="$(cd "." && pwd)"
 AOSP_DIR="$ROOT/aosp-android16-qpr2"
@@ -18,23 +18,23 @@ for a in "$@"; do
     --patch-only) PATCH_ONLY=1 ;;
     --arch=aarch64|aarch64) ARCH=aarch64; LUNCH_PRODUCT=aosp_arm64; SOONG_VARIANT=arm64_armv8-a; STAGE_SUFFIX="_arm64" ;;
     -h|--help) echo "$USAGE"; exit 0 ;;
-    *) echo "[build-keymint] ERROR: unknown argument: $a" >&2; echo "$USAGE" >&2; exit 2 ;;
+    *) echo "unknown argument $a" >&2; echo "$USAGE" >&2; exit 2 ;;
   esac
 done
 
 if [[ ! -d "$AOSP_DIR" ]]; then
-  echo "[build-keymint] ERROR: $AOSP_DIR not found -- run make inputs" >&2
+  echo "no $AOSP_DIR" >&2
   exit 1
 fi
 
 exec 9>"$AOSP_DIR/.rhizo-aosp.lock"
-flock -n 9 || { echo "[build-keymint] ERROR: another build holds $AOSP_DIR/.rhizo-aosp.lock" >&2; exit 1; }
+flock -n 9 || { echo "flock -n $AOSP_DIR/.rhizo-aosp.lock failed" >&2; exit 1; }
 
 # apply each keymint patch to the aosp checkout
 apply_patches() {
   local patches=("$ROOT"/tools/patches/keymint/*.patch) pf p clean err
   if [[ ! -f "${patches[0]}" ]]; then
-    echo "[build-keymint] ERROR: no tools/patches/keymint/*.patch under $ROOT" >&2
+    echo "no tools/patches/keymint/*.patch in $ROOT" >&2
     exit 1
   fi
   PATCH_WORK=$(mktemp -d)
@@ -44,18 +44,16 @@ apply_patches() {
     clean="$PATCH_WORK/$p"
     awk '/^--- a\// {c=1} c' "$pf" > "$clean"
     if [[ ! -s "$clean" ]]; then
-      echo "[build-keymint] ERROR: $p carries no '--- a/' diff to apply." >&2
+      echo "$p has no '--- a/' diff" >&2
       exit 1
     fi
     if err=$(cd "$AOSP_DIR" && git apply --check "$clean" 2>&1); then
       (cd "$AOSP_DIR" && git apply "$clean")
-      echo "[build-keymint] applied $p"
+      echo "applied $p"
     elif (cd "$AOSP_DIR" && git apply --check --reverse "$clean" >/dev/null 2>&1); then
-      echo "[build-keymint] $p already applied"
+      echo "$p already applied"
     else
-      echo "[build-keymint] ERROR: $p conflicts with $AOSP_DIR: it neither applies nor reverses cleanly." >&2
-      echo "  Re-derive it against the checkout; after editing an applied patch, reverse-apply its old" >&2
-      echo "  version first (git show HEAD:tools/patches/keymint/$p, header stripped). git apply --check said:" >&2
+      echo "$p conflicts with $AOSP_DIR" >&2
       printf '%s\n' "$err" | sed 's/^/    /' >&2
       exit 1
     fi
@@ -64,12 +62,10 @@ apply_patches() {
 
 apply_patches
 if [[ "$PATCH_ONLY" == "1" ]]; then
-  echo "[build-keymint] --patch-only: every keymint patch is applied, nothing built"
   exit 0
 fi
 
 if [[ "$REBUILD" == "1" ]]; then
-  echo "[build-keymint] --rebuild: running the real AOSP build (this can take a while)"
   (
     set +u
     cd "$AOSP_DIR"
@@ -81,9 +77,7 @@ fi
 
 SVC_RSP="$AOSP_DIR/out/soong/.intermediates/hardware/interfaces/security/keymint/aidl/default/android.hardware.security.keymint-service/android_vendor_${SOONG_VARIANT}_cfi/unstripped/android.hardware.security.keymint-service.rsp"
 if [[ ! -f "$SVC_RSP" ]]; then
-  echo "[build-keymint] ERROR: missing build artifact: $SVC_RSP" >&2
-  echo "  Re-run with --rebuild, or build manually: cd $AOSP_DIR && source build/envsetup.sh &&" >&2
-  echo "  lunch $LUNCH_PRODUCT bp2a userdebug && m android.hardware.security.keymint-service llndk.libraries.txt" >&2
+  echo "no $SVC_RSP" >&2
   exit 1
 fi
 
@@ -104,5 +98,4 @@ if [[ -z "$STAGE_SUFFIX" ]]; then
   (cd "$ROOT" && python3 tools/build/stamps.py stamp rhizo-keymint-service) || exit 1
 fi
 
-echo "[build-keymint] staged real AOSP KeyMint port ($ARCH), self-contained:"
-echo "  $SVC_OUT         ($(sha256sum "$SVC_OUT" | cut -c1-16)...)"
+echo "staged $SVC_OUT arch=$ARCH sha256=$(sha256sum "$SVC_OUT" | cut -c1-16)"

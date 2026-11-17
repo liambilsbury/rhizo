@@ -43,7 +43,7 @@ class MarkerStream:
 
 
 def drain(read, stream):
-    """read records and feed them to the stream"""
+    """call read and feed each record to stream"""
     while True:
         try:
             rec = read()
@@ -59,7 +59,7 @@ def drain(read, stream):
 
 
 def scan(buf, anchors, dones):
-    """return whether the buffer holds a completed boot after its last anchor"""
+    """return whether a done marker follows the last anchor in buf"""
     stream = MarkerStream(anchors, dones)
     stream.feed(buf)
     return stream.completed
@@ -68,7 +68,7 @@ def scan(buf, anchors, dones):
 def instance_arg(value):
     """parse an instance number from 0 to 99"""
     if not value.isdigit() or not 0 <= int(value) <= 99:
-        raise argparse.ArgumentTypeError("must be 0-99, got %r" % value)
+        raise argparse.ArgumentTypeError("%r is not 0-99" % value)
     return int(value)
 
 
@@ -99,36 +99,36 @@ def selftest():
                   b"RHIZO_MARKER sys.boot_completed=1")
 
     cases = [
-        ("instance 2's own pair is not read as its own boot",
+        ("scan(own, two_a, two_d)",
          scan(own, two_a, two_d)),
-        ("instance 0's pair satisfies a wait for instance 2 -- the id is not being read",
+        ("not scan(sibling, two_a, two_d)",
          not scan(sibling, two_a, two_d)),
-        ("instance 0 loses its own pair once instance 2 has booted into the same ring",
+        ("scan(sibling + own, zero_a, zero_d)",
          scan(sibling + own, zero_a, zero_d)),
-        ("a sibling's completion after instance 2's launch reads as instance 2's",
+        ("not scan(interleaved, two_a, two_d)",
          not scan(interleaved, two_a, two_d)),
-        ("instance 0's completion is not seen in a ring holding both instances",
+        ("scan(interleaved, zero_a, zero_d)",
          scan(interleaved, zero_a, zero_d)),
-        ("a completion that predates this run's own launch_start still answers True",
+        ("not scan(earlier, two_a, two_d)",
          not scan(earlier, two_a, two_d)),
-        ("instance 10's pair satisfies a wait for instance 1 -- the id matches as a prefix",
+        ("not scan(two_digit, one_a, one_d)",
          not scan(two_digit, one_a, one_d)),
-        ("instance 10 cannot see its own pair",
+        ("scan(two_digit, ten_a, ten_d)",
          scan(two_digit, ten_a, ten_d)),
-        ("an id-free pair from an older launcher no longer answers at instance 0",
+        ("scan(legacy, zero_a, zero_d)",
          scan(legacy, zero_a, zero_d)),
-        ("an id-free pair answers a wait for instance 2",
+        ("not scan(legacy, two_a, two_d)",
          not scan(legacy, two_a, two_d)),
-        ("instance 2's launch is read as the legacy id-free form at instance 0",
+        ("not scan(launch_start sandbox=2, zero_a, zero_d)",
          not scan(ring(b"RHIZO_MARKER launch_start sandbox=2"), zero_a, zero_d)),
     ] + marker_drift_cases() + stream_cases(two_a, two_d)
 
     bad = [finding for finding, ok in cases if not ok]
     for finding in bad:
-        print("selftest FAIL: %s" % finding, file=sys.stderr)
+        print("FAIL %s" % finding, file=sys.stderr)
     if bad:
         return 1
-    print("await-boot-completed selftest: %d assertions passed" % len(cases))
+    print("%d assertions passed" % len(cases))
     return 0
 
 
@@ -162,10 +162,10 @@ def stream_cases(anchors, dones):
     later.reads = 0
     drain(later.read, later_stream)
     return [
-        ("a completion past 9 MB of ring was not seen", big_stream.completed),
-        ("an anchor with no completion read as a completed boot", not first),
-        ("a completion logged after the drain was not seen", later_stream.completed),
-        ("the wait read %d records, not the 2 logged since the drain -- a rescan" % later.reads,
+        ("big_stream.completed after 9 MB of records", big_stream.completed),
+        ("not later_stream.completed before the done record", not first),
+        ("later_stream.completed after the done record", later_stream.completed),
+        ("later.reads == 2, got %d" % later.reads,
          later.reads == 2),
     ]
 
@@ -178,13 +178,13 @@ def marker_drift_cases():
         with open(launcher) as f:
             src = f.read()
     except OSError as e:
-        return [("cannot read %s (%s)" % (launcher, e), False)]
+        return [("failed to read %s (%s)" % (launcher, e), False)]
     cases = []
     for text in (ANCHOR_TEXT, DONE_TEXT):
         writes = '"' + text + '" % SANDBOX_ID'
-        cases.append(("boot.py does not build %s" % writes, writes in src))
+        cases.append(("%s in boot.py" % writes, writes in src))
         anchored = 'rb"' + text.replace("sys.", "sys\\.") + '(?![0-9])" % _SANDBOX_ID'
-        cases.append(("the host primer's anchor is not %s" % anchored, anchored in src))
+        cases.append(("%s in boot.py" % anchored, anchored in src))
     return cases
 
 
@@ -200,7 +200,7 @@ def main():
     if args.selftest:
         return selftest()
     if args.timeout <= 0:
-        print(f"bad timeout value: {args.timeout}", file=sys.stderr)
+        print(f"timeout {args.timeout} is not positive", file=sys.stderr)
         return 1
     anchors, dones = markers(args.instance)
 
@@ -208,7 +208,7 @@ def main():
     try:
         fd = os.open(args.kmsg, os.O_RDONLY | os.O_NONBLOCK)
     except OSError as e:
-        print(f"open {args.kmsg}: {e}", file=sys.stderr)
+        print(f"failed to open {args.kmsg} ({e})", file=sys.stderr)
         return 1
 
     stream = MarkerStream(anchors, dones)
@@ -216,7 +216,7 @@ def main():
     try:
         err = drain(read, stream)
         if err is not None:
-            print(f"read {args.kmsg}: {err}", file=sys.stderr)
+            print(f"failed to read {args.kmsg} ({err})", file=sys.stderr)
             return 1
         if stream.completed:
             return 0
@@ -233,7 +233,7 @@ def main():
                 continue
             err = drain(read, stream)
             if err is not None:
-                print(f"read {args.kmsg}: {err}", file=sys.stderr)
+                print(f"failed to read {args.kmsg} ({err})", file=sys.stderr)
                 return 1
             if stream.completed:
                 return 0

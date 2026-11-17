@@ -7,12 +7,12 @@ import android.util.Log;
 
 // BroadcastReceiver for audio map reloads
 public class MapReceiver extends BroadcastReceiver {
-    // reload the audio map and report the router state as the result
+    // reload the audio map
     @Override
     public void onReceive(Context context, Intent intent) {
         RouterApp app = RouterApp.get();
         if (app == null) {
-            Log.e(RouterApp.TAG, "MAP received before the router process was up");
+            Log.e(RouterApp.TAG, "RouterApp.get() returned null");
             setResultCode(1);
             setResultData("router-not-ready");
             return;
@@ -21,7 +21,7 @@ public class MapReceiver extends BroadcastReceiver {
             app.reload();
         }
         String state = app.describe();
-        Log.i(RouterApp.TAG, "receiver: " + state);
+        Log.i(RouterApp.TAG, "setResultData " + state);
         setResultCode(0);
         setResultData(state);
     }

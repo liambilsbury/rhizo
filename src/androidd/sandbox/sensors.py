@@ -45,11 +45,11 @@ _SCAN_TYPE = re.compile(r"(?:be|le):([su])([0-9]+)/([0-9]+)(?:X[0-9]+)?>>[0-9]+"
 
 
 class SensorError(Exception):
-    """a device channel that cannot be declared, with its reason"""
+    """exception for an undeclarable device channel and the reason"""
 
 
 def _read(path):
-    """return a sysfs attribute's text without its trailing newline"""
+    """return the text of a sysfs attribute without the trailing newline"""
     with open(path) as f:
         return f.read().strip()
 
@@ -58,12 +58,12 @@ def _number(text):
     """return an attribute's text as a finite float"""
     value = float(text)
     if not math.isfinite(value):
-        raise ValueError(f"not finite: {text!r}")
+        raise ValueError(f"not-finite:{text}")
     return value
 
 
 def _clean(text):
-    """return text fit for a conf line"""
+    """return text with characters outside 0x20-0x7e replaced by ? and stripped"""
     return "".join(c if " " <= c < "\x7f" else "?" for c in text).strip()
 
 
@@ -97,7 +97,7 @@ def parse_matrix(text):
 
 
 def mount_matrix(kind, iio_type, attrs, props, read, log, devname):
-    """return the mount matrix and its source"""
+    """return the mount matrix and the matrix source"""
     sources = []
     if kind == "accelerometer" and "ACCEL_MOUNT_MATRIX" in props:
         sources.append(("udev:ACCEL_MOUNT_MATRIX", lambda: props["ACCEL_MOUNT_MATRIX"]))
@@ -113,14 +113,14 @@ def mount_matrix(kind, iio_type, attrs, props, read, log, devname):
 
 
 def _why(e):
-    """return a short reason for an exception"""
+    """return the errno name of e, or str(e) as a token of at most 60 characters"""
     if isinstance(e, OSError) and e.errno:
         return errno.errorcode.get(e.errno, str(e.errno))
     return re.sub(r"[^A-Za-z0-9_.:-]+", "-", str(e))[:60] or type(e).__name__
 
 
 def accel_location(props, attrs, read):
-    """return where an accelerometer sits"""
+    """return ACCEL_LOCATION, base or display for an accelerometer"""
     if props.get("ACCEL_LOCATION"):
         return props["ACCEL_LOCATION"]
     for name, base in (("label", "accel-base"), ("location", "base")):
@@ -210,7 +210,7 @@ def _cdd_gaps(s):
 
 
 def _sampling_frequency(iio_type, attrs, read):
-    """return the device's reported sampling rate, or None"""
+    """return the sampling_frequency attribute value in Hz, or None"""
     name = _first(attrs, (f"in_{iio_type}_sampling_frequency", "sampling_frequency"))
     if not name:
         return None
@@ -257,7 +257,7 @@ def _device_sensors(dev_dir, attrs, read, props, devname, log):
         found.append({"kind": kind, "iio_type": iio_type, "channels": [channel], "matrix": None,
                       "matrix_source": None})
     if any(_PROXIMITY_ATTR.fullmatch(a) for a in attrs):
-        # CTS requires a wake-up proximity sensor reporting 0/5 cm
+        # CTS requires a wake-up proximity sensor with values 0 and 5 cm
         skipped.append(("proximity", "not-exposed"))
     if not found and not skipped:
         types = sorted({m.group(1) for m in map(_ANY_CHANNEL.fullmatch, attrs) if m})
@@ -266,7 +266,7 @@ def _device_sensors(dev_dir, attrs, read, props, devname, log):
 
 
 def _attrs(dev_dir):
-    """return the device's attribute names, scan elements included"""
+    """return the files of dev_dir, scan_elements/* and buffer0/* included"""
     names = set()
     try:
         entries = os.listdir(dev_dir)
@@ -317,7 +317,7 @@ def _properties(s, attrs, read, round_us):
 
 
 def _probe_once(s, read, clock):
-    """return a sensor's mean channel read round in microseconds"""
+    """return the mean microseconds to read the channels of a sensor"""
     texts = None
     total = 0.0
     for _ in range(PROBE_ROUNDS):
@@ -374,7 +374,7 @@ def enumerate(sys_root="/sys", udev_root="/run/udev", reader=None, log=kmsg, sle
         devpath = dev_dir[len(real_root):]
 
         def read(rel, d=dev_dir):
-            """read an attribute of this device"""
+            """return the text of attribute rel under d"""
             return reader(os.path.join(d, rel))
         attrs = _attrs(dev_dir)
         try:
@@ -449,7 +449,7 @@ def render_conf(sensors):
 
 
 def feature_xml(sensors):
-    """return the permissions file declaring a feature per kind present"""
+    """return the permissions file with a feature per sensor kind"""
     kinds = {s["kind"] for s in sensors}
     return ('<?xml version="1.0" encoding="utf-8"?>\n<permissions>\n'
             + "".join(f'    <feature name="{KIND_FEATURES[k]}" />\n' for k in KIND_ORDER if k in kinds)
@@ -457,12 +457,12 @@ def feature_xml(sensors):
 
 
 def kinds_of(sensors):
-    """return the kinds present, in handle order, without repeats"""
+    """return the sensor kinds in handle order without repeats"""
     return [k for k in KIND_ORDER if any(s["kind"] == k for s in sensors)]
 
 
 def refusal(policy, release=None, payload=None, prepared=None, root=None, exists=os.path.exists):
-    """return why this launch declares no sensors"""
+    """return the state and reason for an empty sensor plan"""
     release = core.RHIZO_RELEASE if release is None else release
     prepared = core.prepared_key() if prepared is None else prepared
     root = root or RUN_ROOT
@@ -487,7 +487,7 @@ def marker(state, sensors, reason=None):
 
 
 def plan(policy=None, enum=None, log=kmsg, **refusal_args):
-    """record and return this launch's sensor plan"""
+    """set, log and return core.sensors_plan()"""
     policy = policy or capabilities.policy_or_deny(log=log, instance_id=SANDBOX_ID)
     refused = refusal(policy, **refusal_args)
     sensors = [] if refused else (enum or enumerate)()

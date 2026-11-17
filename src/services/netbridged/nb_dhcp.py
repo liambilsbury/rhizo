@@ -128,7 +128,7 @@ def encode_options(msg_type, server_id, mask=None, router=None, dns=None,
 
 def build_reply(msg_type, req, yiaddr, server_id, mask=None, router=None, dns=None,
                  lease_seconds=None, broadcast=None, domain=None):
-    """build a DHCP reply packet for a request"""
+    """build a DHCP reply packet for req"""
     header = build_header(BOOTREPLY, req["xid"], req["flags"], "0.0.0.0", yiaddr,
                            req["chaddr"])
     return header + encode_options(msg_type, server_id, mask, router, dns,
@@ -136,7 +136,7 @@ def build_reply(msg_type, req, yiaddr, server_id, mask=None, router=None, dns=No
 
 
 def decode_reply(data):
-    """decode a reply into readable fields"""
+    """decode a DHCP reply into a dict"""
     if len(data) < HEADER_LEN:
         return None
     fields = struct.unpack(HEADER_FMT, data[:HEADER_LEN])
@@ -203,7 +203,7 @@ class DhcpService(Service):
         self.domain = state.search[0] if state.search else None
 
     def on_readable(self, sock):
-        """read a datagram and handle it"""
+        """read a datagram and call _handle"""
         try:
             data, _addr = sock.recvfrom(65536)
         except OSError as e:
@@ -223,7 +223,7 @@ class DhcpService(Service):
             log("NB_DHCP_BAD reason=dispatch:%s len=%d", e, len(data))
 
     def _dispatch(self, req, sock):
-        """call the handler for the message type of a request"""
+        """call the handler for the msg_type of req"""
         mt = req["msg_type"]
         if mt == MSG_DISCOVER:
             self._discover(req, sock)
@@ -237,7 +237,7 @@ class DhcpService(Service):
             self._inform(req, sock)
 
     def _discover(self, req, sock):
-        """offer an address to a client that sent a discover"""
+        """reply DHCPOFFER to a DHCPDISCOVER"""
         mac = mac_str(req["chaddr"])
         ip = self._allocate(mac)
         if ip is None:
@@ -251,7 +251,7 @@ class DhcpService(Service):
             mac, ip, self.cfg.veth_addr, self.cfg.veth_addr, self.cfg.lease_seconds)
 
     def _request(self, req, sock):
-        """acknowledge or refuse a client's request for an address"""
+        """reply DHCPACK or DHCPNAK to a DHCPREQUEST"""
         mac = mac_str(req["chaddr"])
         opts = req["options"]
         if 54 in opts and len(opts[54]) == 4:
@@ -286,13 +286,13 @@ class DhcpService(Service):
         log("NB_DHCP_ACK mac=%s ip=%s lease=%d", mac, req_ip, self.cfg.lease_seconds)
 
     def _nak(self, req, sock, mac, reason):
-        """send a NAK reply and log the reason"""
+        """write a DHCPNAK and log the reason"""
         reply = build_reply(MSG_NAK, req, "0.0.0.0", self.cfg.veth_addr)
         self._send(sock, req, reply, force_broadcast=True)
         log("NB_DHCP_NAK mac=%s reason=%s", mac, reason)
 
     def _decline(self, req):
-        """drop the lease for an address a client declined"""
+        """delete the lease for a DHCPDECLINE"""
         mac = mac_str(req["chaddr"])
         opts = req["options"]
         ip = None
@@ -310,7 +310,7 @@ class DhcpService(Service):
         log("NB_DHCP_DECLINE mac=%s ip=%s", mac, ip)
 
     def _release(self, req):
-        """drop the lease of a client that released its address"""
+        """delete the lease for a DHCPRELEASE"""
         mac = mac_str(req["chaddr"])
         lease = self.leases.pop(mac, None)
         if lease is None:
@@ -320,7 +320,7 @@ class DhcpService(Service):
         log("NB_DHCP_RELEASE mac=%s ip=%s", mac, lease["ip"])
 
     def _inform(self, req, sock):
-        """answer an inform request with configuration only"""
+        """reply DHCPACK with no lease time to a DHCPINFORM"""
         mac = mac_str(req["chaddr"])
         if req["ciaddr"] == ZERO_ADDR:
             log("NB_DHCP_BAD reason=inform_no_ciaddr len=0")
@@ -333,7 +333,7 @@ class DhcpService(Service):
         log("NB_DHCP_ACK mac=%s ip=%s lease=%d", mac, ip, 0)
 
     def _send(self, sock, req, reply, force_broadcast=False):
-        """send a reply to the client by broadcast or unicast"""
+        """sendto reply to 255.255.255.255 or ciaddr on port 68"""
         broadcast = force_broadcast or bool(req["flags"] & FLAG_BROADCAST) \
             or req["ciaddr"] == ZERO_ADDR
         dest = ("255.255.255.255", 68) if broadcast else (socket.inet_ntoa(req["ciaddr"]), 68)
@@ -343,7 +343,7 @@ class DhcpService(Service):
             log("NB_DHCP_BAD reason=send:%s len=%d", e, len(reply))
 
     def _allocate(self, mac):
-        """return the client's lease address or a free one"""
+        """return the lease address of mac, or lease a free pool address"""
         existing = self.leases.get(mac)
         if existing is not None:
             return existing["ip"]
@@ -359,7 +359,7 @@ class DhcpService(Service):
         return None
 
     def _holder_of(self, ip):
-        """return the hardware address holding an address, or None"""
+        """return the mac with a lease on ip, or None"""
         for mac, lease in self.leases.items():
             if lease["ip"] == ip:
                 return mac

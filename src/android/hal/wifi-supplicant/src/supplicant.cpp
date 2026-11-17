@@ -23,32 +23,32 @@ class RhizoSupplicant : public BnSupplicant {
     if (sta_.count(name)) return Status(SupplicantStatusCode::FAILURE_IFACE_EXISTS);
     int rc = Engine::Get().Init();
     if (rc != 0) {
-      klogf("addStaInterface %s: nl80211 unavailable: %s", name.c_str(), strerror(-rc));
+      klogf("Engine::Init failed for %s (%s)", name.c_str(), strerror(-rc));
       return Status(SupplicantStatusCode::FAILURE_UNKNOWN);
     }
     const uint32_t ifindex = if_nametoindex(name.c_str());
     if (ifindex == 0) {
-      klogf("addStaInterface: no netdev %s", name.c_str());
+      klogf("no netdev %s", name.c_str());
       return Status(SupplicantStatusCode::FAILURE_ARGS_INVALID);
     }
     rhizo_wifi::IfaceInfo info;
     rc = Engine::Get().nl().GetInterface(ifindex, &info);
     if (rc != 0 || info.iftype != NL80211_IFTYPE_STATION) {
-      klogf("addStaInterface: %s is not a cfg80211 station (%s)", name.c_str(), rc ? strerror(-rc) : "iftype");
+      klogf("%s is not a cfg80211 station (%s)", name.c_str(), rc ? strerror(-rc) : "iftype");
       return Status(SupplicantStatusCode::FAILURE_ARGS_INVALID);
     }
     if (!info.ssid.empty()) {
-      klogf("%s still associated from an earlier owner, leaving", name.c_str());
+      klogf("%s is still associated", name.c_str());
       Engine::Get().nl().Disconnect(ifindex, 3);
     }
     rc = rhizo_wifi::SetUp(name, true);
-    if (rc != 0) klogf("%s up FAILED: %s", name.c_str(), strerror(-rc));
+    if (rc != 0) klogf("failed to set %s up (%s)", name.c_str(), strerror(-rc));
     auto iface = ndk::SharedRefBase::make<StaIface>(name, ifindex);
     std::weak_ptr<StaIface> weak = iface;
     iface->OnCallbacksDied([this, weak] {
       auto i = weak.lock();
       if (!i) return;
-      klogf("%s: every callback's process died, removing it", i->name().c_str());
+      klogf("all callback processes for %s died", i->name().c_str());
       RemoveSta(i->name(), i.get());
     });
     Engine::Get().Add(iface);
@@ -134,7 +134,7 @@ class RhizoSupplicant : public BnSupplicant {
   }
 
   ScopedAStatus terminate() override {
-    klog("terminate: leaving associations and exiting");
+    klog("terminate()");
     std::lock_guard<std::mutex> lg(mu_);
     for (auto& s : sta_) s.second->Shutdown();
     _exit(0);
@@ -148,7 +148,7 @@ class RhizoSupplicant : public BnSupplicant {
   }
 
  private:
-  // take the named interface out of service
+  // remove the StaIface for name
   bool RemoveSta(const std::string& name, const StaIface* only) {
     std::shared_ptr<StaIface> iface;
     {
@@ -177,18 +177,16 @@ class RhizoSupplicant : public BnSupplicant {
 }
 
 int main() {
-  klog("main() entered");
   ABinderProcess_setThreadPoolMaxThreadCount(4);
   auto supplicant = ndk::SharedRefBase::make<RhizoSupplicant>();
   const std::string instance = std::string(RhizoSupplicant::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(supplicant->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
-    klogf("addService FAILED status=%d", status);
+    klogf("AServiceManager_addService failed with status %d", status);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_startThreadPool();
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

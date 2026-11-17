@@ -1,5 +1,5 @@
 #!/bin/bash
-# build LLVM 18.1.8 libraries for Android x86_64
+# toolchain/llvm-android/build-android-x86_64 RHIZO_INPUT_CACHE=
 set -uo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$(dirname "$SELF")" || exit
@@ -49,7 +49,7 @@ CMAKE_ARGS=(
   -DLLVM_BUILD_TOOLS=OFF -DLLVM_BUILD_UTILS=OFF
 )
 
-# check all LLVM libraries exist in a build directory
+# return whether $1/lib has lib<name>.a for each LLVM_LIBS entry
 all_present() {
   local f
   for f in "${LLVM_LIBS[@]}"; do
@@ -57,7 +57,7 @@ all_present() {
   done
 }
 
-# print the inputs a build records in its directory
+# print the $MARKER record for source sha256 $1
 build_marker() {
   echo "llvm-source: llvm-project-$LLVM_VERSION.src.tar.xz sha256 $1"
   echo "script: sha256 $(sha256sum "$SELF" | cut -d' ' -f1)"
@@ -66,12 +66,12 @@ build_marker() {
   echo "cmake: ${CMAKE_ARGS[*]}"
 }
 
-# check a build directory is complete and current
+# return whether $1 has each LLVM_LIBS library and a $MARKER equal to $2
 build_current() {
   all_present "$1" && [[ -f "$1/$MARKER" && "$(cat "$1/$MARKER")" == "$2" ]]
 }
 
-# move a finished directory into place
+# rename $1 to $2 and delete the replaced $2
 swap_into_place() {
   local new="$1" dest="$2" old=""
   if [[ -e "$dest" ]]; then
@@ -86,22 +86,21 @@ swap_into_place() {
   [[ -z "$old" ]] || rm -rf "$old"
 }
 
-# extract the pinned source tree
+# extract llvm/ and cmake/ of the pinned source tarball into SRC_DIR
 place_source() {
   local sha="$1" part="$SRC_TAR.part.$$" tmp
   [[ "$(cat "$SRC_DIR/.rhizo-input" 2>/dev/null)" == "$sha" ]] && return 0
-  { cp "$CACHE_TAR" "$part" && mv "$part" "$SRC_TAR"; } || { rm -f "$part"; log "no pinned LLVM source at $CACHE_TAR: make inputs"; return 1; }
+  { cp "$CACHE_TAR" "$part" && mv "$part" "$SRC_TAR"; } || { rm -f "$part"; log "no $CACHE_TAR"; return 1; }
   tmp=$(mktemp -d "$DL_DIR/extract.XXXXXX") || return 1
-  log "extracting llvm/ and cmake/ (skipping clang, lld, every other component this build never uses)"
   if ! tar xf "$SRC_TAR" -C "$tmp" "llvm-project-$LLVM_VERSION.src/llvm" "llvm-project-$LLVM_VERSION.src/cmake"; then
-    rm -rf "$tmp"; log "extract failed"; return 1
+    rm -rf "$tmp"; log "tar xf $SRC_TAR failed"; return 1
   fi
   printf '%s\n' "$sha" > "$tmp/llvm-project-$LLVM_VERSION.src/.rhizo-input"
   swap_into_place "$tmp/llvm-project-$LLVM_VERSION.src" "$SRC_DIR" || { rm -rf "$tmp"; return 1; }
   rmdir "$tmp"
 }
 
-# make a new build directory beside BUILD_DIR
+# create a mode 0755 $BUILD_DIR.new.XXXXXX directory
 new_build_dir() {
   local new
   new=$(mktemp -d "$BUILD_DIR.new.XXXXXX") || return 1
@@ -109,21 +108,19 @@ new_build_dir() {
   printf '%s\n' "$new"
 }
 
-# build into a new directory and move it into place
+# build LLVM_LIBS in a new_build_dir directory and swap_into_place that directory to BUILD_DIR
 build_in_new_dir() {
   local marker="$1" new
   new=$(new_build_dir) || return 1
-  log "configuring the cross build in ${new##*/} (NDK toolchain, host tblgen, X86-only target, host triple x86_64-none-linux-android$API)"
-  cmake -G Ninja "$SRC_DIR/llvm" -B "$new" "${CMAKE_ARGS[@]}" || { rm -rf "$new"; log "cmake configure failed"; return 1; }
+  cmake -G Ninja "$SRC_DIR/llvm" -B "$new" "${CMAKE_ARGS[@]}" || { rm -rf "$new"; log "cmake -G Ninja failed"; return 1; }
   if (( CONFIGURE_ONLY )); then
-    rm -rf "$new"; log "--configure-only: the configure succeeded; nothing was built or replaced"; return 0
+    rm -rf "$new"; log "cmake -G Ninja succeeded"; return 0
   fi
-  log "building ${#LLVM_LIBS[@]} named LLVM static libraries, not the default 'all' target"
   ninja -C "$new" -j"$(nproc)" "${LLVM_LIBS[@]}" || { rm -rf "$new"; log "ninja failed"; return 1; }
-  all_present "$new" || { rm -rf "$new"; log "build finished but a library is still missing -- check the LLVM_LIBS list"; return 1; }
+  all_present "$new" || { rm -rf "$new"; log "$new/lib has no library for an LLVM_LIBS entry"; return 1; }
   printf '%s\n' "$marker" > "$new/$MARKER"
-  swap_into_place "$new" "$BUILD_DIR" || { rm -rf "$new"; log "could not move the finished build into $BUILD_DIR"; return 1; }
-  log "LLVM cross build for Android/bionic x86_64 complete: ${#LLVM_LIBS[@]} libraries under $BUILD_DIR/lib"
+  swap_into_place "$new" "$BUILD_DIR" || { rm -rf "$new"; log "failed to rename $new to $BUILD_DIR"; return 1; }
+  log "wrote ${#LLVM_LIBS[@]} libraries to $BUILD_DIR/lib"
 }
 
 # test the build helpers on fixtures
@@ -132,31 +129,31 @@ selftest() {
   tmp=$(mktemp -d)
   out=$(build_marker abc123)
   for want in "llvm-source: llvm-project-$LLVM_VERSION.src.tar.xz sha256 abc123" "script: sha256 " "ndk: " "tblgen: " "-DLLVM_HOST_TRIPLE=x86_64-none-linux-android$API"; do
-    [[ "$out" == *"$want"* ]] || { echo "SELFTEST FAILED: the build marker lacks '$want' -- got: $out"; fail=1; }
+    [[ "$out" == *"$want"* ]] || { echo "FAIL build_marker abc123 contains $want ($out)"; fail=1; }
   done
   grep -q "x86_64-linux-android${API}-clang'" "$REPO_ROOT/tools/mesa/mesa-cross-x86_64-android" \
-    || { echo "SELFTEST FAILED: tools/mesa/mesa-cross-x86_64-android does not build for android$API, the API level the host triple names"; fail=1; }
+    || { echo "FAIL tools/mesa/mesa-cross-x86_64-android has x86_64-linux-android${API}-clang"; fail=1; }
   mkdir -p "$tmp/b/lib"
   for f in "${LLVM_LIBS[@]}"; do : > "$tmp/b/lib/lib$f.a"; done
   printf '%s\n' "$out" > "$tmp/b/$MARKER"
-  build_current "$tmp/b" "$out" || { echo "SELFTEST FAILED: a complete build with the same marker was not read as current"; fail=1; }
-  build_current "$tmp/b" "$(build_marker def456)" && { echo "SELFTEST FAILED: a build from another source tarball was read as current"; fail=1; }
+  build_current "$tmp/b" "$out" || { echo "FAIL build_current with each library and an equal marker returns 0"; fail=1; }
+  build_current "$tmp/b" "$(build_marker def456)" && { echo "FAIL build_current with the def456 marker returns 1"; fail=1; }
   rm "$tmp/b/lib/libLLVMCore.a"
-  build_current "$tmp/b" "$out" && { echo "SELFTEST FAILED: a build missing libLLVMCore.a was read as current"; fail=1; }
+  build_current "$tmp/b" "$out" && { echo "FAIL build_current without libLLVMCore.a returns 1"; fail=1; }
   : > "$tmp/b/lib/libLLVMCore.a"; rm "$tmp/b/$MARKER"
-  build_current "$tmp/b" "$out" && { echo "SELFTEST FAILED: a build with no marker was read as current"; fail=1; }
+  build_current "$tmp/b" "$out" && { echo "FAIL build_current without $MARKER returns 1"; fail=1; }
   mkdir -p "$tmp/dest" "$tmp/new"; echo old > "$tmp/dest/f"; echo old > "$tmp/dest/only-old"; echo new > "$tmp/new/f"
-  swap_into_place "$tmp/new" "$tmp/dest" || { echo "SELFTEST FAILED: swap_into_place refused a plain swap"; fail=1; }
+  swap_into_place "$tmp/new" "$tmp/dest" || { echo "FAIL swap_into_place new dest returns 0"; fail=1; }
   [[ "$(cat "$tmp/dest/f" 2>/dev/null)" == new && ! -e "$tmp/dest/only-old" && ! -e "$tmp/new" ]] \
-    || { echo "SELFTEST FAILED: the swap did not leave exactly the new tree in place"; fail=1; }
-  compgen -G "$tmp/dest.old.*" >/dev/null && { echo "SELFTEST FAILED: the swap left the replaced tree behind"; fail=1; }
+    || { echo "FAIL dest == new after swap_into_place"; fail=1; }
+  compgen -G "$tmp/dest.old.*" >/dev/null && { echo "FAIL swap_into_place deletes dest.old.*"; fail=1; }
   mkdir "$tmp/n2"; echo x > "$tmp/n2/f"
-  swap_into_place "$tmp/n2" "$tmp/absent" && [[ -f "$tmp/absent/f" ]] || { echo "SELFTEST FAILED: a swap into an absent path failed"; fail=1; }
+  swap_into_place "$tmp/n2" "$tmp/absent" && [[ -f "$tmp/absent/f" ]] || { echo "FAIL swap_into_place n2 absent creates absent/f"; fail=1; }
   f=$(BUILD_DIR="$tmp/bd" new_build_dir) && [[ "$(stat -c %a "$f")" == 755 && "$f" == "$tmp/bd.new."* ]] \
-    || { echo "SELFTEST FAILED: a new build directory is not 0755 beside BUILD_DIR, as its siblings are -- got: $f $(stat -c %a "$f" 2>/dev/null)"; fail=1; }
+    || { echo "FAIL new_build_dir creates a mode 755 $BUILD_DIR.new.* directory ($f $(stat -c %a "$f" 2>/dev/null))"; fail=1; }
   out=$(CACHE_TAR="$tmp/missing.tar.xz" SRC_TAR="$tmp/s.tar.xz" SRC_DIR="$tmp/src" DL_DIR="$tmp" place_source abc 2>&1)
   [[ $? -ne 0 && ! -e "$tmp/s.tar.xz" ]] && ! compgen -G "$tmp/s.tar.xz.part*" >/dev/null \
-    || { echo "SELFTEST FAILED: a failed copy of the source left a tarball behind -- got: $out"; fail=1; }
+    || { echo "FAIL place_source without CACHE_TAR returns 1 and creates no s.tar.xz ($out)"; fail=1; }
   fixture="$tmp/fx/llvm-project-$LLVM_VERSION.src"; mkdir -p "$fixture/llvm" "$fixture/cmake" "$tmp/dl"
   echo src > "$fixture/llvm/CMakeLists.txt"; echo cm > "$fixture/cmake/x"
   tar cf "$tmp/in.tar.xz" -C "$tmp/fx" "llvm-project-$LLVM_VERSION.src"
@@ -168,10 +165,10 @@ selftest() {
     place_source "$sha" >/dev/null 2>&1 && [[ -e "$SRC_DIR/kept" ]] || exit 2
     place_source other >/dev/null 2>&1 && [[ ! -e "$SRC_DIR/kept" && "$(cat "$SRC_DIR/.rhizo-input")" == other ]] || exit 3
     [[ -z "$(find "$DL_DIR" -maxdepth 1 -name 'extract.*')" ]] || exit 4 ) \
-    || { echo "SELFTEST FAILED: place_source did not extract once per tarball digest and clean up (step $?)"; fail=1; }
+    || { echo "FAIL place_source extracts when .rhizo-input != the tarball sha256 and deletes extract.* (step $?)"; fail=1; }
   rm -rf "$tmp"
-  if (( fail )); then echo "llvm-android.sh selftest: FAILED"; return 1; fi
-  echo "llvm-android.sh selftest: ok"
+  if (( fail )); then echo "FAIL llvm-android.sh --selftest"; return 1; fi
+  echo "ok llvm-android.sh --selftest"
 }
 
 FORCE=0 CONFIGURE_ONLY=0
@@ -180,22 +177,22 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE=1; shift ;;
     --configure-only) CONFIGURE_ONLY=1; shift ;;
     --selftest) selftest; exit $? ;;
-    -h|--help) echo "usage: $0 [--force] [--configure-only] [--selftest]" >&2; exit 0 ;;
-    *) log "unknown option: $1"; exit 2 ;;
+    -h|--help) echo "$0 [--force] [--configure-only] [--selftest]" >&2; exit 0 ;;
+    *) log "unknown option $1"; exit 2 ;;
   esac
 done
 
-[[ -f "$CACHE_TAR" ]] || { log "no pinned LLVM source at $CACHE_TAR: make inputs"; exit 1; }
+[[ -f "$CACHE_TAR" ]] || { log "no $CACHE_TAR"; exit 1; }
 mkdir -p "$DL_DIR"
 exec 9>"$DL_DIR/.build.lock"
-flock -w 3600 9 || { log "another LLVM build held $DL_DIR/.build.lock for an hour"; exit 1; }
+flock -w 3600 9 || { log "flock -w 3600 $DL_DIR/.build.lock failed"; exit 1; }
 TAR_SHA=$(sha256sum "$CACHE_TAR" | cut -d' ' -f1)
 WANT=$(build_marker "$TAR_SHA")
 if (( ! FORCE && ! CONFIGURE_ONLY )) && build_current "$BUILD_DIR" "$WANT"; then
-  log "all ${#LLVM_LIBS[@]} LLVM libraries under $BUILD_DIR/lib were built from these inputs -- nothing to do (--force to rebuild)"
+  log "build_current $BUILD_DIR returned 0"
   exit 0
 fi
-[[ -x "$HOST_TBLGEN" ]] || { log "no host llvm-tblgen at $HOST_TBLGEN (apt install llvm-18)"; exit 1; }
-[[ -d "$NDK" ]] || { log "no NDK at $NDK -- run tools/fetch/build-inputs.sh --only ndk"; exit 1; }
+[[ -x "$HOST_TBLGEN" ]] || { log "no $HOST_TBLGEN"; exit 1; }
+[[ -d "$NDK" ]] || { log "no $NDK"; exit 1; }
 place_source "$TAR_SHA" || exit 1
 build_in_new_dir "$WANT" || exit 1

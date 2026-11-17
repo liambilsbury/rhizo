@@ -121,6 +121,6 @@ constexpr int16_t kAcQLookup[3][256] = {
     },
 };
 
-}  // namespace rhizo::c2va::vp9
+}
 
 #endif

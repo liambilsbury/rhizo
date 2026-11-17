@@ -78,7 +78,7 @@ bool Dpb::Bump() {
   return true;
 }
 
-// bump until at most max_num_reorder_frames pictures wait
+// bump while more than max_num_reorder_frames pictures wait for output
 void Dpb::ApplyReorderLimit() {
   if (pending_ >= 0) return;
   for (;;) {
@@ -88,7 +88,7 @@ void Dpb::ApplyReorderLimit() {
   }
 }
 
-// pick the reference to evict from an overfull DPB
+// pick the reference store to evict
 static int PickEvictee(const std::array<FrameStore, kStoreSlots>& stores, int exclude) {
   int best = -1;
   for (int i = 0; i < kStoreSlots; i++) {

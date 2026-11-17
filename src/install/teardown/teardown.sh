@@ -1,22 +1,22 @@
 #!/bin/bash
-# remove what rhizo changed on the host
+# host teardown for rhizo
 set -uo pipefail
 
 PROG=rhizo-host-teardown
 log() { echo "[$PROG] $*" >&2; }
 # print a refusal line and exit 1
-refuse() { local token="$1"; shift; log "REFUSED: $*"; echo "RHIZO_TEARDOWN_REFUSED reason=$token"; exit 1; }
+refuse() { local token="$1"; shift; log "$*"; echo "RHIZO_TEARDOWN_REFUSED reason=$token"; exit 1; }
 # print a failure line and exit 1
-failstop() { local token="$1"; shift; log "FAILED: $*"; echo "RHIZO_TEARDOWN_FAILED reason=$token"; exit 1; }
+failstop() { local token="$1"; shift; log "$*"; echo "RHIZO_TEARDOWN_FAILED reason=$token"; exit 1; }
 # print the usage text
 usage() {
   cat <<'EOF'
-usage: teardown.sh [--verify | --stop-payload-processes | --clear-host-labels | --list-host-labels] [--purge]
-                   [-h | --help]
+teardown.sh [--verify | --stop-payload-processes | --clear-host-labels | --list-host-labels] [--purge]
+            [-h | --help]
 EOF
 }
 # record and log a removal
-mark_change() { ANY_CHANGE=1; log "  removed: $*"; }
+mark_change() { ANY_CHANGE=1; log "  removed $*"; }
 
 MODE=apply
 PURGE=0
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
     --clear-host-labels) MODE=clear-host-labels; shift ;;
     --list-host-labels) MODE=list-host-labels; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "[$PROG] FAIL: unknown argument '$1'" >&2; exit 2 ;;
+    *) echo "[$PROG] unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
 
@@ -36,10 +36,10 @@ done
 source "$(dirname "${BASH_SOURCE[0]}")/teardown-lib.sh"
 # shellcheck source=host-flavor.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/host-flavor.sh" \
-  || failstop "library-unreadable" "cannot read host-flavor.sh beside $0"
+  || failstop "library-unreadable" "failed to source host-flavor.sh beside $0"
 # shellcheck source=bootloader.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../bootstrap/bootloader.sh" \
-  || failstop "library-unreadable" "cannot read bootloader.sh beside $0"
+  || failstop "library-unreadable" "failed to source bootloader.sh beside $0"
 
 FLAVOR=$(host_flavor)
 TEARDOWN_SELINUX_ENFORCE=/sys/fs/selinux/enforce
@@ -109,7 +109,7 @@ teardown_mode_helper() {
   elif [[ -f "$here/../../rhizo-selinux-mode" ]]; then
     printf '%s\n' "$here/../../rhizo-selinux-mode"
   else
-    log "no rhizo-selinux-mode beside $here or in its parent"
+    log "no rhizo-selinux-mode in $here or $here/../.."
     return 1
   fi
 }
@@ -126,7 +126,7 @@ teardown_helper_run() {
 teardown_selinux_mode() {
   local m="" helper
   if [[ -e "$TEARDOWN_SELINUX_MODE_FILE" ]]; then
-    m=$(cat "$TEARDOWN_SELINUX_MODE_FILE") || { log "cannot read $TEARDOWN_SELINUX_MODE_FILE"; return 1; }
+    m=$(cat "$TEARDOWN_SELINUX_MODE_FILE") || { log "failed to read $TEARDOWN_SELINUX_MODE_FILE"; return 1; }
   fi
   if [[ -z "$m" ]]; then
     helper=$(teardown_mode_helper) || return 1
@@ -135,17 +135,17 @@ teardown_selinux_mode() {
   fi
   case "$m" in
     host|namespace) printf '%s\n' "$m" ;;
-    *) log "the SELinux mode reads '$m', not host or namespace"; return 1 ;;
+    *) log "SELinux mode '$m', expected host or namespace"; return 1 ;;
   esac
 }
-# test for a namespace-mode install
+# return whether the install is in namespace mode
 namespace_install() {
   local m
   grep -qx 'selinux-mode namespace' "$INSTALL_RECORD" 2>/dev/null && return 0
-  m=$(teardown_selinux_mode) || failstop "selinux-mode-unreadable" "cannot read the SELinux mode (see above)"
+  m=$(teardown_selinux_mode) || failstop "selinux-mode-unreadable" "failed to read the SELinux mode"
   [[ "$m" == namespace ]]
 }
-# print this task's SELinux context
+# print /proc/self/attr/current
 teardown_own_context() {
   tr -d '\0' < "$TEARDOWN_ATTR_CURRENT" 2>/dev/null
 }
@@ -158,7 +158,7 @@ teardown_host_policy_state() {
     *) echo unknown ;;
   esac
 }
-# test for Android's policy loaded host-wide
+# return whether Android's policy is loaded host-wide
 teardown_android_policy_loaded() {
   [[ "$(teardown_own_context)" == u:r:* ]]
 }
@@ -181,7 +181,7 @@ selinuxns_records_dirs() {
 remove_selinuxns_records() {
   local d
   while IFS= read -r d; do
-    rm -rf "$d" || failstop "selinuxns-records-rm-failed" "could not remove $d"
+    rm -rf "$d" || failstop "selinuxns-records-rm-failed" "failed to remove $d"
     mark_change "$d"
   done < <(selinuxns_records_dirs)
 }
@@ -190,10 +190,10 @@ report_selinuxns_records() {
   local left
   left=$(selinuxns_records_dirs)
   if [[ -n "$left" ]]; then
-    log "  ${SELINUXNS_RECORDS_DIR}[-<id>] : PRESENT ($(tr '\n' ' ' <<<"$left"))"
+    log "  ${SELINUXNS_RECORDS_DIR}[-<id>] exists ($(tr '\n' ' ' <<<"$left"))"
     return 1
   fi
-  log "  ${SELINUXNS_RECORDS_DIR}[-<id>] : absent"
+  log "  no ${SELINUXNS_RECORDS_DIR}[-<id>]"
 }
 
 # print the existing /root/.rhizo_* state paths
@@ -330,7 +330,7 @@ RUNTIME_ENV="${RHIZO_RUNTIME_ENV:-/var/lib/rhizo/androidd-runtime.env}"
 
 # print the kernel's active LSM list
 lsm_active() { cat /sys/kernel/security/lsm 2>/dev/null || echo ""; }
-# check the LSM list for selinux
+# return whether the install is host mode and the active LSM list contains selinux
 reboot_needed_for_lsm() { [[ "${TEARDOWN_NS_INSTALL:-0}" != 1 && ",$(lsm_active)," == *",selinux,"* ]]; }
 
 # print the installed Rhizo kernel packages
@@ -338,45 +338,39 @@ rhizo_kernel_packages() {
   local out rc=0 line
   case "$FLAVOR" in
     ubuntu)
-      command -v dpkg-query >/dev/null 2>&1 || { echo "no dpkg-query to list the installed kernels" >&2; return 2; }
+      command -v dpkg-query >/dev/null 2>&1 || { echo "no dpkg-query" >&2; return 2; }
       # shellcheck disable=SC2016
       out=$(dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 'linux-image-*rhizo' 'linux-headers-*rhizo' 2>/dev/null) \
         || rc=$?
-      (( rc <= 1 )) || { echo "dpkg-query exited $rc listing the Rhizo kernel packages" >&2; return 2; }
+      (( rc <= 1 )) || { echo "dpkg-query failed with exit status $rc" >&2; return 2; }
       while IFS= read -r line; do
         case "${line:0:3}" in
           "ii ") echo "${line:4}" ;;
         esac
       done <<<"$out" ;;
     cachyos)
-      command -v pacman >/dev/null 2>&1 || { echo "no pacman to list the installed kernels" >&2; return 2; }
+      command -v pacman >/dev/null 2>&1 || { echo "no pacman" >&2; return 2; }
       out=$(pacman -Qq linux-rhizo linux-rhizo-headers 2>/dev/null) || rc=$?
-      (( rc <= 1 )) || { echo "pacman exited $rc listing the Rhizo kernel packages" >&2; return 2; }
+      (( rc <= 1 )) || { echo "pacman -Qq failed with exit status $rc" >&2; return 2; }
       [[ -z "$out" ]] || printf '%s\n' "$out" ;;
   esac
 }
 
-# log the Rhizo kernel steps
+# log the running Rhizo kernel and the installed Rhizo kernel packages
 rhizo_kernel_note() {
-  local pkgs running rc=0 purge="sudo apt purge"
-  [[ "$FLAVOR" == ubuntu ]] || purge="sudo pacman -R"
+  local pkgs running rc=0
   running=$(uname -r)
   pkgs=$(rhizo_kernel_packages) || rc=$?
   if (( rc )); then
-    log "cannot list the Rhizo kernel packages (see above); remove them before the reboot"
+    log "failed to list the Rhizo kernel packages"
     return 0
   fi
   pkgs=$(tr '\n' ' ' <<<"$pkgs"); pkgs=${pkgs% }
   if [[ "$running" != *-rhizo && -z "$pkgs" ]]; then
     return 1
   fi
-  [[ "$running" != *-rhizo ]] || log "this boot runs the Rhizo kernel $running; reboot to leave it"
-  if [[ -n "$pkgs" && "$FLAVOR" == ubuntu ]]; then
-    log "the Rhizo kernel is installed: run '$purge $pkgs', then reboot"
-    log "run no apt autoremove before that purge; it removes your older kernel"
-  elif [[ -n "$pkgs" ]]; then
-    log "the Rhizo kernel is installed: run 'sudo pacman -R \$(pacman -Qq linux-rhizo linux-rhizo-headers 2>/dev/null)', then reboot"
-  fi
+  [[ "$running" != *-rhizo ]] || log "the running kernel is the Rhizo kernel $running"
+  [[ -z "$pkgs" ]] || log "the installed Rhizo kernel packages are $pkgs"
   return 0
 }
 
@@ -385,13 +379,13 @@ restore_default_entry() {
   local kind out
   grep -q '^rhizo-kernel-default ' "$INSTALL_RECORD" 2>/dev/null || return 0
   kind=$(bootloader_kind 2>&1) \
-    || failstop "default-entry-unknown" "cannot tell which bootloader boots this host to put its default entry back: $kind"
+    || failstop "default-entry-unknown" "bootloader_kind failed ($kind)"
   out=$(bootloader_restore_default "$kind" "$INSTALL_RECORD") \
-    || failstop "default-entry-restore-failed" "could not put the default boot entry back (see above)"
+    || failstop "default-entry-restore-failed" "failed to restore the default boot entry"
   case "$out" in
-    kept\ *)     log "  kept the default boot entry ${out#kept }, chosen after the install" ;;
-    restored\ -) mark_change "the Rhizo kernel as the default boot entry; the boot loader's own choice applies again" ;;
-    restored\ *) mark_change "the Rhizo kernel as the default boot entry; ${out#restored } is the default again" ;;
+    kept\ *)     log "  default boot entry ${out#kept } is not the Rhizo kernel" ;;
+    restored\ -) mark_change "the Rhizo kernel as the default boot entry" ;;
+    restored\ *) mark_change "the Rhizo kernel as the default boot entry, default ${out#restored }" ;;
   esac
 }
 
@@ -404,7 +398,7 @@ contribution() {
   fi
 }
 
-# print the bootloader regeneration names or commands
+# print the bootloader regeneration labels or commands
 regen_choices() {
   local k out="" target cmd
   target=$(bootloader_target "$1")
@@ -421,7 +415,7 @@ regen_choices() {
   echo "${out# or }"
 }
 
-# report rhizo tokens left in a generated config
+# log the rhizo tokens left in a generated config
 report_left_tokens() {
   local gen
   if ! gen=$(bootloader_generated "$2" 2>&1); then
@@ -430,23 +424,22 @@ report_left_tokens() {
   fi
   if [[ -n "$3" && "$(bootloader_target "$3")" != "$(bootloader_target "$2")" ]]; then
     if [[ "$1" == verify ]]; then
-      log "  bootloader tokens: left in $gen ($4); $3 boots this host"
+      log "  rhizo tokens left in $gen ($4), detected bootloader $3"
     else
-      log "  WARNING: left $gen ($4); $3 boots this host"
+      log "  left $gen ($4), detected bootloader $3"
     fi
     return 0
   fi
   if [[ "$1" == verify ]]; then
-    log "  bootloader tokens: PRESENT in $gen ($4); install $(regen_choices "$2" name), then run" \
-        "$(regen_choices "$2" cmd)"
+    log "  rhizo tokens in $gen ($4), no $(regen_choices "$2" name)"
   else
-    log "  WARNING: $gen ($4); install $(regen_choices "$2" name), then run $(regen_choices "$2" cmd)"
-    [[ "$4" == "has cmdlines that cannot be read" ]] || LEFT_CONFIGS+=("$gen"$'\t'"$2")
+    log "  $gen ($4), no $(regen_choices "$2" name)"
+    [[ "$4" == "failed to read the cmdlines" ]] || LEFT_CONFIGS+=("$gen"$'\t'"$2")
   fi
   return 1
 }
 
-# report stranded rhizo tokens
+# log the rhizo tokens on configs without a regeneration command
 report_stranded_tokens() {
   local kind target seen=" $3 " reported="${4:-}" tokens found=0 unread=0 rc
   for kind in $BL_KINDS; do
@@ -458,7 +451,7 @@ report_stranded_tokens() {
     if (( rc == 2 )) && [[ "$1" == verify ]]; then
       if [[ -z "$2" || "$(bootloader_target "$2")" == "$target" ]]; then
         if [[ $'\n'"$reported"$'\n' != *$'\n'"$tokens"$'\n'* ]]; then
-          log "  bootloader tokens: $tokens -- run 'sudo rhizo uninstall --verify'"
+          log "  failed to read the bootloader config ($tokens)"
           reported+="$tokens"$'\n'
         fi
         unread=1
@@ -467,9 +460,9 @@ report_stranded_tokens() {
     fi
     if (( rc != 0 )); then
       [[ -z "$tokens" ]] || { echo "$tokens" >&2; reported+="$tokens"$'\n'; }
-      tokens="has cmdlines that cannot be read"
+      tokens="failed to read the cmdlines"
     elif [[ -n "$tokens" ]]; then
-      tokens="carries:$(awk '{printf " %s", $0}' <<<"$tokens")"
+      tokens="tokens$(awk '{printf " %s", $0}' <<<"$tokens")"
     else
       continue
     fi
@@ -484,7 +477,7 @@ list_cmdline_tokens() {
   local holders kind detected targets="" rc=0 kind_rc=0 holders_rc=0 stranded=0 unread=0 reported=""
   detected=$(bootloader_kind 2>&1) || kind_rc=$?
   if (( kind_rc == 2 )); then
-    log "  bootloader tokens: $detected -- run 'sudo rhizo uninstall --verify'"
+    log "  failed to read the bootloader config ($detected)"
     reported=$detected$'\n' unread=1
   fi
   (( kind_rc == 0 )) || detected=""
@@ -492,25 +485,25 @@ list_cmdline_tokens() {
   case $holders_rc in
     0) ;;
     2) [[ $'\n'"$reported" == *$'\n'"$holders"$'\n'* ]] \
-         || log "  bootloader tokens: $holders -- run 'sudo rhizo uninstall --verify'"
+         || log "  failed to read the bootloader config ($holders)"
        return 2 ;;
     *) echo "$holders" >&2
-       log "  bootloader tokens: cannot tell (see above)"; return 1 ;;
+       log "  bootloader_holders failed"; return 1 ;;
   esac
   for kind in $holders; do
     if [[ "$kind" == grub-dropin ]]; then
-      log "  grub drop-in    : PRESENT ($(bootloader_config_file "$kind"))"
+      log "  grub drop-in $(bootloader_config_file "$kind") exists"
     else
-      log "  bootloader tokens: PRESENT ($(bootloader_config_file "$kind"))"
+      log "  rhizo tokens in $(bootloader_config_file "$kind")"
     fi
     targets+=" $(bootloader_target "$kind")"
   done
   if [[ -n "$holders" ]]; then
     rc=1
   elif [[ "$FLAVOR" != cachyos ]]; then
-    log "  grub drop-in    : absent"
+    log "  no grub drop-in"
   else
-    log "  bootloader tokens: absent"
+    log "  no rhizo bootloader tokens"
   fi
   report_stranded_tokens verify "$detected" "$targets" "$reported" || stranded=$?
   case $stranded in
@@ -531,27 +524,27 @@ remove_cmdline_tokens() {
   DETECTED_KIND=$detected REMOVED_TOKENS=""
   holders=$(bootloader_holders) \
     || failstop "bootloader-config-unreadable" \
-                "cannot read the bootloader files (see above)"
+                "failed to read the bootloader files"
   if [[ -z "$holders" ]]; then
     if [[ "$FLAVOR" != cachyos ]]; then
-      log "grub drop-in already absent: $(bootloader_config_file grub-dropin)"
+      log "no grub drop-in $(bootloader_config_file grub-dropin)"
     else
-      log "bootloader tokens already absent${detected:+: $(bootloader_config_file "$detected")}"
+      log "no rhizo bootloader tokens${detected:+ in $(bootloader_config_file "$detected")}"
     fi
   else
-    [[ -z "$why" ]] || log "  WARNING: cannot detect the bootloader ($why); removing rhizo's tokens from every bootloader file"
+    [[ -z "$why" ]] || log "  bootloader_kind failed ($why)"
   fi
   for kind in $holders; do
     file=$(bootloader_config_file "$kind")
     [[ -z "$detected" || "$kind" == "$detected" ]] \
-      || log "  NOTE: removing rhizo's tokens from $file; $detected boots this host"
+      || log "  rhizo tokens in $file, detected bootloader $detected"
     own_of[$kind]=$(bootloader_own_tokens "$kind") \
-      || failstop "bootloader-tokens-unreadable" "cannot read rhizo's tokens in $file (see above)"
+      || failstop "bootloader-tokens-unreadable" "failed to read the rhizo tokens in $file"
     REMOVED_TOKENS+=" ${own_of[$kind]//$'\n'/ }"
     if ! out=$(bootloader_strip "$kind" 2>&1); then
       [[ -z "$out" ]] || echo "$out" >&2
-      [[ "$kind" != grub-dropin ]] || failstop "grub-dropin-rm-failed" "could not remove $file"
-      failstop "bootloader-block-rm-failed" "could not remove rhizo's block from $file"
+      [[ "$kind" != grub-dropin ]] || failstop "grub-dropin-rm-failed" "failed to remove $file"
+      failstop "bootloader-block-rm-failed" "failed to remove the rhizo block from $file"
     fi
     target_of[$kind]=$(bootloader_target "$kind")
     [[ " $targets " == *" ${target_of[$kind]} "* ]] || targets+=" ${target_of[$kind]}"
@@ -615,24 +608,24 @@ regenerate_holders() {
     fi
     case $rc in
       0) if [[ -z "$still" ]]; then
-           log "  no $(regen_choices "$1" name) is installed, and no next-boot cmdline of $1 carries rhizo's tokens"
+           log "  no $(regen_choices "$1" name) and no rhizo tokens on the $1 cmdlines"
          else
-           report_left_tokens apply "$1" "$detected" "carries:$still"
+           report_left_tokens apply "$1" "$detected" "tokens$still"
          fi ;;
-      1|2) report_left_tokens apply "$1" "$detected" "has cmdlines that cannot be read" "$reported" ;;
+      1|2) report_left_tokens apply "$1" "$detected" "failed to read the cmdlines" "$reported" ;;
       *) report_left_tokens apply "$1" "$detected" \
-           "carries:$still (see above)" ;;
+           "tokens$still" ;;
     esac
     for kind; do mark_change "$(contribution "$kind")"; done
     return 0
   fi
   label=$(bootloader_regen_label "$regen")
   later="$label runs on the next boot"
-  [[ "$regen" != grub-dropin ]] || later="grub.cfg regenerates on the next boot"
-  log "running $label"
+  [[ "$regen" != grub-dropin ]] || later="update-grub runs on the next boot"
+  log "argv=$label"
   if ! out=$(bootloader_regen "$regen"); then
     echo "$out" >&2
-    log "  WARNING: $label failed after removing $what; the next boot runs it again"
+    log "  $label failed after removing $what"
     REGEN_DEFERRED+=("$regen")
     for kind; do mark_change "$(contribution "$kind") ($later)"; done
     return 0
@@ -647,17 +640,17 @@ regenerate_holders() {
            for kind; do mark_change "$(contribution "$kind"), and regenerated $gen"; done
            return 0
          fi
-         warning="$label ran but $gen carries:$still" ;;
-      1|2) warning="cannot read the cmdlines in $gen after $label" ;;
-      *) warning="$label ran but $gen carries:$still (see above)" ;;
+         warning="$gen has rhizo tokens$still after $label" ;;
+      1|2) warning="failed to read the cmdlines in $gen after $label" ;;
+      *) warning="$gen has rhizo tokens$still after $label" ;;
     esac
   fi
-  log "  WARNING: $warning; the next boot runs $label again"
+  log "  $warning"
   REGEN_DEFERRED+=("$regen")
   for kind; do mark_change "$(contribution "$kind") ($later)"; done
 }
 
-# report or clear rhizo selinux labels
+# list, verify or clear the rhizo selinux labels
 selinux_xattr_report() {
   python3 - "$1" "$HOST_EXEC_CONTEXT" "$HOST_MODULE_CONTEXT" "$HOST_MODULE_ROOT" "$TEARDOWN_UNLABELED_CONTEXT" \
     "${HOST_EXEC_PATHS[@]}" <<'PYEOF'
@@ -686,7 +679,7 @@ if _w and _w[0].startswith("|/"):
 
 
 def module_marked(want):
-    # return module paths with a wanted label
+    # return the module paths whose security.selinux is in want
     out = []
     for d, _dirs, files in os.walk(mod_root):
         for p in [d] + [os.path.join(d, f) for f in files]:
@@ -768,7 +761,7 @@ PYEOF
 host_labels_record() {
   if ! { printf '%s %s\n%s\n' "$1" "$2" "$3" > "$HOST_LABELS_PENDING.new" \
          && mv "$HOST_LABELS_PENDING.new" "$HOST_LABELS_PENDING"; }; then
-    log "could not record '$1 $2' in $HOST_LABELS_PENDING"
+    log "failed to write '$1 $2' to $HOST_LABELS_PENDING"
   fi
 }
 # parse a label scan
@@ -782,15 +775,7 @@ host_labels_parse() {
     esac
   done <<<"$1"
 }
-# print the restorecon command for a label scan
-host_labels_restorecon() {
-  local cmd=""
-  host_labels_parse "$1"
-  [[ -n "$LABELED_FILES" ]] && cmd="sudo restorecon -F $LABELED_FILES"
-  [[ -n "$LABELED_MODULE_ROOT" ]] && cmd+="${cmd:+ && }sudo restorecon -RF $LABELED_MODULE_ROOT"
-  printf '%s\n' "$cmd"
-}
-# print the files a label scan names
+# print the files of a label scan
 host_labels_named() {
   local modules=""
   host_labels_parse "$1"
@@ -802,7 +787,7 @@ host_labels_stop() {
   local state=refused sentence="${*:3}"
   [[ "$1" == FAILED ]] && state=failed
   host_labels_record "$state" "$2" "$sentence"
-  log "$1: $sentence"
+  log "$sentence"
   echo "RHIZO_TEARDOWN_HOST_LABELS_$1 reason=$2"
   return 1
 }
@@ -810,18 +795,16 @@ host_labels_stop() {
 clear_host_labels() {
   local m state out rc=0 failed labels
   if ! m=$(teardown_selinux_mode); then
-    host_labels_stop FAILED selinux-mode-unreadable "cannot read the SELinux mode (see above); the next boot retries"
+    host_labels_stop FAILED selinux-mode-unreadable "failed to read the SELinux mode"
     return
   fi
   if [[ "$m" == host ]]; then
-    host_labels_stop REFUSED host-mode "the SELinux mode is host: run 'sudo rhizo install'," \
-      "or set RHIZO_SELINUX_MODE=namespace and reboot"
+    host_labels_stop REFUSED host-mode "the SELinux mode is host"
     return
   fi
   state=$(teardown_host_policy_state)
   if [[ "$state" != none ]] && teardown_android_policy_loaded; then
-    host_labels_stop REFUSED android-policy-loaded "Android's policy is loaded host-wide on this boot;" \
-      "the next boot removes the labels"
+    host_labels_stop REFUSED android-policy-loaded "Android's policy is loaded host-wide on the current boot"
     return
   fi
   case "$state" in
@@ -831,33 +814,30 @@ clear_host_labels() {
       if (( rc != 0 )); then
         failed=$(grep -m1 '^FAILED:' <<<"$out")
         if [[ -n "$failed" ]]; then
-          host_labels_stop FAILED host-labels-clear-failed "removing a rhizo_host label failed: ${failed#FAILED: };" \
-            "the next boot retries"
+          host_labels_stop FAILED host-labels-clear-failed "failed to remove security.selinux from ${failed#FAILED: }"
         else
-          host_labels_stop FAILED host-labels-clear-failed "the label scan exited $rc;" \
-            "the next boot retries"
+          host_labels_stop FAILED host-labels-clear-failed "selinux_xattr_report clear failed with exit status $rc"
         fi
         return
       fi ;;
     permissive|enforcing)
       if ! labels=$(selinux_xattr_report list); then
-        host_labels_stop FAILED label-scan-failed "the label scan failed (see above); the next boot retries"
+        host_labels_stop FAILED label-scan-failed "selinux_xattr_report list failed"
         return
       fi
       if [[ -n "$labels" ]]; then
         host_labels_stop REFUSED host-policy-loaded "the host SELinux policy is $state and host mode's label is on" \
-          "$(host_labels_named "$labels"): run '$(host_labels_restorecon "$labels")'"
+          "$(host_labels_named "$labels")"
         return
       fi
       log "no host file has host mode's label" ;;
     *)
-      host_labels_stop FAILED host-state-unknown "a policy is loaded and $TEARDOWN_SELINUX_ENFORCE reads" \
-        "'$(cat "$TEARDOWN_SELINUX_ENFORCE" 2>&1)'; the next boot retries"
+      host_labels_stop FAILED host-state-unknown "a policy is loaded and $TEARDOWN_SELINUX_ENFORCE contains" \
+        "'$(cat "$TEARDOWN_SELINUX_ENFORCE" 2>&1)'"
       return ;;
   esac
   if ! rm -f "$HOST_LABELS_PENDING"; then
-    host_labels_stop FAILED record-remove-failed "could not remove $HOST_LABELS_PENDING;" \
-      "the next boot retries"
+    host_labels_stop FAILED record-remove-failed "failed to remove $HOST_LABELS_PENDING"
     return
   fi
   echo "RHIZO_TEARDOWN_HOST_LABELS_CLEARED=1"
@@ -866,19 +846,18 @@ clear_host_labels() {
 # list the host files with host mode's label
 print_host_labels() {
   local labels
-  labels=$(selinux_xattr_report list) || failstop "label-scan-failed" "the label scan failed (see above)"
+  labels=$(selinux_xattr_report list) || failstop "label-scan-failed" "selinux_xattr_report list failed"
   if [[ -z "$labels" ]]; then
     echo "RHIZO_TEARDOWN_HOST_LABELS labeled=0"
     return 0
   fi
   printf '%s\n' "$labels"
   echo "files: $(host_labels_named "$labels")"
-  echo "command: $(host_labels_restorecon "$labels")"
   echo "RHIZO_TEARDOWN_HOST_LABELS labeled=1"
 }
 
 if [[ "$MODE" == clear-host-labels ]]; then
-  [[ $EUID -eq 0 ]] || refuse "not-root" "must run as root"
+  [[ $EUID -eq 0 ]] || refuse "not-root" "EUID $EUID is not 0"
   clear_host_labels
   exit
 fi
@@ -888,7 +867,6 @@ if [[ "$MODE" == list-host-labels ]]; then
 fi
 
 if [[ "$MODE" == verify ]]; then
-  log "checking for remaining Rhizo host mutations (read-only)"
   found=0
 
   cmdline_rc=0
@@ -896,58 +874,58 @@ if [[ "$MODE" == verify ]]; then
   (( cmdline_rc != 1 )) || found=1
   default_line=$(grep -m1 '^rhizo-kernel-default ' "$INSTALL_RECORD" 2>/dev/null)
   if [[ -n "$default_line" ]]; then
-    log "  default boot entry : the Rhizo kernel's, PRESENT (before: ${default_line#rhizo-kernel-default })"; found=1
+    log "  $INSTALL_RECORD has rhizo-kernel-default ${default_line#rhizo-kernel-default }"; found=1
   else
-    log "  default boot entry : not Rhizo's to put back"
+    log "  no rhizo-kernel-default in $INSTALL_RECORD"
   fi
   if grep -qx host-mode-links "$INSTALL_RECORD" 2>/dev/null; then
-    log "  host-mode links : PRESENT"; found=1
+    log "  $INSTALL_RECORD has host-mode-links"; found=1
   else
-    log "  host-mode links : absent"
+    log "  no host-mode links"
   fi
 
   swap_owned=$(teardown_swap_owned "$INSTALL_RECORD" /swapfile)
   if [[ "$swap_owned" == *fstab* ]] && grep -qxF "$SWAP_FSTAB_LINE" /etc/fstab 2>/dev/null; then
-    log "  swap fstab line : PRESENT, the bootstrap's"; found=1
+    log "  /etc/fstab has the bootstrap swap line"; found=1
   else
-    log "  swap fstab line : absent, or not the bootstrap's"
+    log "  no bootstrap swap line in /etc/fstab"
   fi
   if [[ "$swap_owned" == *file* ]]; then
-    log "  /swapfile       : PRESENT, the bootstrap's"; found=1
+    log "  /swapfile exists, created by the bootstrap"; found=1
   elif [[ -e /swapfile ]]; then
-    log "  /swapfile       : present, not the bootstrap's -- kept"
+    log "  /swapfile exists, not created by the bootstrap"
   fi
 
-  [[ -e "$MODULES_LOAD_CONF" ]] && { log "  $MODULES_LOAD_CONF : PRESENT"; found=1; } \
-    || log "  $MODULES_LOAD_CONF : absent"
+  [[ -e "$MODULES_LOAD_CONF" ]] && { log "  $MODULES_LOAD_CONF exists"; found=1; } \
+    || log "  no $MODULES_LOAD_CONF"
 
-  log "  selinux host xattrs:"
+  log "  selinux host xattrs"
   xattr_out="$(selinux_xattr_report verify)"
   echo "$xattr_out" | sed 's/^/    /' >&2
   grep -q "^$HOST_EXEC_CONTEXT " <<<"$xattr_out" && found=1
   grep -q "^$HOST_MODULE_CONTEXT " <<<"$xattr_out" && found=1
   for f in "$HOST_LABELS_PENDING" "$HOST_MODE_KEPT"; do
     if [[ -e "$f" ]]; then
-      log "  $f : PRESENT ($(head -1 "$f" 2>&1))"; found=1
+      log "  $f exists ($(head -1 "$f" 2>&1))"; found=1
     else
-      log "  $f : absent"
+      log "  no $f"
     fi
   done
 
   if (( PURGE )); then
-    if [[ -e "$RUNTIME_ENV" ]]; then log "  $RUNTIME_ENV : PRESENT"; found=1; else log "  $RUNTIME_ENV : absent"; fi
+    if [[ -e "$RUNTIME_ENV" ]]; then log "  $RUNTIME_ENV exists"; found=1; else log "  no $RUNTIME_ENV"; fi
   fi
   for d in "$PREPARED_ROOT" "$TEMPLATES_ROOT" "$DERIVED_ROOT" "$VAR_CACHE" "$VAR_LOG" "${LAUNCH_DIRS[@]}"; do
-    if [[ -e "$d" || -L "$d" ]]; then log "  $d : PRESENT"; found=1; else log "  $d : absent"; fi
+    if [[ -e "$d" || -L "$d" ]]; then log "  $d exists"; found=1; else log "  no $d"; fi
   done
   for f in "$PREPARE_BOOT_LOG" "$PREPARE_ANDROIDD_ENV" "$PREPARED_SENTINEL" "$UPGRADE_FROM" "$LOOP_UDEV_RULE"; do
-    if [[ -e "$f" ]]; then log "  $f : PRESENT"; found=1; else log "  $f : absent"; fi
+    if [[ -e "$f" ]]; then log "  $f exists"; found=1; else log "  no $f"; fi
   done
   root_left=$(root_state_present)
   if [[ -n "$root_left" ]]; then
-    log "  /root/.rhizo_* state : PRESENT ($(tr '\n' ' ' <<<"$root_left"))"; found=1
+    log "  /root/.rhizo_* state exists ($(tr '\n' ' ' <<<"$root_left"))"; found=1
   else
-    log "  /root/.rhizo_* state : absent"
+    log "  no /root/.rhizo_* state"
   fi
 
   present_units=()
@@ -964,70 +942,69 @@ if [[ "$MODE" == verify ]]; then
     [[ -n "$inst" ]] && present_units+=("$inst")
   done < <(live_instance_units)
   if (( ${#present_units[@]} )); then
-    log "  systemd units   : ${#present_units[@]} PRESENT (${present_units[*]})"; found=1
+    log "  ${#present_units[@]} systemd units exist (${present_units[*]})"; found=1
   else
-    log "  systemd units   : absent"
+    log "  no rhizo systemd units"
   fi
-  [[ -e "$APPWATCH_BIN" ]] && { log "  $APPWATCH_BIN : PRESENT"; found=1; } \
-    || log "  $APPWATCH_BIN : absent"
+  [[ -e "$APPWATCH_BIN" ]] && { log "  $APPWATCH_BIN exists"; found=1; } \
+    || log "  no $APPWATCH_BIN"
 
   entries=$(rhizo_desktop_entries | wc -l)
   icons=$(rhizo_icons | wc -l)
   if (( entries || icons )); then
-    log "  desktop entries : $entries PRESENT, hicolor icons: $icons PRESENT"; found=1
+    log "  $entries desktop entries and $icons hicolor icons exist"; found=1
   else
-    log "  desktop entries : absent (and no hicolor rhizo icons)"
+    log "  no rhizo desktop entries or hicolor icons"
   fi
   for list in "$SYSTEM_MIMEAPPS" "$KDE_MIMEAPPS"; do
     if [[ -f "$list" ]]; then
       defaults=$(strip_mimeapps_defaults "$list" count)
       if (( defaults )); then
-        log "  $list : $defaults rhizo default(s) PRESENT"; found=1
+        log "  $list has $defaults rhizo defaults"; found=1
       else
-        log "  $list : present, no rhizo defaults in it"
+        log "  $list has no rhizo defaults"
       fi
     else
-      log "  $list : absent"
+      log "  no $list"
     fi
   done
   metainfo=$(rhizo_metainfo | wc -l)
   if (( metainfo )); then
-    log "  $METAINFO_DIR : $metainfo rhizo metainfo file(s) PRESENT"; found=1
+    log "  $METAINFO_DIR has $metainfo rhizo metainfo files"; found=1
   else
-    log "  $METAINFO_DIR : no rhizo metainfo"
+    log "  no rhizo metainfo in $METAINFO_DIR"
   fi
-  [[ -d "$BROKER_RUNTIME_DIR" ]] && { log "  $BROKER_RUNTIME_DIR : PRESENT"; found=1; } \
-    || log "  $BROKER_RUNTIME_DIR : absent"
-  [[ -d "$DESKTOP_SESSION_DIR" ]] && { log "  $DESKTOP_SESSION_DIR : PRESENT"; found=1; } \
-    || log "  $DESKTOP_SESSION_DIR : absent"
+  [[ -d "$BROKER_RUNTIME_DIR" ]] && { log "  $BROKER_RUNTIME_DIR exists"; found=1; } \
+    || log "  no $BROKER_RUNTIME_DIR"
+  [[ -d "$DESKTOP_SESSION_DIR" ]] && { log "  $DESKTOP_SESSION_DIR exists"; found=1; } \
+    || log "  no $DESKTOP_SESSION_DIR"
   report_selinuxns_records || found=1
   if [[ -f "$INSTALL_RECORD" ]] && grep -qx "group:$BROKER_GROUP" "$INSTALL_RECORD"; then
-    log "  group $BROKER_GROUP : PRESENT and created by this install"; found=1
+    log "  $INSTALL_RECORD has group:$BROKER_GROUP"; found=1
   else
-    log "  group $BROKER_GROUP : not this install's to remove"
+    log "  no group:$BROKER_GROUP in $INSTALL_RECORD"
   fi
   for acct in "$APPWATCH_ACCOUNT" "$NETBRIDGED_ACCOUNT" "$UHID_ACCOUNT"; do
     if [[ -f "$INSTALL_RECORD" ]] && grep -qxE "(user|group):$acct" "$INSTALL_RECORD"; then
-      log "  account $acct : PRESENT and created by this install"; found=1
+      log "  $INSTALL_RECORD has user or group $acct"; found=1
     else
-      log "  account $acct : not this install's to remove"
+      log "  no user or group $acct in $INSTALL_RECORD"
     fi
   done
 
   if [[ -d "$ETC_RHIZO" ]]; then
-    log "  $ETC_RHIZO : present (config; removed only with --purge)"
+    log "  $ETC_RHIZO exists"
   else
-    log "  $ETC_RHIZO : absent"
+    log "  no $ETC_RHIZO"
   fi
 
   if (( cmdline_rc == 2 )); then
-    failstop "verify-cannot-read" "uid $EUID cannot read the next boot's cmdlines (see above):" \
-             "run 'sudo rhizo uninstall --verify'"
+    failstop "verify-cannot-read" "uid $EUID failed to read the next boot cmdlines"
   fi
   if (( found )); then
-    failstop "not-clean" "Rhizo host changes remain (above): run without --verify to remove them"
+    failstop "not-clean" "Rhizo host changes found"
   fi
-  log "VERIFIED: no Rhizo host changes found"
+  log "no Rhizo host changes found"
   echo "RHIZO_TEARDOWN_VERIFIED=1"
   exit 0
 fi
@@ -1035,7 +1012,6 @@ fi
 STOPPED_INSTANCES=()
 if command -v systemctl >/dev/null 2>&1; then
   if [[ "$(systemctl is-active androidd.service 2>/dev/null)" == active ]]; then
-    log "stopping androidd.service"
     systemctl stop androidd.service 2>/dev/null || true
     for _ in $(seq 1 30); do
       [[ "$(systemctl is-active androidd.service 2>/dev/null)" == active ]] || break
@@ -1047,7 +1023,6 @@ if command -v systemctl >/dev/null 2>&1; then
     [[ -n "$inst" ]] && STOPPED_INSTANCES+=("$inst")
   done < <(live_instance_units)
   for inst in "${STOPPED_INSTANCES[@]}"; do
-    log "stopping $inst"
     systemctl stop "$inst" 2>/dev/null || true
   done
   for _ in $(seq 1 30); do
@@ -1061,8 +1036,7 @@ if command -v systemctl >/dev/null 2>&1; then
 
   while IFS= read -r nb; do
     [[ -n "$nb" ]] || continue
-    log "stopping $nb"
-    systemctl stop "$nb" 2>/dev/null || log "  WARNING: systemctl stop $nb failed -- userdel of $NETBRIDGED_ACCOUNT goes to the next boot's cleanup"
+    systemctl stop "$nb" 2>/dev/null || log "  systemctl stop $nb failed"
   done < <(teardown_netbridged_units)
 fi
 
@@ -1100,11 +1074,11 @@ stop_payload_processes() {
     done
   done
   [[ -n "$stopped" ]] || return 0
-  mark_change "$(wc -w <<<"$stopped") process(es) the sandbox left running outside its units: $stopped"
+  mark_change "$(wc -w <<<"$stopped") processes outside the rhizo units ($stopped)"
   for p in $stopped; do
     st=$(cat "/proc/$p/stat" 2>/dev/null) || continue
     [[ "${st##*) }" == Z* ]] && continue
-    log "  WARNING: pid $p is running after SIGKILL"
+    log "  pid $p is running after SIGKILL"
     return 1
   done
   return 0
@@ -1116,11 +1090,11 @@ if [[ "$MODE" == stop-payload ]]; then
     echo "RHIZO_TEARDOWN_STOP_PAYLOAD_OK=1"
     exit 0
   fi
-  log "WARNING: a sandbox process is running after SIGKILL"
+  log "a sandbox process is running after SIGKILL"
   echo "RHIZO_TEARDOWN_STOP_PAYLOAD_FAILED=1"
   exit 1
 fi
-(( stop_payload_processes_rc == 0 )) || log "WARNING: a process the sandbox started still runs; what it writes again is left to the next boot's cleanup"
+(( stop_payload_processes_rc == 0 )) || log "stop_payload_processes failed"
 
 # unmount the mounts under /var/lib/rhizo and /run/rhizo
 unmount_rhizo_trees() {
@@ -1130,24 +1104,24 @@ unmount_rhizo_trees() {
     teardown_detach_mount "$m" 2 && n=$((n + 1))
   done < <(awk '{print $2}' /proc/self/mounts \
              | grep -E '^/(var/lib/rhizo|run/rhizo)' | sort -r)
-  (( n )) && log "unmounted $n mount(s) under /var/lib/rhizo and /run/rhizo"
+  (( n )) && log "unmounted $n mounts under /var/lib/rhizo and /run/rhizo"
   return 0
 }
 unmount_rhizo_trees
 
-# remove the given paths with rm -rf
+# rm -rf the paths, or set DEFERRED_REMOVALS on failure
 rm_or_defer() {
   local out
   out=$(rm -rf -- "$@" 2>&1) && return 0
   if (( TEARDOWN_NS_INSTALL )); then
-    log "  deferring $* to the post-reboot cleanup: rm -rf failed ($(grep -c . <<<"$out") error(s), the first: $(head -1 <<<"$out"))"
+    log "  deferring $* to rhizo-final-cleanup.service, rm -rf failed with $(grep -c . <<<"$out") errors ($(head -1 <<<"$out"))"
   else
-    log "  deferring $* to the post-reboot cleanup: selinux denies removing it while enforcing ($(grep -c . <<<"$out") refusal(s), the first: $(head -1 <<<"$out"))"
+    log "  deferring $* to rhizo-final-cleanup.service, rm -rf failed with $(grep -c . <<<"$out") errors ($(head -1 <<<"$out"))"
   fi
   DEFERRED_REMOVALS=1
 }
 
-# check for a mount under a path
+# return whether a mount is at or under a path
 mounted_under() {
   awk -v p="$1" '$2 == p || index($2, p "/") == 1 { found = 1 } END { exit !found }' /proc/self/mounts
 }
@@ -1160,30 +1134,30 @@ LEFT_CONFIGS=()
 SWAPFILE_DEFERRED=0
 ACCOUNT_DEFERRED=""
 LABELED=()
-# log the removals deferred to the next boot
+# log the SELinux mode and host policy state
 note_enforcing_deferrals() {
   local m state
-  m=$(teardown_selinux_mode) || failstop "selinux-mode-unreadable" "cannot read the SELinux mode (see above)"
+  m=$(teardown_selinux_mode) || failstop "selinux-mode-unreadable" "failed to read the SELinux mode"
   if [[ "$m" == namespace ]]; then
     state=$(teardown_host_policy_state)
     if [[ "$state" != none ]] && teardown_android_policy_loaded; then
-      log "selinux namespace mode: Android's policy is loaded host-wide on this boot; refused removals run at the next boot"
+      log "selinux mode namespace, Android's policy loaded host-wide"
       return 0
     fi
     case "$state" in
-      none) log "selinux namespace mode: the host loads no policy" ;;
-      permissive) log "selinux namespace mode: the host policy is permissive" ;;
-      enforcing) log "selinux namespace mode: the host policy is enforcing; refused removals run at the next boot" ;;
-      *) log "selinux namespace mode: unknown host SELinux state ($TEARDOWN_SELINUX_ENFORCE" \
-             "reads '$(cat "$TEARDOWN_SELINUX_ENFORCE" 2>&1)')" ;;
+      none) log "selinux mode namespace, no host policy" ;;
+      permissive) log "selinux mode namespace, host policy permissive" ;;
+      enforcing) log "selinux mode namespace, host policy enforcing" ;;
+      *) log "selinux mode namespace, unknown host SELinux state ($TEARDOWN_SELINUX_ENFORCE" \
+             "is '$(cat "$TEARDOWN_SELINUX_ENFORCE" 2>&1)')" ;;
     esac
   elif [[ "$(cat "$TEARDOWN_SELINUX_ENFORCE" 2>/dev/null)" == 1 ]]; then
-    log "selinux is enforcing; refused removals run at the next boot"
+    log "selinux is enforcing"
   fi
 }
 note_enforcing_deferrals
 
-[[ $EUID -eq 0 ]] || refuse "not-root" "must run as root"
+[[ $EUID -eq 0 ]] || refuse "not-root" "EUID $EUID is not 0"
 
 ANY_CHANGE=0
 
@@ -1197,51 +1171,50 @@ while IFS= read -r line; do
     removed-fstab) mark_change "/swapfile's /etc/fstab line" ;;
     removed-file)  mark_change "/swapfile" ;;
     deferred-file\ *)
-      log "  WARNING: ${line#deferred-file }; the next boot removes it"
+      log "  ${line#deferred-file }"
       SWAPFILE_DEFERRED=1
-      mark_change "/swapfile, on the next boot" ;;
-    kept-file) log "/swapfile is not the bootstrap's; kept with its fstab entry" ;;
+      mark_change "/swapfile at the next boot" ;;
+    kept-file) log "/swapfile is not in $INSTALL_RECORD" ;;
   esac
 done <<<"$swap_out"
 
 if [[ -e "$MODULES_LOAD_CONF" ]]; then
-  rm -f "$MODULES_LOAD_CONF" || failstop "modules-load-conf-rm-failed" "could not remove $MODULES_LOAD_CONF"
+  rm -f "$MODULES_LOAD_CONF" || failstop "modules-load-conf-rm-failed" "failed to remove $MODULES_LOAD_CONF"
   mark_change "$MODULES_LOAD_CONF"
 fi
 
 if [[ "$(teardown_host_policy_state)" != none ]] && ! teardown_android_policy_loaded; then
   xattr_out=""
-  labels=$(selinux_xattr_report list) || failstop "label-scan-failed" "the label scan failed (see above)"
+  labels=$(selinux_xattr_report list) || failstop "label-scan-failed" "selinux_xattr_report list failed"
   if [[ -n "$labels" ]]; then
-    log "  NOTE: host mode's label is on $(host_labels_named "$labels") under the host SELinux policy:" \
-        "run '$(host_labels_restorecon "$labels")'"
+    log "  host mode label on $(host_labels_named "$labels") under the host SELinux policy"
   fi
 else
   xattr_out="$(selinux_xattr_report clear)" || {
-    log "  NOTE: a loaded SELinux policy blocks label removal; the next boot clears the rest"
+    log "  selinux_xattr_report clear failed"
     XATTRS_DEFERRED=1
   }
   echo "$xattr_out" | sed "s/^/[$PROG]   /" >&2
 fi
 if [[ -e "$HOST_LABELS_PENDING" ]]; then
-  rm -f "$HOST_LABELS_PENDING" || failstop "host-labels-record-rm-failed" "could not remove $HOST_LABELS_PENDING"
-  mark_change "$HOST_LABELS_PENDING, the record of a label strip the next boot was to run"
+  rm -f "$HOST_LABELS_PENDING" || failstop "host-labels-record-rm-failed" "failed to remove $HOST_LABELS_PENDING"
+  mark_change "$HOST_LABELS_PENDING"
 fi
 if [[ -e "$HOST_MODE_KEPT" ]]; then
-  rm -f "$HOST_MODE_KEPT" || failstop "host-mode-kept-rm-failed" "could not remove $HOST_MODE_KEPT"
-  mark_change "$HOST_MODE_KEPT, the record of host mode kept for this host's own SELinux policy"
+  rm -f "$HOST_MODE_KEPT" || failstop "host-mode-kept-rm-failed" "failed to remove $HOST_MODE_KEPT"
+  mark_change "$HOST_MODE_KEPT"
 fi
 if grep -q '^cleared:' <<<"$xattr_out"; then
   mark_change "the selinux host-entrypoint xattrs ($(grep -c '^cleared:' <<<"$xattr_out") of ${#HOST_EXEC_PATHS[@]})"
 fi
 if (( XATTRS_DEFERRED )); then
   mapfile -t LABELED < <(selinux_xattr_report labeled)
-  log "  scheduling ${#LABELED[@]} label(s) for the next boot: ${LABELED[*]:-<none>}"
+  log "  scheduling ${#LABELED[@]} labels for the next boot (${LABELED[*]:-<none>})"
   n_modlabels=$(selinux_xattr_report modlabeled)
   if [[ "$n_modlabels" =~ ^[0-9]+$ ]] && (( n_modlabels > 0 )); then
     # shellcheck disable=SC2034
     MODULE_LABELS_DEFERRED=1
-    log "  scheduling $n_modlabels module-tree label(s) under $HOST_MODULE_ROOT for the next boot"
+    log "  scheduling $n_modlabels module-tree labels under $HOST_MODULE_ROOT for the next boot"
   fi
 fi
 
@@ -1254,7 +1227,7 @@ done
 for d in "$PREPARED_ROOT" "$TEMPLATES_ROOT" "$DERIVED_ROOT" "${launch_trees[@]}"; do
   if [[ -e "$d" ]]; then
     if mounted_under "$d"; then
-      log "  deferring $d to the post-reboot cleanup: a mount under it did not unmount"
+      log "  deferring $d to rhizo-final-cleanup.service, a mount under $d is still mounted"
       DEFERRED_REMOVALS=1
     else
       rm_or_defer "$d"
@@ -1272,7 +1245,7 @@ for d in "${LAUNCH_DIRS[@]}"; do
   if busy_mount=$(teardown_unmount_reaching "$d"); then
     rm_or_defer "$d"
   else
-    log "  deferring $d to the post-reboot cleanup: $busy_mount did not unmount"
+    log "  deferring $d to rhizo-final-cleanup.service, $busy_mount is still mounted"
     DEFERRED_REMOVALS=1
   fi
   mark_change "$d"
@@ -1283,7 +1256,7 @@ if [[ -e "$VAR_LOG" ]]; then
 fi
 for f in "$PREPARE_BOOT_LOG" "$PREPARE_ANDROIDD_ENV" "$PREPARED_SENTINEL"; do
   if [[ -e "$f" ]]; then
-    rm -f "$f" || { log "  deferring $f to the post-reboot cleanup: selinux denies removing it while enforcing"; DEFERRED_REMOVALS=1; }
+    rm -f "$f" || { log "  deferring $f to rhizo-final-cleanup.service, rm failed"; DEFERRED_REMOVALS=1; }
     mark_change "$f"
   fi
 done
@@ -1293,17 +1266,17 @@ while IFS= read -r f; do
   if rm -rf "$f"; then
     removed_root_state+=("$f")
   else
-    log "  deferring $f to the post-reboot cleanup: selinux denies removing it while enforcing"
+    log "  deferring $f to rhizo-final-cleanup.service, rm failed"
     DEFERRED_REMOVALS=1
   fi
 done < <(root_state_present)
-(( ${#removed_root_state[@]} )) && mark_change "${#removed_root_state[@]} /root/.rhizo_* state file(s): ${removed_root_state[*]}"
+(( ${#removed_root_state[@]} )) && mark_change "${#removed_root_state[@]} /root/.rhizo_* state files (${removed_root_state[*]})"
 if [[ -e "$LOOP_UDEV_RULE" ]]; then
   if rm -f "$LOOP_UDEV_RULE"; then
     command -v udevadm >/dev/null 2>&1 && udevadm control --reload 2>/dev/null
     mark_change "$LOOP_UDEV_RULE"
   else
-    log "  deferring $LOOP_UDEV_RULE to the post-reboot cleanup: selinux denies removing it while enforcing"
+    log "  deferring $LOOP_UDEV_RULE to rhizo-final-cleanup.service, rm failed"
     DEFERRED_REMOVALS=1
   fi
 fi
@@ -1319,12 +1292,12 @@ for u in "${UNITS[@]}"; do
     *.path)    systemctl stop "$u" >/dev/null 2>&1 ;;
   esac
   systemctl disable "$u" >/dev/null 2>&1
-  rm -f "/etc/systemd/system/$u" || failstop "unit-rm-failed" "could not remove /etc/systemd/system/$u"
+  rm -f "/etc/systemd/system/$u" || failstop "unit-rm-failed" "failed to remove /etc/systemd/system/$u"
   removed_units+=("$u")
 done
 for d in "${UNIT_DROPINS[@]}"; do
   [[ -e "/etc/systemd/system/$d" ]] || continue
-  rm -f "/etc/systemd/system/$d" || failstop "unit-rm-failed" "could not remove /etc/systemd/system/$d"
+  rm -f "/etc/systemd/system/$d" || failstop "unit-rm-failed" "failed to remove /etc/systemd/system/$d"
   rmdir "$(dirname "/etc/systemd/system/$d")" 2>/dev/null
   removed_units+=("$d")
 done
@@ -1335,70 +1308,70 @@ if [[ -n "$desk_owner" && "$(systemctl is-active user@1000.service 2>/dev/null)"
 fi
 for u in "${USER_UNITS[@]}"; do
   [[ -e "$USER_UNIT_DIR/$u" || -L "$USER_UNIT_DIR/$u" ]] || continue
-  rm -f "$USER_UNIT_DIR/$u" || failstop "unit-rm-failed" "could not remove $USER_UNIT_DIR/$u"
+  rm -f "$USER_UNIT_DIR/$u" || failstop "unit-rm-failed" "failed to remove $USER_UNIT_DIR/$u"
   removed_units+=("$USER_UNIT_DIR/$u")
 done
 if (( ${#removed_units[@]} )); then
   systemctl daemon-reload >/dev/null 2>&1
-  mark_change "${#removed_units[@]} systemd unit(s): ${removed_units[*]}"
+  mark_change "${#removed_units[@]} systemd units (${removed_units[*]})"
 fi
 if (( ${#STOPPED_INSTANCES[@]} )); then
   for inst in "${STOPPED_INSTANCES[@]}"; do
     systemctl disable "$inst" >/dev/null 2>&1
   done
   systemctl daemon-reload >/dev/null 2>&1
-  mark_change "${#STOPPED_INSTANCES[@]} per-instance unit(s): ${STOPPED_INSTANCES[*]}"
+  mark_change "${#STOPPED_INSTANCES[@]} per-instance units (${STOPPED_INSTANCES[*]})"
 fi
 if [[ -e "$APPWATCH_BIN" ]]; then
-  rm -f "$APPWATCH_BIN" || { log "  deferring $APPWATCH_BIN to the post-reboot cleanup: selinux denies removing it while enforcing"; DEFERRED_REMOVALS=1; }
+  rm -f "$APPWATCH_BIN" || { log "  deferring $APPWATCH_BIN to rhizo-final-cleanup.service, rm failed"; DEFERRED_REMOVALS=1; }
   mark_change "$APPWATCH_BIN"
 fi
 
 removed_entries=()
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  rm -f "$f" || failstop "desktop-entry-rm-failed" "could not remove $f"
+  rm -f "$f" || failstop "desktop-entry-rm-failed" "failed to remove $f"
   removed_entries+=("$(basename "$f")")
 done < <(rhizo_desktop_entries)
-(( ${#removed_entries[@]} )) && mark_change "${#removed_entries[@]} desktop entr(ies): ${removed_entries[*]}"
+(( ${#removed_entries[@]} )) && mark_change "${#removed_entries[@]} desktop entries (${removed_entries[*]})"
 
 removed_icons=0
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  rm -f "$f" || failstop "icon-rm-failed" "could not remove $f"
+  rm -f "$f" || failstop "icon-rm-failed" "failed to remove $f"
   removed_icons=$((removed_icons + 1))
 done < <(rhizo_icons)
-(( removed_icons )) && mark_change "$removed_icons icon(s) under $ICON_THEME_ROOT"
+(( removed_icons )) && mark_change "$removed_icons icons under $ICON_THEME_ROOT"
 
 for list in "$SYSTEM_MIMEAPPS" "$KDE_MIMEAPPS"; do
   [[ -f "$list" ]] || continue
   dropped=$(strip_mimeapps_defaults "$list" apply)
-  (( dropped )) && mark_change "$dropped default application(s) naming a rhizo entry in $list"
+  (( dropped )) && mark_change "$dropped rhizo default applications in $list"
 done
 
 removed_metainfo=0
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  rm -f "$f" || failstop "metainfo-rm-failed" "could not remove $f"
+  rm -f "$f" || failstop "metainfo-rm-failed" "failed to remove $f"
   removed_metainfo=$((removed_metainfo + 1))
 done < <(rhizo_metainfo)
-(( removed_metainfo )) && mark_change "$removed_metainfo AppStream metainfo file(s) under $METAINFO_DIR"
+(( removed_metainfo )) && mark_change "$removed_metainfo AppStream metainfo files under $METAINFO_DIR"
 
 if (( ${#removed_entries[@]} || removed_icons )); then
   if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$APPLICATIONS_DIR" \
-      || failstop "update-desktop-database-failed" "update-desktop-database $APPLICATIONS_DIR failed after removing the entries"
+      || failstop "update-desktop-database-failed" "update-desktop-database $APPLICATIONS_DIR failed"
   else
-    log "  NOTE: update-desktop-database is not installed; $APPLICATIONS_DIR/mimeinfo.cache lists the removed entries"
+    log "  no update-desktop-database"
   fi
 fi
 
 if [[ -d "$BROKER_RUNTIME_DIR" ]]; then
-  rm -rf "$BROKER_RUNTIME_DIR" || failstop "broker-dir-rm-failed" "could not remove $BROKER_RUNTIME_DIR"
+  rm -rf "$BROKER_RUNTIME_DIR" || failstop "broker-dir-rm-failed" "failed to remove $BROKER_RUNTIME_DIR"
   mark_change "$BROKER_RUNTIME_DIR"
 fi
 if [[ -d "$DESKTOP_SESSION_DIR" ]]; then
-  rm -rf "$DESKTOP_SESSION_DIR" || failstop "desktop-session-dir-rm-failed" "could not remove $DESKTOP_SESSION_DIR"
+  rm -rf "$DESKTOP_SESSION_DIR" || failstop "desktop-session-dir-rm-failed" "failed to remove $DESKTOP_SESSION_DIR"
   mark_change "$DESKTOP_SESSION_DIR"
 fi
 remove_selinuxns_records
@@ -1409,11 +1382,11 @@ if [[ -f "$INSTALL_RECORD" ]] && grep -qx pacman-downloaduser "$INSTALL_RECORD";
     source "$(dirname "${BASH_SOURCE[0]}")/../lib/pkg-lib.sh" \
       && RHIZO_INSTALL_RECORD="$INSTALL_RECORD" pkg_pacman_downloaduser_restore
   ); then
-    mark_change "the DownloadUser line in /etc/pacman.conf, which this install commented out"
+    mark_change "the '# rhizo' DownloadUser comment in /etc/pacman.conf"
     sed -i '/^pacman-downloaduser$/d' "$INSTALL_RECORD" \
-      || failstop "install-record-edit-failed" "could not strip pacman-downloaduser from $INSTALL_RECORD"
+      || failstop "install-record-edit-failed" "failed to remove pacman-downloaduser from $INSTALL_RECORD"
   else
-    log "  left the DownloadUser line in /etc/pacman.conf (see above)"
+    log "  pkg_pacman_downloaduser_restore failed"
   fi
 fi
 
@@ -1423,11 +1396,11 @@ if [[ -f "$INSTALL_RECORD" ]] && grep -qx login-defs-tty "$INSTALL_RECORD"; then
     source "$(dirname "${BASH_SOURCE[0]}")/../lib/pkg-lib.sh" \
       && RHIZO_INSTALL_RECORD="$INSTALL_RECORD" pkg_login_tty_restore
   ); then
-    mark_change "the TTYGROUP and TTYPERM lines in /etc/login.defs, which this install set"
+    mark_change "the rhizo TTYGROUP and TTYPERM lines in /etc/login.defs"
     sed -i '/^login-defs-tty$/d' "$INSTALL_RECORD" \
-      || failstop "install-record-edit-failed" "could not strip login-defs-tty from $INSTALL_RECORD"
+      || failstop "install-record-edit-failed" "failed to remove login-defs-tty from $INSTALL_RECORD"
   else
-    log "  left TTYGROUP and TTYPERM in /etc/login.defs (see above)"
+    log "  pkg_login_tty_restore failed"
   fi
 fi
 
@@ -1438,19 +1411,19 @@ if [[ -f "$INSTALL_RECORD" ]] && grep -qx host-mode-links "$INSTALL_RECORD"; the
       && RHIZO_INSTALL_RECORD="$INSTALL_RECORD" pkg_host_mode_unlink
   ); then
     systemctl daemon-reload >/dev/null 2>&1
-    mark_change "the host-mode files linked into place"
+    mark_change "the host-mode links"
   else
-    log "  left a host-mode link (see above)"
+    log "  pkg_host_mode_unlink failed"
   fi
 fi
 
 if [[ -f "$INSTALL_RECORD" ]] && grep -qx "group:$BROKER_GROUP" "$INSTALL_RECORD"; then
   if getent group "$BROKER_GROUP" >/dev/null; then
     groupdel "$BROKER_GROUP" || failstop "groupdel-failed" "groupdel $BROKER_GROUP failed"
-    mark_change "group $BROKER_GROUP, which this install created"
+    mark_change "group $BROKER_GROUP"
   fi
   sed -i "\#^group:$BROKER_GROUP\$#d" "$INSTALL_RECORD" \
-    || failstop "install-record-edit-failed" "could not strip group:$BROKER_GROUP from $INSTALL_RECORD"
+    || failstop "install-record-edit-failed" "failed to remove group:$BROKER_GROUP from $INSTALL_RECORD"
   [[ -s "$INSTALL_RECORD" ]] || rm -f "$INSTALL_RECORD"
 fi
 
@@ -1459,10 +1432,10 @@ report_account() {
   local line
   while IFS= read -r line; do
     case "$line" in
-      removed-user\ *)  mark_change "system account ${line#removed-user }, which this install created" ;;
-      removed-group\ *) mark_change "group ${line#removed-group }, which this install created" ;;
-      kept-user\ *)     log "  leaving the account: ${line#kept-user }" ;;
-      failed\ *)        log "  WARNING: ${line#failed } failed -- a process still runs as $1; the next boot's cleanup removes the account" ;;
+      removed-user\ *)  mark_change "system account ${line#removed-user }" ;;
+      removed-group\ *) mark_change "group ${line#removed-group }" ;;
+      kept-user\ *)     log "  account ${line#kept-user }" ;;
+      failed\ *)        log "  ${line#failed } failed for $1" ;;
     esac
   done <<<"$2"
 }
@@ -1478,7 +1451,7 @@ report_account "$UHID_ACCOUNT" "$uhid_out"
 for f in "$RHIZO_TEARDOWN_LIB_DESKTOP_USER" "$RHIZO_TEARDOWN_LIB_INSTALL_FAILED"; do
   [[ -e "$f" ]] || continue
   rm -f "$f" \
-    || { log "  deferring $f to the post-reboot cleanup: selinux denies removing it while enforcing"; DEFERRED_REMOVALS=1; }
+    || { log "  deferring $f to rhizo-final-cleanup.service, rm failed"; DEFERRED_REMOVALS=1; }
   mark_change "$f"
 done
 
@@ -1490,63 +1463,60 @@ while IFS= read -r l; do
 done < <(unit_enable_links "$( (( PURGE )) && echo all || echo foreign)")
 if (( ${#removed_links[@]} )); then
   systemctl daemon-reload >/dev/null 2>&1
-  mark_change "${#removed_links[@]} unit enablement link(s): ${removed_links[*]}"
+  mark_change "${#removed_links[@]} unit enablement links (${removed_links[*]})"
 fi
 
 if (( PURGE )); then
   if [[ -e "$DATA_IMG" ]]; then
-    log "--purge: removing $DATA_IMG (every installed app and its data)"
-    rm -f "$DATA_IMG" "$DATA_IMG.meta" || { log "  deferring $DATA_IMG to the post-reboot cleanup: selinux denies removing it while enforcing"; DEFERRED_REMOVALS=1; }
-    mark_change "$DATA_IMG (--purge: user Android data)"
+    rm -f "$DATA_IMG" "$DATA_IMG.meta" || { log "  deferring $DATA_IMG to rhizo-final-cleanup.service, rm failed"; DEFERRED_REMOVALS=1; }
+    mark_change "$DATA_IMG"
   fi
   if [[ -e "$UPDATE_ROOT" ]]; then
-    log "--purge: removing $UPDATE_ROOT"
     rm_or_defer "$UPDATE_ROOT"
-    mark_change "$UPDATE_ROOT (--purge: GSI update state and its /data copies)"
+    mark_change "$UPDATE_ROOT"
   fi
   if [[ -d "$ETC_RHIZO" ]]; then
     rm_or_defer "$ETC_RHIZO"
-    mark_change "$ETC_RHIZO (--purge: configuration you may have edited)"
+    mark_change "$ETC_RHIZO"
   fi
   shopt -s nullglob
   gsi_trees=(/srv/rhizo/gsi_system*)
   shopt -u nullglob
   if (( ${#gsi_trees[@]} )); then
-    log "--purge: removing ${#gsi_trees[@]} GSI tree(s) under /srv/rhizo"
     rm_or_defer "${gsi_trees[@]}"
-    mark_change "${#gsi_trees[@]} GSI tree(s) under /srv/rhizo (--purge)"
+    mark_change "${#gsi_trees[@]} GSI trees under /srv/rhizo"
   fi
-  rmdir /srv/rhizo 2>/dev/null && mark_change "/srv/rhizo (--purge, empty)"
+  rmdir /srv/rhizo 2>/dev/null && mark_change "/srv/rhizo"
   if [[ -d "$STATE_ROOT" ]]; then
     if mounted_under "$STATE_ROOT"; then
-      log "  deferring the rest of $STATE_ROOT: a mount under it did not unmount"
+      log "  deferring $STATE_ROOT to rhizo-final-cleanup.service, a mount under $STATE_ROOT is still mounted"
       DEFERRED_REMOVALS=1
     elif rm -rf "$STATE_ROOT" && [[ ! -e "$STATE_ROOT" ]]; then
-      mark_change "$STATE_ROOT (--purge: every remaining Rhizo state file)"
+      mark_change "$STATE_ROOT"
     else
-      log "  deferring what is left of $STATE_ROOT to the post-reboot cleanup: selinux denies removing it while enforcing"
+      log "  deferring $STATE_ROOT to rhizo-final-cleanup.service, rm -rf failed"
       DEFERRED_REMOVALS=1
     fi
   fi
 else
   if [[ -e "$DATA_IMG" ]]; then
-    log "kept $DATA_IMG; --purge removes installed apps and their data"
+    log "$DATA_IMG exists without --purge"
   fi
   shopt -s nullglob
   gsi_trees=(/srv/rhizo/gsi_system*)
   shopt -u nullglob
-  (( ${#gsi_trees[@]} )) && log "leaving ${#gsi_trees[@]} GSI tree(s) under /srv/rhizo in place -- pass --purge to remove them"
+  (( ${#gsi_trees[@]} )) && log "${#gsi_trees[@]} GSI trees under /srv/rhizo exist without --purge"
 fi
 
 if [[ -f "$INSTALL_RECORD" ]] && grep -qx 'selinux-mode namespace' "$INSTALL_RECORD"; then
   sed -i '/^selinux-mode namespace$/d' "$INSTALL_RECORD" \
-    || failstop "install-record-edit-failed" "could not strip selinux-mode namespace from $INSTALL_RECORD"
+    || failstop "install-record-edit-failed" "failed to remove selinux-mode namespace from $INSTALL_RECORD"
   [[ -s "$INSTALL_RECORD" ]] || rm -f "$INSTALL_RECORD"
 fi
 
 DEFERRED=()
 teardown_deferred_paths "$PURGE"
-# print the DEFERRED paths present
+# print the DEFERRED paths that exist
 deferred_paths_present() {
   local p g
   for p in "${DEFERRED[@]}"; do
@@ -1559,9 +1529,9 @@ deferred_paths_present() {
 if [[ -n "$(deferred_paths_present)" || -n "$ACCOUNT_DEFERRED" ]] \
    || (( XATTRS_DEFERRED || DEFERRED_REMOVALS || ${#REGEN_DEFERRED[@]} || SWAPFILE_DEFERRED )); then
   cleanup_unit_text=$(teardown_final_cleanup_unit "$PURGE") \
-    || failstop "cleanup-unit-render-failed" "could not render rhizo-final-cleanup.service"
+    || failstop "cleanup-unit-render-failed" "teardown_final_cleanup_unit failed"
   cat > /etc/systemd/system/rhizo-final-cleanup.service <<<"$cleanup_unit_text" \
-    || failstop "cleanup-unit-write-failed" "could not write /etc/systemd/system/rhizo-final-cleanup.service"
+    || failstop "cleanup-unit-write-failed" "failed to write /etc/systemd/system/rhizo-final-cleanup.service"
   systemctl daemon-reload 2>/dev/null || true
   systemctl enable rhizo-final-cleanup.service >/dev/null 2>&1 || true
   ANY_CHANGE=1
@@ -1569,7 +1539,7 @@ if [[ -n "$(deferred_paths_present)" || -n "$ACCOUNT_DEFERRED" ]] \
   for kind in "${REGEN_DEFERRED[@]}"; do
     regen_names+=", $(bootloader_regen_label "$kind")"
   done
-  log "scheduled rhizo-final-cleanup.service to finish on the next boot: ${DEFERRED[*]}${LABELED[*]:+, the labels on ${LABELED[*]}}$regen_names$( (( SWAPFILE_DEFERRED )) && echo ', /swapfile')${ACCOUNT_DEFERRED:+, account(s) $ACCOUNT_DEFERRED}"
+  log "scheduled rhizo-final-cleanup.service for the next boot (${DEFERRED[*]}${LABELED[*]:+, the labels on ${LABELED[*]}}$regen_names$( (( SWAPFILE_DEFERRED )) && echo ', /swapfile')${ACCOUNT_DEFERRED:+, accounts $ACCOUNT_DEFERRED})"
 fi
 
 if (( ! ANY_CHANGE )); then
@@ -1583,7 +1553,7 @@ if (( ! ANY_CHANGE )); then
 fi
 
 if reboot_needed_for_lsm; then
-  log "Rhizo's files are removed; SELinux is this boot's active LSM"
+  log "selinux is in the active LSM list"
   if [[ "$FLAVOR" == cachyos ]]; then
     keeps=1 unread=0 carried=""
     if [[ -n "${DETECTED_KIND:-}" ]]; then
@@ -1591,31 +1561,29 @@ if reboot_needed_for_lsm; then
     fi
     (( keeps != 2 )) || unread=1
     if (( keeps == 0 )); then
-      log "SELinux stays on after a reboot: the host's $host_lsm on the next boot's cmdline makes selinux the major LSM"
+      log "the host $host_lsm on the next boot cmdline has selinux as the major LSM"
     elif (( ${#LEFT_CONFIGS[@]} )); then
       for left in "${LEFT_CONFIGS[@]}"; do
-        log "SELinux stays on until ${left%%$'\t'*} is regenerated: install $(regen_choices "${left#*$'\t'}" name)," \
-            "then run $(regen_choices "${left#*$'\t'}" cmd)"
+        log "${left%%$'\t'*} has the rhizo tokens, no $(regen_choices "${left#*$'\t'}" name)"
       done
     elif (( ${#REGEN_DEFERRED[@]} && ! unread )); then
-      log "SELinux turns off at the boot after next: the next boot regenerates the bootloader config"
+      log "rhizo-final-cleanup.service regenerates the bootloader config at the next boot"
     elif (( ${#REGEN_DEFERRED[@]} )); then
-      log "SELinux stays on at the next boot, which regenerates the bootloader config; its cmdlines cannot be read (see above)"
+      log "rhizo-final-cleanup.service regenerates the bootloader config at the next boot, failed to read the cmdlines"
     else
       (( unread )) || carried=$(rhizo_tokens_carried "${DETECTED_KIND:-}" "${REMOVED_TOKENS:-}") || unread=1
       if (( unread )); then
-        log "the next boot's cmdlines cannot be read (see above)"
+        log "failed to read the next boot cmdlines"
       elif [[ -n "$carried" ]]; then
         while IFS=$'\t' read -r kind tokens; do
-          log "SELinux stays on until $(bootloader_generated "$kind") is regenerated (it carries:$tokens): run" \
-              "$(regen_choices "$kind" cmd)"
+          log "$(bootloader_generated "$kind") has rhizo tokens$tokens"
         done <<<"$carried"
       else
-        log "SELinux turns off at the next boot"
+        log "no next boot cmdline has the rhizo selinux tokens"
       fi
     fi
   else
-    log "AppArmor returns after a reboot"
+    log "the kernel loads AppArmor at the next boot"
   fi
   rhizo_kernel_note
   echo "RHIZO_TEARDOWN_REBOOT_REQUIRED=1"
@@ -1627,8 +1595,8 @@ if rhizo_kernel_note; then
   exit 0
 fi
 if (( ${TEARDOWN_NS_INSTALL:-0} )); then
-  log "done; selinux namespace mode needs no reboot"
+  log "selinux mode namespace, no reboot required"
 else
-  log "done; no reboot needed"
+  log "no reboot required"
 fi
 echo "RHIZO_TEARDOWN_OK removed=1"

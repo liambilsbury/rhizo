@@ -1,11 +1,11 @@
 #!/bin/bash
-# run checkpatch on the kernel patches and the kernel/tests C sources
+# checkpatch.pl run over kernel/patches and the kernel/tests C sources
 set -uo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cache=${RHIZO_KERNEL_CACHE:-$HOME/.cache/rhizo/kernel}
 base=$(sed -n 's/^base_tag=//p' "$root/kernel/SOURCE")
 git -C "$cache/linux" cat-file -e "$base:scripts/checkpatch.pl" 2>/dev/null \
-  || { echo "SKIP checkpatch-patches.sh: no $base tree in $cache/linux (run make kernel-inputs)"; exit 0; }
+  || { echo "SKIP checkpatch-patches.sh without $base:scripts/checkpatch.pl in $cache/linux"; exit 0; }
 tmp=$(mktemp -d); trap 'rm -r "$tmp"' EXIT
 for f in checkpatch.pl spelling.txt const_structs.checkpatch; do
   git -C "$cache/linux" show "$base:scripts/$f" > "$tmp/$f" || exit 1
@@ -22,5 +22,5 @@ for f in "${sources[@]}"; do
   out=$(perl "$tmp/checkpatch.pl" --no-tree -q --ignore "$ignore" --file "$f" 2>&1) \
     || { echo "${f#"$root"/}"; echo "$out"; failed=1; }
 done
-(( failed == 0 )) && echo "checkpatch-patches.sh: $(ls "$root"/kernel/patches/*.patch | wc -l) patches and $(ls "$root"/kernel/tests/*/*.c 2>/dev/null | wc -l) kernel/tests sources clean"
+(( failed == 0 )) && echo "ok checkpatch-patches.sh patches=$(ls "$root"/kernel/patches/*.patch | wc -l) kernel/tests_sources=$(ls "$root"/kernel/tests/*/*.c 2>/dev/null | wc -l)"
 exit "$failed"

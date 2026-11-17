@@ -85,7 +85,7 @@ public class BridgeService extends Service {
         context.startService(intent);
     }
 
-    // return no binder
+    // return null
     @Override
     public IBinder onBind(Intent intent) {
         return null;
@@ -143,7 +143,7 @@ public class BridgeService extends Service {
                     try {
                         sendOrQueue(new JSONObject(enqueued));
                     } catch (JSONException e) {
-                        Logs.e("dropping malformed enqueue payload", e);
+                        Logs.e("failed to parse enqueue payload", e);
                     }
                 }
             });
@@ -175,7 +175,7 @@ public class BridgeService extends Service {
             return;
         }
         if (creds == null) {
-            Logs.i("RHIZO_DESK_NO_CREDS: nothing minted yet");
+            Logs.i("RHIZO_DESK_NO_CREDS DeskCreds.load returned null");
             return;
         }
         synchronized (mCredsLock) {
@@ -211,7 +211,7 @@ public class BridgeService extends Service {
         }
     }
 
-    // connect to the host and read lines
+    // call connectAndPump with backoff while mStopped is false
     private void readerLoop() {
         long backoff = INITIAL_BACKOFF_MS;
         while (!mStopped) {
@@ -234,7 +234,7 @@ public class BridgeService extends Service {
         }
     }
 
-    // wait up to the given milliseconds or until woken
+    // wait on mWaitLock for at most ms milliseconds
     private void waitFor(long ms) {
         synchronized (mWaitLock) {
             try {
@@ -269,11 +269,11 @@ public class BridgeService extends Service {
 
             String reply = in.readLine();
             if (reply == null) {
-                throw new IOException("connection closed during hello");
+                throw new IOException("in.readLine() returned null during hello");
             }
             JSONObject obj = new JSONObject(reply);
             if (!"hello_ok".equals(obj.optString("t"))) {
-                throw new IOException("host rejected hello: " + reply);
+                throw new IOException("hello reply is not hello_ok " + reply);
             }
 
             sock.setSoTimeout(0);
@@ -321,9 +321,9 @@ public class BridgeService extends Service {
             try {
                 writeLine(out, line);
             } catch (LineTooLargeException e) {
-                Logs.e("dropping queued line that is too large to send", e);
+                Logs.e("queued line exceeds MAX_LINE_BYTES", e);
             } catch (IOException e) {
-                Logs.e("drain failed, requeuing pending line", e);
+                Logs.e("failed to write queued line", e);
                 requeueFirst(line);
                 return;
             }
@@ -351,12 +351,12 @@ public class BridgeService extends Service {
                 break;
             case "notif_action":
                 if (!NotifListener.dispatch(obj.getString("key"), false)) {
-                    Logs.e("notif_action for " + obj.getString("key") + " with no listener connected");
+                    Logs.e("NotifListener.dispatch(" + obj.getString("key") + ", false) returned false");
                 }
                 break;
             case "notif_close":
                 if (!NotifListener.dispatch(obj.getString("key"), true)) {
-                    Logs.e("notif_close for " + obj.getString("key") + " with no listener connected");
+                    Logs.e("NotifListener.dispatch(" + obj.getString("key") + ", true) returned false");
                 }
                 break;
             case "drop":
@@ -385,7 +385,7 @@ public class BridgeService extends Service {
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
             public void run() {
-                Toast.makeText(BridgeService.this, "Couldn't open the link on the desktop: " + why,
+                Toast.makeText(BridgeService.this, "Failed to open the link on the desktop (" + why + ")",
                         Toast.LENGTH_LONG).show();
             }
         });
@@ -405,7 +405,7 @@ public class BridgeService extends Service {
             try {
                 uri = writePasteFile(bytes, mime);
             } catch (IOException e) {
-                Logs.e("cannot stage pasted image", e);
+                Logs.e("failed to stage pasted image", e);
                 return;
             }
             mHostClips.hostSet(mime, bytes);
@@ -423,17 +423,17 @@ public class BridgeService extends Service {
         try {
             sha = DeskAuth.hex(MessageDigest.getInstance("SHA-256").digest(bytes));
         } catch (NoSuchAlgorithmException e) {
-            Logs.e("no SHA-256 to name the applied clip", e);
+            Logs.e("MessageDigest.getInstance(SHA-256) failed", e);
         }
         Logs.i("RHIZO_DESK_CLIP_APPLIED mime=" + mime + " sha256=" + sha);
     }
 
-    // store clip bytes as a paste file and return its uri
+    // store clip bytes as a paste file and return the paste file uri
     private Uri writePasteFile(byte[] bytes, String mime) throws IOException {
         return PasteStore.write(this, bytes, mime, "clip_", null);
     }
 
-    // send the current clip on the send executor
+    // run sendCurrentClip on mSendExecutor
     private void onClipChanged() {
         mSendExecutor.execute(new Runnable() {
             @Override
@@ -443,7 +443,7 @@ public class BridgeService extends Service {
         });
     }
 
-    // send the primary clip as text or image
+    // call sendText or sendImage with the primary clip
     private void sendCurrentClip() {
         ClipData clip = mClipboardManager.getPrimaryClip();
         if (clip == null || clip.getItemCount() == 0) {
@@ -461,11 +461,11 @@ public class BridgeService extends Service {
                 sendImage(label, item.getUri(), mime);
             }
         } catch (IOException e) {
-            Logs.e("failed to read or send clip", e);
+            Logs.e("failed to read or write clip", e);
         }
     }
 
-    // send clipboard text to the host
+    // call sendClipPayload with clipboard text unless mHostClips.isEcho returns true
     private void sendText(CharSequence label, String text) throws IOException {
         byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
         if (mHostClips.isEcho(label, "text/plain", bytes)) {
@@ -474,7 +474,7 @@ public class BridgeService extends Service {
         sendClipPayload("text/plain", bytes);
     }
 
-    // send an image clip unless it echoes one from the host
+    // call sendClipPayload with an image clip unless mHostClips.isEcho returns true
     private void sendImage(CharSequence label, Uri uri, String mime) throws IOException {
         byte[] bytes = readAll(uri);
         if (mHostClips.isEcho(label, mime, bytes)) {
@@ -499,7 +499,7 @@ public class BridgeService extends Service {
         }
     }
 
-    // send a clip_set line to the host
+    // write a clip_set line to mOut
     private void sendClipPayload(String mime, byte[] bytes) throws IOException {
         OutputStream out;
         synchronized (mSockLock) {
@@ -531,16 +531,16 @@ public class BridgeService extends Service {
                 writeLine(out, line);
                 return;
             } catch (LineTooLargeException e) {
-                Logs.e("dropping outbound line that is too large to send", e);
+                Logs.e("outbound line exceeds MAX_LINE_BYTES", e);
                 return;
             } catch (IOException e) {
-                Logs.e("send failed, queuing for the next connection", e);
+                Logs.e("failed to write outbound line", e);
             }
         }
         synchronized (mQueueLock) {
             if (mPendingLines.size() >= MAX_QUEUED_LINES) {
                 mPendingLines.removeFirst();
-                Logs.e("outbound queue full, dropped oldest pending line");
+                Logs.e("removed the oldest pending line at MAX_QUEUED_LINES");
             }
             mPendingLines.addLast(line);
         }
@@ -583,7 +583,7 @@ public class BridgeService extends Service {
                 }
                 if (buf.size() >= MAX_LINE_BYTES) {
                     throw new IOException(
-                            "inbound line over " + MAX_LINE_BYTES + " bytes, refusing rather than truncating");
+                            "inbound line over " + MAX_LINE_BYTES + " bytes");
                 }
                 buf.write(b);
             }

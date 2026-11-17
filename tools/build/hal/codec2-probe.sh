@@ -1,5 +1,5 @@
 #!/bin/bash
-# build rhizo-codec2-probe into gfx_hal
+# var/share/gfx_hal/rhizo-codec2-probe var/share/gfx_hal/codec2-measure
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 C2=src/android/hal/codec2
@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
     --no-stage) STAGE=0; shift ;;
-    *) echo "usage: $0 [--name NAME --no-stage]" >&2; exit 2 ;;
+    *) echo "$0 [--name NAME --no-stage]" >&2; exit 2 ;;
   esac
 done
 
@@ -53,5 +53,5 @@ if (( STAGE )); then
   python3 tools/build/stamps.py stamp gfx_hal/rhizo-codec2-probe || exit 1
 else
   rm -f "var/bin/$NAME" "var/share/$NAME"
-  echo "[codec2-probe] kept in toolchain/out/$NAME only"
+  echo "wrote toolchain/out/$NAME"
 fi

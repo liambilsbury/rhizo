@@ -94,7 +94,7 @@ HOST_MODULE_CONTEXT = "u:object_r:rhizo_host_module_file:s0"
 
 
 def host_ld_so(maps_path="/proc/self/maps"):
-    """return the ELF interpreter path of this process"""
+    """return the ld-*.so path in maps_path, or None"""
     try:
         with open(maps_path) as fh:
             for line in fh:
@@ -143,7 +143,7 @@ def parse_sessions(text):
 
 
 def login_sessions(sessions):
-    """return the sessions a policy load would strand"""
+    """return the sessions whose Class is not in EXEMPT_CLASSES"""
     return [s for s in sessions if s.get("Class") not in EXEMPT_CLASSES]
 
 
@@ -154,7 +154,7 @@ def systemd_version(text):
 
 
 def session_scopes(cg_root="/sys/fs/cgroup/user.slice"):
-    """return the session-*.scope cgroups that hold a process"""
+    """return the session-*.scope cgroups with a process"""
     scopes = []
     for scope in sorted(glob.glob(os.path.join(cg_root, "user-*.slice", "session-*.scope"))):
         try:
@@ -167,7 +167,7 @@ def session_scopes(cg_root="/sys/fs/cgroup/user.slice"):
 
 
 def read_sessions(run=subprocess.run, cg_root="/sys/fs/cgroup/user.slice"):
-    """return every logind session's record"""
+    """return the logind session records, or None"""
     try:
         state = run(["systemctl", "is-active", "systemd-logind.service"], capture_output=True,
                     text=True, timeout=10).stdout.strip()
@@ -193,7 +193,7 @@ def read_sessions(run=subprocess.run, cg_root="/sys/fs/cgroup/user.slice"):
 
 
 def user_manager_units(cg_root="/sys/fs/cgroup/user.slice"):
-    """return the user@<uid>.service units that hold a process"""
+    """return the user@<uid>.service units with a process"""
     units = []
     for unit_dir in sorted(glob.glob(os.path.join(cg_root, "user-*.slice", "user@*.service"))):
         for sub in ("init.scope", ""):
@@ -208,10 +208,10 @@ def user_manager_units(cg_root="/sys/fs/cgroup/user.slice"):
 
 
 def policy_load_refusal(sessions, version, managers, rig):
-    """return why loading Android's policy now must not go ahead"""
+    """return the refusal reason for a policy load, or None"""
     if not rig:
         if sessions is None:
-            return ("the login sessions could not be read from systemd-logind -- reboot, and Android's policy loads at boot before any login")
+            return "failed to read the logind sessions"
         logins = login_sessions(sessions)
         if logins:
             named = ", ".join("session %s of %s%s%s" % (
@@ -219,18 +219,14 @@ def policy_load_refusal(sessions, version, managers, rig):
                 (" on " + "/".join(x for x in (s.get("Seat"), s.get("TTY")) if x)) if (s.get("Seat") or s.get("TTY")) else "",
                 " over ssh" if s.get("Remote") == "yes" else "")
                 for s in logins)
-            return ("%s started before Android's policy was loaded and would stay outside it, "
-                    "unable to start programs -- reboot, and the policy loads at "
-                    "boot before any login" % named)
+            return "%s started before the policy load" % named
     if managers and version < REEXEC_SYSTEMD:
-        return ("%s run on systemd %d, which cannot re-execute a user manager into the host's domain "
-                "(SIGRTMIN+25 needs systemd %d) -- reboot, and Android's policy loads at boot before any of them starts"
-                % (", ".join(managers), version, REEXEC_SYSTEMD))
+        return "%s on systemd %d, below %d" % (", ".join(managers), version, REEXEC_SYSTEMD)
     return None
 
 
 def check_policy_load():
-    """return why this launch must not load Android's policy"""
+    """return the refusal reason for the host-mode policy load, or None"""
     if not host_selinux_mode() or not RHIZO_ENFORCING or not os.path.exists("/sys/fs/selinux/enforce"):
         return None
     try:
@@ -254,11 +250,11 @@ def write_policy_refusal(reason, path=POLICY_REFUSED_STATE):
             f.write("refused_by=launcher\nreason=%s\n" % reason)
         os.replace(tmp, path)
     except OSError as e:
-        kmsg(f"policy refusal record {path}: {e}")
+        kmsg(f"failed to write {path} ({e})")
 
 
 def label_host_binaries():
-    """label the host entrypoint binaries rhizo_host_exec"""
+    """label HOST_EXEC_PATHS rhizo_host_exec and HOST_MODULE_ROOT rhizo_host_module_file"""
     if not host_selinux_mode() or not RHIZO_ENFORCING: return
     _ldso = host_ld_so()
     _core = core_pattern_helper()
@@ -273,10 +269,10 @@ def label_host_binaries():
             continue
         try: os.setxattr(real, "security.selinux",
                          (HOST_EXEC_CONTEXT + "\0").encode())
-        except OSError as e: kmsg(f"host label {p}: {e}")
+        except OSError as e: kmsg(f"failed to label {p} ({e})")
     labeled, already, failed = label_host_modules()
-    kmsg(f"host module labels: {labeled} set, {already} already {HOST_MODULE_CONTEXT}"
-         + (f", {len(failed)} FAILED: {failed[:4]}" if failed else ""))
+    kmsg(f"host module labels set={labeled} already={already} {HOST_MODULE_CONTEXT}"
+         + (f" failed={len(failed)} {failed[:4]}" if failed else ""))
     try: open("/proc/sys/kernel/printk_ratelimit","w").write("0\n")
     except OSError: pass
 
@@ -337,17 +333,17 @@ def relabel_root_objects_now(newroot, staged=()):
         with open("/proc/self/attr/current") as f:
             cur = f.read().strip("\0").strip()
     except OSError as e:
-        kmsg(f"pre-init relabel: cannot read own context ({e}) -- skipped")
+        kmsg(f"failed to read /proc/self/attr/current ({e})")
         return
     if ":" not in cur:
-        kmsg(f"pre-init relabel: no policy loaded yet (context {cur!r}) -- skipped")
+        kmsg(f"skipped the pre-init relabel, no policy loaded (context {cur!r})")
         return
     done, failed, unverifiable, foreign = [], [], [], []
     for rel, want in PRE_INIT_RELABEL + [(p, lbl) for p, lbl in list(staged) + PRE_INIT_RELABEL_IF_PRESENT
                                          if os.path.lexists(newroot + p)]:
         path = newroot + rel if rel != "/" else newroot
         if not os.path.lexists(path):
-            failed.append(f"{rel}: absent")
+            failed.append(f"{rel} is absent")
             continue
         lnk = os.path.islink(path)
         try:
@@ -363,23 +359,23 @@ def relabel_root_objects_now(newroot, staged=()):
                                follow_symlinks=not lnk, skipped=foreign):
                 continue
         except OSError as e:
-            failed.append(f"{rel}: {e}")
+            failed.append(f"{rel} ({e})")
             continue
         try:
             got = os.getxattr(path, "security.selinux",
                               follow_symlinks=not lnk).decode().rstrip("\x00")
         except PermissionError as e:
-            unverifiable.append(f"{rel}: set ok, read-back denied ({e})")
+            unverifiable.append(f"{rel} getxattr denied after setxattr ({e})")
             continue
         except OSError as e:
-            failed.append(f"{rel}: read-back {e}")
+            failed.append(f"{rel} getxattr failed ({e})")
             continue
-        (done if got == want else failed).append(rel if got == want else f"{rel}: got {got}")
-    kmsg("pre-init relabel: ok=%s%s%s%s"
+        (done if got == want else failed).append(rel if got == want else f"{rel} got={got}")
+    kmsg("pre-init relabel ok=%s%s%s%s"
          % (done,
-            ("; unverifiable " + str(unverifiable)) if unverifiable else "",
-            (f"; gsi-backed skipped={len(foreign)} {foreign[:4]}") if foreign else "",
-            ("; FAILED " + str(failed)) if failed else ""))
+            (" unverifiable=" + str(unverifiable)) if unverifiable else "",
+            (f" gsi_backed={len(foreign)} {foreign[:4]}") if foreign else "",
+            (" failed=" + str(failed)) if failed else ""))
 
     _dev_dirs = [("/dev/input", "u:object_r:input_device:s0"),
                  ("/dev/dri", "u:object_r:gpu_device:s0"),
@@ -416,25 +412,25 @@ def relabel_root_objects_now(newroot, staged=()):
                     _dev_done += 1
             except OSError as _e:
                 if len(_dev_fail) < 8:
-                    _dev_fail.append("%s: %s" % (_t, _e))
-    kmsg("pre-init /dev relabel: %d objects%s%s"
+                    _dev_fail.append("%s (%s)" % (_t, _e))
+    kmsg("pre-init /dev relabel objects=%d%s%s"
          % (_dev_done,
-            (f"; gsi-backed skipped={len(_dev_foreign)} {_dev_foreign[:4]}")
+            (f" gsi_backed={len(_dev_foreign)} {_dev_foreign[:4]}")
             if _dev_foreign else "",
-            ("; FAILED " + str(_dev_fail)) if _dev_fail else ""))
+            (" failed=" + str(_dev_fail)) if _dev_fail else ""))
 def relabel_flat_trees_now():
     """relabel the staged flat trees"""
     try:
         with open("/proc/self/attr/current") as f:
             cur = f.read().strip("\0").strip()
     except OSError as e:
-        kmsg(f"restart relabel: cannot read own context ({e}) -- not relabeling")
+        kmsg(f"failed to read /proc/self/attr/current ({e})")
         return
     if ":" not in cur:
-        kmsg(f"restart relabel: no policy loaded yet (context {cur!r}) -- skipped")
+        kmsg(f"skipped the restart relabel, no policy loaded (context {cur!r})")
         return
     if not os.path.exists(HOST_PRIMER_PATH):
-        kmsg("restart relabel skipped: the primer script is not staged yet")
+        kmsg(f"skipped the restart relabel, {HOST_PRIMER_PATH} is missing")
         return
     try:
         r = subprocess.run([sys.executable, HOST_PRIMER_PATH, "--relabel-flat",
@@ -443,4 +439,4 @@ def relabel_flat_trees_now():
                            capture_output=True, text=True, timeout=120)
         kmsg(f"restart flat-tree relabel rc={r.returncode} {r.stderr.strip()[:200]}")
     except Exception as e:
-        kmsg(f"restart flat-tree relabel FAILED: {e}")
+        kmsg(f"restart flat-tree relabel failed ({e})")

@@ -14,7 +14,7 @@ rhizo_run_teardown() {
     rhizo_td_rc=0
     bash "$rhizo_td/install/teardown/teardown.sh" "$@" || rhizo_td_rc=$?
   else
-    echo "[$PROG] could not write the embedded teardown to $rhizo_td -- host changes were NOT reversed" >&2
+    echo "[$PROG] failed to write the embedded teardown to $rhizo_td" >&2
     rhizo_td_rc=1
   fi
   rm -rf "$rhizo_td"
@@ -57,13 +57,13 @@ case "$1" in
     rhizo_restore_env_keys
     ;;
   remove)
-    rhizo_run_teardown || echo "[$PROG] teardown reported a problem; see its output above" >&2
+    rhizo_run_teardown || echo "[$PROG] teardown failed with exit status $?" >&2
     rm -rf /var/cache/rhizo /var/log/rhizo 2>/dev/null || true
     remove_desktop_user_dropins
     remove_payload_bytecode
     ;;
   purge)
-    rhizo_run_teardown --purge || echo "[$PROG] teardown reported a problem; see its output above" >&2
+    rhizo_run_teardown --purge || echo "[$PROG] teardown failed with exit status $?" >&2
     rm -rf /var/cache/rhizo /var/log/rhizo 2>/dev/null || true
     remove_desktop_user_dropins
     remove_payload_bytecode

@@ -1,4 +1,4 @@
-// poll an IIO sensor at its batch period on a thread
+// thread that polls an IIO sensor at the batch period
 #ifndef RHIZO_SENSORS_IIO_SENSOR_H
 #define RHIZO_SENSORS_IIO_SENSOR_H
 
@@ -12,7 +12,7 @@
 
 namespace rhizo::sensors {
 
-// receive readings and flush completions under the sensor lock
+// receiver of readings and flush completions under the sensor lock
 class SampleSink {
  public:
   virtual ~SampleSink() = default;

@@ -25,13 +25,22 @@
 #include <va/va_enc_av1.h>
 #include <va/va_enc_h264.h>
 
+#define RHIZO_PEER_NAME "system"
+#include "../common/peer.h"
 #include "rhizo/stream_protocol.h"
 
 #define MAX_TCP_CLIENTS 8
 #define DEFAULT_RENDER_NODE "/dev/dri/renderD128"
 #define DEFAULT_PROBE_SOCKET "/run/rhizo/data/local/tmp/rhizo-probe.sock"
+#define AID_SYSTEM 1000
+#define AID_GRAPHICS 1003
+#define REFUSAL_LOG_MS 10000
 
 static int g_verbose = 0;
+static long g_peer_uid = AID_SYSTEM;
+static const char *g_peer_cgroup = NULL;
+static int64_t g_refusal_logged_ms = 0;
+static unsigned long g_refusals_unlogged = 0;
 
 static int64_t now_monotonic_ns(void) {
     struct timespec ts;
@@ -52,7 +61,7 @@ static void logmsg(const char *fmt, ...) {
 #define CHECK_VA(expr, what) do { \
     VAStatus _st = (expr); \
     if (_st != VA_STATUS_SUCCESS) { \
-        logmsg("%s failed: %s (%d)", (what), vaErrorStr(_st), _st); \
+        logmsg("%s failed with %s (%d)", (what), vaErrorStr(_st), _st); \
         return -1; \
     } \
 } while (0)
@@ -68,7 +77,7 @@ static const char *codec_name(enum stream_codec c) {
     }
 }
 
-// check profile for VAEntrypointEncSliceLP
+// return whether profile has VAEntrypointEncSliceLP
 static int profile_has_lp_encode(VADisplay dpy, VAProfile profile) {
     int max_ep = vaMaxNumEntrypoints(dpy);
     VAEntrypoint *eps = malloc(sizeof(VAEntrypoint) * max_ep);
@@ -94,12 +103,12 @@ static enum stream_codec pick_codec(VADisplay dpy, const char *forced, int allow
             return CODEC_VP9;
         }
         if (!strcmp(forced, "av1")) {
-            logmsg("--codec av1 refused: no AV1 encode function is wired yet");
+            logmsg("--codec av1 has no AV1 encode function");
             return CODEC_NONE;
         }
         if (!strcmp(forced, "h264")) {
             if (!allow_h264) {
-                logmsg("--codec h264 needs --allow-h264");
+                logmsg("--codec h264 without --allow-h264");
                 return CODEC_NONE;
             }
             if (profile_has_lp_encode(dpy, VAProfileH264Main)) {
@@ -154,12 +163,12 @@ struct va_ctx {
     uint64_t frame_count;
 };
 
-// open the DRM render node and a VA display on it
+// open the DRM render node and call vaInitialize on the VA display
 static int va_open(struct va_ctx *ctx, const char *render_node) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->drm_fd = open(render_node, O_RDWR);
     if (ctx->drm_fd < 0) {
-        logmsg("open(%s) failed: %s", render_node, strerror(errno));
+        logmsg("open(%s) failed (%s)", render_node, strerror(errno));
         return -1;
     }
     ctx->dpy = vaGetDisplayDRM(ctx->drm_fd);
@@ -187,11 +196,11 @@ static int va_setup_encoder(struct va_ctx *ctx, enum stream_codec codec, VAProfi
     CHECK_VA(vaGetConfigAttributes(ctx->dpy, profile, VAEntrypointEncSliceLP, attribs, 2),
              "vaGetConfigAttributes(enc)");
     if (!(attribs[0].value & VA_RT_FORMAT_YUV420)) {
-        logmsg("driver does not offer YUV420 for %s EncSliceLP", codec_name(codec));
+        logmsg("%s EncSliceLP has no VA_RT_FORMAT_YUV420", codec_name(codec));
         return -1;
     }
     if (!(attribs[1].value & VA_RC_CQP)) {
-        logmsg("driver does not offer CQP rate control for %s EncSliceLP", codec_name(codec));
+        logmsg("%s EncSliceLP has no VA_RC_CQP", codec_name(codec));
         return -1;
     }
     attribs[0].value = VA_RT_FORMAT_YUV420;
@@ -314,7 +323,7 @@ static int encode_one_frame_vp9(struct va_ctx *ctx, uint8_t **out_data, uint32_t
     VACodedBufferSegment *seg_out;
     CHECK_VA(vaMapBuffer(ctx->dpy, ctx->coded_buf, (void **)&seg_out), "vaMapBuffer(coded)");
     if (seg_out->status & VA_CODED_BUF_STATUS_SLICE_OVERFLOW_MASK) {
-        logmsg("coded buffer overflowed (width*height=%d too small for one keyframe)",
+        logmsg("VA_CODED_BUF_STATUS_SLICE_OVERFLOW_MASK set at width*height=%d",
                ctx->width * ctx->height);
         vaUnmapBuffer(ctx->dpy, ctx->coded_buf);
         return -1;
@@ -363,11 +372,11 @@ static int selftest_encode(const char *render_node, const char *out_path,
     VAProfile profile;
     enum stream_codec codec = pick_codec(ctx.dpy, forced_codec, allow_h264, &profile);
     if (codec == CODEC_NONE) {
-        logmsg("no usable EncSliceLP profile found (forced=%s allow_h264=%d)",
-               forced_codec ? forced_codec : "(auto)", allow_h264);
+        logmsg("no usable EncSliceLP profile found forced=%s allow_h264=%d",
+               forced_codec ? forced_codec : "auto", allow_h264);
         return 1;
     }
-    logmsg("selftest: codec=%s profile=%d", codec_name(codec), (int)profile);
+    logmsg("selftest codec=%s profile=%d", codec_name(codec), (int)profile);
 
     if (va_setup_encoder(&ctx, codec, profile, width, height) != 0) return 1;
 
@@ -390,13 +399,13 @@ static int selftest_encode(const char *render_node, const char *out_path,
     vaDestroyImage(ctx.dpy, img.image_id);
 
     if (codec != CODEC_VP9) {
-        logmsg("selftest: only the VP9 encode path is wired");
+        logmsg("no encode path for a codec other than VP9");
         return 1;
     }
 
     FILE *f = fopen(out_path, "wb");
     if (!f) {
-        logmsg("fopen(%s) failed: %s", out_path, strerror(errno));
+        logmsg("fopen(%s) failed (%s)", out_path, strerror(errno));
         return 1;
     }
     write_ivf_header(f, 0x30395056  , width, height,
@@ -416,15 +425,13 @@ static int selftest_encode(const char *render_node, const char *out_path,
     fclose(f);
 
     double fps = elapsed_ns > 0 ? (double)frames * 1e9 / (double)elapsed_ns : 0.0;
-    logmsg("selftest OK: encoded %d %s frame(s) of %dx%d, %llu bytes, wrote %s",
-           frames, codec_name(codec), width, height, (unsigned long long)total_bytes, out_path);
     printf("RHIZO_STREAMD_SELFTEST_OK codec=%s frames=%d size=%dx%d bytes=%llu fps=%.2f out=%s\n",
            codec_name(codec), frames, width, height, (unsigned long long)total_bytes, fps,
            out_path);
     return 0;
 }
 
-// send a shell command line to rhizo-probed
+// write a shell command line to the rhizo-probed socket
 static void probe_run(const char *probe_socket, const char *cmd) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return;
@@ -433,7 +440,7 @@ static void probe_run(const char *probe_socket, const char *cmd) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, probe_socket, sizeof(addr.sun_path) - 1);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        if (g_verbose) logmsg("probe_run: connect(%s) failed: %s", probe_socket, strerror(errno));
+        if (g_verbose) logmsg("connect(%s) failed (%s)", probe_socket, strerror(errno));
         close(fd);
         return;
     }
@@ -447,7 +454,7 @@ static void probe_run(const char *probe_socket, const char *cmd) {
     close(fd);
 }
 
-// send a touch event through rhizo-probed
+// write an inject touch command to rhizo-probed
 static void relay_touch(const char *probe_socket, int64_t display_id, const char *sub, int x,
                          int y) {
     char cmd[192];
@@ -558,7 +565,7 @@ static void base64_encode(const uint8_t *data, size_t len, char *out) {
     out[o] = '\0';
 }
 
-// send an unmasked WebSocket frame
+// write an unmasked WebSocket frame with sendmsg
 static ssize_t ws_send_frame(int fd, int opcode, const uint8_t *payload, size_t len) {
     uint8_t hdr[10];
     size_t hlen;
@@ -603,7 +610,7 @@ static ssize_t ws_recv_frame(int fd, uint8_t *out, size_t max_out, int *opcode) 
     return (ssize_t)len;
 }
 
-// read an HTTP request into buf
+// read HTTP headers up to \r\n\r\n into buf
 static ssize_t http_recv_request(int fd, char *buf, size_t max) {
     size_t n = 0;
     while (n + 1 < max) {
@@ -615,7 +622,7 @@ static ssize_t http_recv_request(int fd, char *buf, size_t max) {
     return -1;
 }
 
-// copy a request header value into out
+// copy an HTTP header value into out
 static int http_header(const char *req, const char *name, char *out, size_t outlen) {
     const char *p = req;
     size_t nlen = strlen(name);
@@ -636,7 +643,7 @@ static int http_header(const char *req, const char *name, char *out, size_t outl
     return 0;
 }
 
-// send the viewer page to the socket
+// write the viewer page to cfd
 static void serve_http_page(int cfd, const char *html_path) {
     FILE *f = fopen(html_path, "rb");
     if (!f) {
@@ -675,7 +682,7 @@ static int ws_handshake(int cfd, const char *req) {
     return send(cfd, resp, (size_t)rlen, MSG_NOSIGNAL) == rlen;
 }
 
-// check for an HTTP request on the connection
+// return whether the connection starts with "GET "
 static int looks_like_http(int cfd) {
     struct timeval tv = {0, 150000};
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -686,7 +693,7 @@ static int looks_like_http(int cfd) {
     return n == 4 && !memcmp(peek, "GET ", 4);
 }
 
-// send an encoded chunk to all viewers
+// write an encoded chunk to each viewer
 static void broadcast_chunk(struct daemon_state *st, const uint8_t *data, uint32_t len,
                             int64_t presented_ns) {
     uint32_t framed_len = len;
@@ -738,7 +745,7 @@ static int parse_ws_input(const char *json, char *kind, size_t kind_len, int *x,
     return 1;
 }
 
-// read viewer input and relay touches
+// read viewer input and call relay_touch
 static void *input_reader_thread(void *arg) {
     struct input_reader_arg *a = arg;
     if (a->st->client_kind[a->slot] == CLIENT_WS) {
@@ -774,7 +781,7 @@ static void *input_reader_thread(void *arg) {
     return NULL;
 }
 
-// add a viewer slot and send hello
+// add a viewer slot and write the hello
 static void place_client(struct daemon_state *st, int cfd, enum client_kind kind,
                          const void *hello, size_t hello_len) {
     pthread_mutex_lock(&st->clients_lock);
@@ -797,12 +804,12 @@ static void place_client(struct daemon_state *st, int cfd, enum client_kind kind
     }
     pthread_mutex_unlock(&st->clients_lock);
     if (placed < 0) {
-        logmsg("tcp_accept: MAX_TCP_CLIENTS reached, refusing a viewer");
+        logmsg("MAX_TCP_CLIENTS viewers connected, closed viewer fd");
         close(cfd);
         return;
     }
     if (!hello_ok) {
-        logmsg("tcp_accept: could not send the stream hello: %s", strerror(errno));
+        logmsg("failed to write the stream hello (%s)", strerror(errno));
         close(cfd);
         return;
     }
@@ -815,7 +822,7 @@ static void place_client(struct daemon_state *st, int cfd, enum client_kind kind
     pthread_detach(reader);
 }
 
-// accept TCP viewer connections
+// call accept for TCP viewer connections
 static void *tcp_accept_thread(void *arg) {
     struct daemon_state *st = arg;
     for (;;) {
@@ -868,16 +875,16 @@ static void serve_composer_connection(struct daemon_state *st, int cfd) {
 
         ssize_t n = recvmsg(cfd, &msg, MSG_WAITALL);
         if (n != (ssize_t)sizeof(hdr)) {
-            if (n != 0) logmsg("serve_composer: short header read n=%zd", n);
+            if (n != 0) logmsg("recvmsg returned n=%zd for the frame header", n);
             break;
         }
         if (hdr.magic != RHIZO_STREAM_FRAME_MAGIC) {
-            logmsg("serve_composer: bad frame magic 0x%x, dropping connection", hdr.magic);
+            logmsg("frame magic 0x%x != RHIZO_STREAM_FRAME_MAGIC", hdr.magic);
             break;
         }
         struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
         if (!cmsg || cmsg->cmsg_type != SCM_RIGHTS) {
-            logmsg("serve_composer: frame seq=%llu carried no fd", (unsigned long long)hdr.seq);
+            logmsg("frame seq=%llu has no SCM_RIGHTS fd", (unsigned long long)hdr.seq);
             break;
         }
         int dmabuf_fd;
@@ -885,8 +892,7 @@ static void serve_composer_connection(struct daemon_state *st, int cfd) {
 
         uint32_t va_fourcc = va_fourcc_for_drm(hdr.drm_fourcc);
         if (va_fourcc == 0) {
-            logmsg("serve_composer: frame seq=%llu names drm format 0x%x, which has no VA "
-                   "equivalent this daemon can import",
+            logmsg("frame seq=%llu drm format 0x%x has no va_fourcc_for_drm mapping",
                    (unsigned long long)hdr.seq, hdr.drm_fourcc);
             close(dmabuf_fd);
             break;
@@ -896,7 +902,7 @@ static void serve_composer_connection(struct daemon_state *st, int cfd) {
             va_teardown_encoder(&st->ctx);
             if (va_setup_encoder(&st->ctx, st->ctx.codec, st->ctx.profile, hdr.width,
                                  hdr.height) != 0) {
-                logmsg("serve_composer: could not rebuild the encoder context at %dx%d for "
+                logmsg("va_setup_encoder failed at %dx%d for "
                        "frame seq=%llu", hdr.width, hdr.height, (unsigned long long)hdr.seq);
                 close(dmabuf_fd);
                 break;
@@ -936,7 +942,7 @@ static void serve_composer_connection(struct daemon_state *st, int cfd) {
         VAStatus vst = vaCreateSurfaces(st->ctx.dpy, VA_RT_FORMAT_RGB32, hdr.width, hdr.height,
                                         &rgba_surface, 1, attribs, 2);
         if (vst != VA_STATUS_SUCCESS) {
-            logmsg("serve_composer: vaCreateSurfaces(import) failed: %s", vaErrorStr(vst));
+            logmsg("vaCreateSurfaces(import) failed (%s)", vaErrorStr(vst));
             close(dmabuf_fd);
             break;
         }
@@ -957,11 +963,11 @@ static void serve_composer_connection(struct daemon_state *st, int cfd) {
         ack.seq = hdr.seq;
         ssize_t sent = send(cfd, &ack, sizeof(ack), MSG_NOSIGNAL);
         if (sent != (ssize_t)sizeof(ack)) {
-            logmsg("serve_composer: could not send release ack for seq=%llu",
+            logmsg("failed to write release ack for seq=%llu",
                    (unsigned long long)hdr.seq);
             break;
         }
-        if (!ok) logmsg("serve_composer: frame seq=%llu failed to encode, ack sent anyway",
+        if (!ok) logmsg("failed to encode frame seq=%llu",
                         (unsigned long long)hdr.seq);
     }
     close(cfd);
@@ -975,6 +981,295 @@ static int systemd_socket_fd(void) {
     if (atoi(pid_s) != (int)getpid()) return -1;
     if (atoi(fds_s) < 1) return -1;
     return 3;
+}
+
+// bind and listen on socket_path with group AID_GRAPHICS and mode 0660, or return -1
+static int listen_composer_socket(const char *socket_path) {
+    unlink(socket_path);
+    int ufd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (ufd < 0) { logmsg("socket(AF_UNIX) failed (%s)", strerror(errno)); return -1; }
+    struct sockaddr_un uaddr;
+    memset(&uaddr, 0, sizeof(uaddr));
+    uaddr.sun_family = AF_UNIX;
+    strncpy(uaddr.sun_path, socket_path, sizeof(uaddr.sun_path) - 1);
+    if (bind(ufd, (struct sockaddr *)&uaddr, sizeof(uaddr)) != 0) {
+        logmsg("bind(%s) failed (%s)", socket_path, strerror(errno));
+        close(ufd);
+        return -1;
+    }
+    if (geteuid() == 0 && chown(socket_path, (uid_t)-1, AID_GRAPHICS) != 0)
+        logmsg("chown(%s, -1, %d) failed (%s)", socket_path, AID_GRAPHICS, strerror(errno));
+    if (chmod(socket_path, 0660) != 0) {
+        logmsg("chmod(%s, 0660) failed (%s)", socket_path,
+               strerror(errno));
+        close(ufd);
+        unlink(socket_path);
+        return -1;
+    }
+    if (listen(ufd, 4) != 0) {
+        logmsg("listen(unix) failed (%s)", strerror(errno));
+        close(ufd);
+        return -1;
+    }
+    return ufd;
+}
+
+// log a refused connection if REFUSAL_LOG_MS passed since the last refusal line
+static void log_refusal(const char *why) {
+    int64_t now = now_monotonic_ns() / 1000000;
+    if (g_refusal_logged_ms != 0 && now - g_refusal_logged_ms < REFUSAL_LOG_MS) {
+        g_refusals_unlogged++;
+        return;
+    }
+    if (g_refusals_unlogged > 0)
+        logmsg("refused a connection from %s unlogged_refusals=%lu", why,
+               g_refusals_unlogged);
+    else
+        logmsg("refused a connection from %s", why);
+    g_refusal_logged_ms = now;
+    g_refusals_unlogged = 0;
+}
+
+// call accept and return the fd if rhizo_peer_allowed returns 1, or -1
+static int accept_composer(int ufd) {
+    int cfd = accept(ufd, NULL, NULL);
+    if (cfd < 0) return -1;
+    char why[PATH_MAX + 160];
+    if (!rhizo_peer_allowed(cfd, g_peer_uid, g_peer_cgroup, why, sizeof(why))) {
+        log_refusal(why);
+        close(cfd);
+        return -1;
+    }
+    return cfd;
+}
+
+// return whether recv on fd returns 0 or fails with ECONNRESET
+static int hung_up(int fd) {
+    struct timeval tv = {2, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    char b;
+    ssize_t n = recv(fd, &b, 1, 0);
+    return n == 0 || (n < 0 && errno == ECONNRESET);
+}
+
+// print ok or FAIL and what, and return !ok
+static int selftest_case(int ok, const char *what) {
+    printf("%s %s\n", ok ? "ok" : "FAIL", what);
+    return !ok;
+}
+
+// write body to path, or return -1
+static int write_fixture(const char *path, const char *body) {
+    FILE *f = fopen(path, "we");
+    if (!f) return -1;
+    int ok = fputs(body, f) >= 0;
+    return (fclose(f) == 0 && ok) ? 0 : -1;
+}
+
+// test rhizo_peer_read_cgroup_file on fixture files and return the failure count
+static int selftest_cgroup_files(const char *dir) {
+    static char longline[RHIZO_PEER_LINE_MAX + 64];
+    int n = snprintf(longline, sizeof(longline), "1:name=x:/");
+    memset(longline + n, 'a', (size_t)(RHIZO_PEER_LINE_MAX - 1 - n));
+    snprintf(longline + RHIZO_PEER_LINE_MAX - 1, sizeof(longline) - (RHIZO_PEER_LINE_MAX - 1),
+             "0::/rhizo/init\n0::/user.slice/real\n");
+    const struct {
+        const char *body;
+        const char *want;
+        const char *what;
+    } cases[] = {
+        {"0::/rhizo/system/uid_1000/pid_117\n", "/rhizo/system/uid_1000/pid_117",
+         "rhizo_peer_read_cgroup_file(0::/rhizo/system/uid_1000/pid_117\\n) == /rhizo/system/uid_1000/pid_117"},
+        {"1:name=systemd:/user.slice/evil\r0::/rhizo/init\n0::/user.slice/real\n", "/user.slice/real",
+         "rhizo_peer_read_cgroup_file(1:name=systemd:/user.slice/evil\\r0::/rhizo/init\\n0::/user.slice/real\\n) == "
+         "/user.slice/real"},
+        {longline, "/user.slice/real",
+         "rhizo_peer_read_cgroup_file(v1 line of RHIZO_PEER_LINE_MAX - 1 bytes, "
+         "0::/rhizo/init\\n0::/user.slice/real\\n) == /user.slice/real"},
+        {"0::/rhizo/init", NULL, "rhizo_peer_read_cgroup_file(0::/rhizo/init) == -1"},
+    };
+    int fails = 0;
+    char path[PATH_MAX + 32], got[PATH_MAX];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        snprintf(path, sizeof(path), "%s/cgroup-%zu", dir, i);
+        int rc = write_fixture(path, cases[i].body) == 0 ? rhizo_peer_read_cgroup_file(path, got, sizeof(got)) : -2;
+        int ok = cases[i].want ? (rc == 0 && strcmp(got, cases[i].want) == 0) : rc == -1;
+        if (!ok) printf("  rc=%d out='%s'\n", rc, rc == 0 ? got : "");
+        fails += selftest_case(ok, cases[i].what);
+        unlink(path);
+    }
+    return fails;
+}
+
+static int g_probe_errno;
+
+// set errno to g_probe_errno and return -1
+static int failing_probe(int pidfd) {
+    (void)pidfd;
+    errno = g_probe_errno;
+    return -1;
+}
+
+// test rhizo_peer_allowed with rhizo_peer_probe failing with EACCES, EPERM and ESRCH, and return the failure count
+static int selftest_probe(int ufd, const struct sockaddr_un *a, const char *cg) {
+    const struct {
+        int err;
+        const char *cgroup;
+        int want;
+        const char *reason;
+        const char *what;
+    } cases[] = {
+        {EACCES, cg, 1, "", "rhizo_peer_allowed(cg) == 1 with rhizo_peer_probe errno EACCES"},
+        {EACCES, "/rhizo-streamd-selftest-nowhere", 0, "is not below a sandbox root",
+         "rhizo_peer_allowed(/rhizo-streamd-selftest-nowhere) == 0 with rhizo_peer_probe errno EACCES"},
+        {EPERM, cg, 1, "", "rhizo_peer_allowed(cg) == 1 with rhizo_peer_probe errno EPERM"},
+        {ESRCH, cg, 0, "pidfd_send_signal failed with ESRCH",
+         "rhizo_peer_allowed(cg) == 0 with rhizo_peer_probe errno ESRCH"},
+    };
+    int fails = 0;
+    int (*real_probe)(int) = rhizo_peer_probe;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int cl = socket(AF_UNIX, SOCK_STREAM, 0);
+        int cfd = -1, got = -1;
+        char why[PATH_MAX + 160] = "";
+        if (cl >= 0 && connect(cl, (const struct sockaddr *)a, sizeof(*a)) == 0) cfd = accept(ufd, NULL, NULL);
+        if (cfd >= 0) {
+            rhizo_peer_probe = failing_probe;
+            g_probe_errno = cases[i].err;
+            got = rhizo_peer_allowed(cfd, (long)getuid(), cases[i].cgroup, why, sizeof(why));
+            rhizo_peer_probe = real_probe;
+        }
+        int ok = got == cases[i].want && strstr(why, cases[i].reason) != NULL;
+        if (!ok) printf("  admitted=%d why='%s'\n", got, why);
+        fails += selftest_case(ok, cases[i].what);
+        if (cfd >= 0) close(cfd);
+        if (cl >= 0) close(cl);
+    }
+    return fails;
+}
+
+// test rhizo_peer_parse_uid and return the failure count
+static int selftest_uid_parse(void) {
+    const struct {
+        const char *text;
+        long want;
+    } cases[] = {
+        {"0", 0}, {"1000", 1000}, {"4294967294", 4294967294L}, {"", -1}, {"12x", -1}, {"-1", -1}, {"+1", -1},
+        {" 1", -1}, {"4294967295", -1}, {"99999999999999999999", -1},
+    };
+    int bad = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        long v = -1;
+        int rc = rhizo_peer_parse_uid(cases[i].text, &v);
+        long got = rc == 0 ? v : -1;
+        if (got != cases[i].want) {
+            printf("  rhizo_peer_parse_uid('%s') returned %ld, expected %ld\n", cases[i].text, got,
+                   cases[i].want);
+            bad++;
+        }
+    }
+    return selftest_case(bad == 0, "rhizo_peer_parse_uid(cases[i].text) == cases[i].want for each case");
+}
+
+// test rhizo_peer_cgroup_refusal and rhizo_peer_escape, and return the failure count
+static int selftest_refusal_escape(void) {
+    char why[PATH_MAX + 160], text[PATH_MAX], shown[PATH_MAX];
+    rhizo_peer_cgroup_refusal(why, sizeof(why), 1000, 42, "/user.slice/a\nRHIZO_MARKER x\x1b[2J\\\xff");
+    int ok = strcmp(why, "uid 1000 pid 42, cgroup '/user.slice/a\\x0aRHIZO_MARKER x\\x1b[2J\\x5c\\xff' is not below "
+                         "a sandbox root") == 0;
+    if (!ok) {
+        rhizo_peer_escape(why, shown, sizeof(shown));
+        printf("  why='%s'\n", shown);
+    }
+    int fails = selftest_case(ok, "rhizo_peer_cgroup_refusal() writes bytes 0x0a, 0x1b, 0x5c and 0xff of cgroup as "
+                                  "\\xNN");
+    memset(text, '\n', sizeof(text) - 1);
+    text[sizeof(text) - 1] = '\0';
+    rhizo_peer_escape(text, shown, sizeof(shown));
+    size_t n = strlen(shown);
+    fails += selftest_case(n > 0 && n < sizeof(shown) && n % 4 == 0 && strncmp(shown + n - 4, "\\x0a", 4) == 0,
+                           "strlen(rhizo_peer_escape(PATH_MAX - 1 newlines)) % 4 == 0 and ends in \\x0a");
+    return fails;
+}
+
+// run the --selftest-peer cases and return 1 if a case failed
+static int selftest_peer(void) {
+    const char *tmp = getenv("TMPDIR");
+    char dir[PATH_MAX], cg[PATH_MAX];
+    snprintf(dir, sizeof(dir), "%s/rhizo-streamd-peer-XXXXXX", tmp && *tmp ? tmp : "/tmp");
+    if (!mkdtemp(dir)) { printf("FAIL mkdtemp(%s) failed (%s)\n", dir, strerror(errno)); return 1; }
+    struct sockaddr_un a;
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    const char *path = a.sun_path;
+    int fails = 0;
+    if (snprintf(a.sun_path, sizeof(a.sun_path), "%s/streamd", dir) >= (int)sizeof(a.sun_path)) {
+        printf("FAIL %s/streamd is longer than sun_path\n", dir);
+        rmdir(dir);
+        return 1;
+    }
+    if (rhizo_peer_read_cgroup(getpid(), cg, sizeof(cg)) != 0 || cg[0] != '/') {
+        printf("FAIL rhizo_peer_read_cgroup(getpid()) failed\n");
+        rmdir(dir);
+        return 1;
+    }
+    int ufd = listen_composer_socket(path);
+    struct stat sb;
+    fails += selftest_case(ufd >= 0 && stat(path, &sb) == 0 && (sb.st_mode & 07777) == 0660,
+                           "listen_composer_socket() >= 0 && st_mode == 0660");
+    long me = (long)getuid();
+    const struct {
+        long uid;
+        const char *cgroup;
+        int want;
+        const char *what;
+    } cases[] = {
+        {me + 1, cg, 0, "accept_composer() < 0 && hung_up(cl) for g_peer_uid me + 1, g_peer_cgroup cg"},
+        {me, NULL, 0, "accept_composer() < 0 && hung_up(cl) for g_peer_uid me, g_peer_cgroup NULL"},
+        {me, "/rhizo-streamd-selftest-nowhere", 0,
+         "accept_composer() < 0 && hung_up(cl) for g_peer_uid me, g_peer_cgroup /rhizo-streamd-selftest-nowhere"},
+        {me, cg, 1, "accept_composer() >= 0 for g_peer_uid me, g_peer_cgroup cg"},
+    };
+    for (size_t i = 0; ufd >= 0 && i < sizeof(cases) / sizeof(cases[0]); i++) {
+        g_peer_uid = cases[i].uid;
+        g_peer_cgroup = cases[i].cgroup;
+        int cl = socket(AF_UNIX, SOCK_STREAM, 0);
+        struct rhizo_stream_frame_header hdr;
+        memset(&hdr, 0, sizeof(hdr));
+        hdr.magic = RHIZO_STREAM_FRAME_MAGIC;
+        hdr.seq = i + 1;
+        if (cl < 0 || connect(cl, (struct sockaddr *)&a, sizeof(a)) != 0 ||
+            send(cl, &hdr, sizeof(hdr), MSG_NOSIGNAL) != (ssize_t)sizeof(hdr)) {
+            fails += selftest_case(0, cases[i].what);
+            if (cl >= 0) close(cl);
+            continue;
+        }
+        int cfd = accept_composer(ufd);
+        if (cases[i].want) {
+            struct rhizo_stream_frame_header got;
+            int read_ok = cfd >= 0 && recv(cfd, &got, sizeof(got), MSG_WAITALL) == (ssize_t)sizeof(got) &&
+                          got.magic == RHIZO_STREAM_FRAME_MAGIC && got.seq == hdr.seq;
+            fails += selftest_case(cfd >= 0, cases[i].what);
+            fails += selftest_case(read_ok, "recv(cfd) == hdr with RHIZO_STREAM_FRAME_MAGIC and hdr.seq");
+            if (cfd >= 0) close(cfd);
+        } else {
+            if (cfd >= 0) close(cfd);
+            fails += selftest_case(cfd < 0 && hung_up(cl), cases[i].what);
+        }
+        close(cl);
+    }
+    g_peer_uid = AID_SYSTEM;
+    g_peer_cgroup = NULL;
+    if (ufd >= 0) fails += selftest_probe(ufd, &a, cg);
+    if (ufd >= 0) close(ufd);
+    unlink(path);
+    fails += selftest_cgroup_files(dir);
+    fails += selftest_uid_parse();
+    fails += selftest_refusal_escape();
+    rmdir(dir);
+    if (fails) printf("SELFTEST failures=%d\n", fails);
+    else printf("SELFTEST failures=0\n");
+    return fails ? 1 : 0;
 }
 
 // serve composer frames to TCP viewers
@@ -993,13 +1288,13 @@ static int run_daemon(const char *render_node, const char *socket_path, int tcp_
     VAProfile profile;
     enum stream_codec codec = pick_codec(st.ctx.dpy, forced_codec, allow_h264, &profile);
     if (codec == CODEC_NONE) {
-        logmsg("no usable codec (forced=%s allow_h264=%d) -- refusing to start",
-               forced_codec ? forced_codec : "(auto)", allow_h264);
+        logmsg("no usable codec forced=%s allow_h264=%d",
+               forced_codec ? forced_codec : "auto", allow_h264);
         return 1;
     }
     logmsg("codec=%s profile=%d", codec_name(codec), (int)profile);
     if (codec != CODEC_VP9) {
-        logmsg("codec=%s was selected but only the VP9 encode path is wired -- refusing to start",
+        logmsg("no encode path for codec=%s",
                codec_name(codec));
         return 1;
     }
@@ -1007,30 +1302,21 @@ static int run_daemon(const char *render_node, const char *socket_path, int tcp_
 
     int ufd = systemd_socket_fd();
     if (ufd >= 0) {
-        logmsg("using the socket-activated fd from systemd (LISTEN_FDS)");
+        logmsg("listening on LISTEN_FDS fd 3");
     } else {
         if (!socket_path) {
-            logmsg("no --socket given and no systemd socket activation (LISTEN_FDS unset) -- "
-                   "nothing to listen on");
+            logmsg("no --socket and no LISTEN_FDS");
             return 1;
         }
-        unlink(socket_path);
-        ufd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (ufd < 0) { logmsg("socket(AF_UNIX) failed: %s", strerror(errno)); return 1; }
-        struct sockaddr_un uaddr;
-        memset(&uaddr, 0, sizeof(uaddr));
-        uaddr.sun_family = AF_UNIX;
-        strncpy(uaddr.sun_path, socket_path, sizeof(uaddr.sun_path) - 1);
-        if (bind(ufd, (struct sockaddr *)&uaddr, sizeof(uaddr)) != 0) {
-            logmsg("bind(%s) failed: %s", socket_path, strerror(errno));
-            return 1;
-        }
-        if (listen(ufd, 4) != 0) { logmsg("listen(unix) failed: %s", strerror(errno)); return 1; }
-        if (chmod(socket_path, 0666) != 0)
-            logmsg("chmod(%s, 0666) failed: %s", socket_path,
-                   strerror(errno));
-        logmsg("listening for the composer's export connection on %s", socket_path);
+        ufd = listen_composer_socket(socket_path);
+        if (ufd < 0) return 1;
+        logmsg("listening on %s", socket_path);
     }
+    if (g_peer_uid != AID_SYSTEM || g_peer_cgroup != NULL)
+        logmsg("--peer-uid %ld --peer-cgroup %s", g_peer_uid,
+               g_peer_cgroup != NULL ? g_peer_cgroup : "unset");
+    else
+        logmsg("peer uid=%d cgroup below /rhizo[-N] or androidd[@N].service/android", AID_SYSTEM);
 
     int tfd = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
@@ -1039,36 +1325,38 @@ static int run_daemon(const char *render_node, const char *socket_path, int tcp_
     memset(&taddr, 0, sizeof(taddr));
     taddr.sin_family = AF_INET;
     if (inet_pton(AF_INET, bind_addr, &taddr.sin_addr) != 1) {
-        logmsg("bad --bind address: %s", bind_addr);
+        logmsg("inet_pton failed for --bind %s", bind_addr);
         return 1;
     }
     taddr.sin_port = htons((uint16_t)tcp_port);
     if (bind(tfd, (struct sockaddr *)&taddr, sizeof(taddr)) != 0 || listen(tfd, MAX_TCP_CLIENTS) != 0) {
-        logmsg("TCP listen on port %d failed: %s", tcp_port, strerror(errno));
+        logmsg("TCP listen on port %d failed (%s)", tcp_port, strerror(errno));
         return 1;
     }
-    logmsg("serving the encoded stream on %s:%d", bind_addr, tcp_port);
+    logmsg("listening on %s:%d", bind_addr, tcp_port);
     st.listen_fd = tfd;
     pthread_t accept_thread;
     pthread_create(&accept_thread, NULL, tcp_accept_thread, &st);
 
     for (;;) {
-        int cfd = accept(ufd, NULL, NULL);
+        int cfd = accept_composer(ufd);
         if (cfd < 0) continue;
-        logmsg("composer connected, streaming");
+        logmsg("composer connected");
         serve_composer_connection(&st, cfd);
-        logmsg("composer connection closed, waiting for the next one");
+        logmsg("composer connection closed");
     }
     return 0;
 }
 
 static void usage(void) {
     fprintf(stderr,
-        "usage: rhizo-streamd [--socket PATH] --port N [--codec vp9|av1|h264]\n"
-        "                     [--allow-h264] [--render-node PATH] [--probe-socket PATH]\n"
-        "                     [--html PATH] [--bind ADDR] [--verbose]\n"
-        "       rhizo-streamd --selftest-encode OUT.ivf [--codec vp9|av1] [--render-node PATH]\n"
-        "                     [--frames N] [--size WxH]\n");
+        "rhizo-streamd [--socket PATH] --port N [--codec vp9|av1|h264]\n"
+        "    [--allow-h264] [--render-node PATH] [--probe-socket PATH]\n"
+        "    [--html PATH] [--bind ADDR] [--peer-uid UID] [--peer-cgroup PATH]\n"
+        "    [--verbose]\n"
+        "rhizo-streamd --selftest-encode OUT.ivf [--codec vp9|av1] [--render-node PATH]\n"
+        "    [--frames N] [--size WxH]\n"
+        "rhizo-streamd --selftest-peer\n");
 }
 
 // parse a positive integer argument
@@ -1077,7 +1365,7 @@ static int parse_positive(const char *what, const char *text, int *out) {
     errno = 0;
     long v = strtol(text, &end, 10);
     if (errno != 0 || !end || *end != '\0' || v <= 0 || v > 100000) {
-        logmsg("bad %s value: %s", what, text);
+        logmsg("failed to parse %s %s", what, text);
         return -1;
     }
     *out = (int)v;
@@ -1087,10 +1375,10 @@ static int parse_positive(const char *what, const char *text, int *out) {
 // parse a WxH size argument
 static int parse_size(const char *text, int *w, int *h) {
     const char *x = strchr(text, 'x');
-    if (!x) { logmsg("bad --size value: %s", text); return -1; }
+    if (!x) { logmsg("failed to parse --size %s", text); return -1; }
     char head[32];
     size_t n = (size_t)(x - text);
-    if (n == 0 || n >= sizeof(head)) { logmsg("bad --size value: %s", text); return -1; }
+    if (n == 0 || n >= sizeof(head)) { logmsg("failed to parse --size %s", text); return -1; }
     memcpy(head, text, n);
     head[n] = '\0';
     if (parse_positive("--size width", head, w) != 0) return -1;
@@ -1135,6 +1423,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--html") && i + 1 < argc) html_path = argv[++i];
         else if (!strcmp(argv[i], "--bind") && i + 1 < argc) bind_addr = argv[++i];
         else if (!strcmp(argv[i], "--selftest-encode") && i + 1 < argc) selftest_out = argv[++i];
+        else if (!strcmp(argv[i], "--selftest-peer")) return selftest_peer();
+        else if (!strcmp(argv[i], "--peer-uid") && i + 1 < argc) {
+            if (rhizo_peer_parse_uid(argv[++i], &g_peer_uid) != 0) {
+                logmsg("failed to parse --peer-uid '%s'", argv[i]);
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--peer-cgroup") && i + 1 < argc) g_peer_cgroup = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) {
             if (parse_positive("--frames", argv[++i], &selftest_frames) != 0) return 2;
         }

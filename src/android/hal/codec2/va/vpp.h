@@ -33,7 +33,7 @@ bool IsRgbFourcc(uint32_t drm_fourcc);
 // return the X8 twin of an RGB format with alpha
 uint32_t OpaqueDrmFormat(uint32_t drm_fourcc);
 
-// a DRM PRIME 2 surface import, destroyed with the holder
+// a DRM PRIME 2 surface import, destroyed by ~ImportedSurface
 class ImportedSurface {
  public:
   ImportedSurface() = default;
@@ -41,7 +41,7 @@ class ImportedSurface {
   ImportedSurface(const ImportedSurface&) = delete;
   ImportedSurface& operator=(const ImportedSurface&) = delete;
 
-  // import a dmabuf, as its X8 twin when opaque
+  // import a dmabuf, as the X8 twin format when opaque
   Status Import(VADisplay dpy, const DmabufImage& img, bool opaque = false);
   VASurfaceID id() const { return id_; }
   uint32_t va_fourcc() const { return va_fourcc_; }
@@ -67,12 +67,12 @@ uint8_t VppMatrixCode(Matrix m);
 // check the driver's VPP YUV-to-RGB against the CPU
 bool VppYuvToRgb(VADisplay dpy, Matrix m, bool full_range, bool ten_bit);
 bool VppRgbToYuv(VADisplay dpy, Matrix m, bool full_range);
-// return whether VPP draws BT.709 limited NV12 to RGBA
+// return whether the NV12 -> RGBA BT.709 VA_SOURCE_RANGE_REDUCED self-check passes
 bool VppUsable(VADisplay dpy);
 
 VAImageFormat RgbImageFormat(uint32_t va_fourcc);
 
-// a VPP context created on first use
+// a VPP context, created in Run when context_ is VA_INVALID_ID
 class Vpp {
  public:
   ~Vpp();

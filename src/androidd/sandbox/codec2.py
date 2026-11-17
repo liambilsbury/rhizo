@@ -1,4 +1,4 @@
-"""probe, arm and stage the hardware Codec2 store"""
+"""Codec2 store probe, plan and staging"""
 import hashlib
 import itertools
 import json
@@ -96,7 +96,7 @@ AV1_LEVELS = ((5529600, 147456, 1500, 2048), (10454400, 278784, 3000, 2816), (24
 
 
 def refusal(policy, release=None, prepared=None, exists=os.path.exists, payload=None, root=None):
-    """return why this launch declares no Codec2 store, or None"""
+    """return the Codec2 refusal reason, or None"""
     release = core.RHIZO_RELEASE if release is None else release
     prepared = core.prepared_key() if prepared is None else prepared
     payload = payload or beside()
@@ -129,7 +129,7 @@ def _even_up(n):
 
 
 def _component(raw):
-    """check a probe component against the contract"""
+    """return the checked component and None, or None and the rejection reason"""
     if not isinstance(raw, dict):
         return None, "not an object"
     name = raw.get("name")
@@ -137,45 +137,45 @@ def _component(raw):
         return None, "unknown name %r" % (name if isinstance(name, str) else type(name).__name__)
     mime, kind, codec = CODECS[name]
     if raw.get("mime") != mime or raw.get("kind") != kind:
-        return None, f"{name}: mime/kind are not {mime}/{kind}"
+        return None, f"{name} mime/kind is not {mime}/{kind}"
     profiles = raw.get("va_profiles")
     if (not isinstance(profiles, list) or not 1 <= len(profiles) <= 32
             or not all(isinstance(p, str) and VA_PROFILE.fullmatch(p) for p in profiles)):
-        return None, f"{name}: va_profiles is not a list of VAProfile names"
+        return None, f"{name} va_profiles is not a list of 1-32 VA_PROFILE strings"
     depths = raw.get("bit_depths")
     if (not isinstance(depths, list) or not depths
             or not all(type(d) is int and d in BIT_DEPTHS for d in depths)):
-        return None, f"{name}: bit_depths is not a list of {BIT_DEPTHS}"
+        return None, f"{name} bit_depths is not a list of {BIT_DEPTHS}"
     dims = [_int(raw.get(k), 1, MAX_DIMENSION) for k in ("min_width", "min_height", "max_width", "max_height")]
     if None in dims:
-        return None, f"{name}: a size is not an integer in 1-{MAX_DIMENSION}"
+        return None, f"{name} size is not an integer in 1-{MAX_DIMENSION}"
     min_w, min_h = max(2, _even_up(dims[0])), max(2, _even_up(dims[1]))
     max_w, max_h = dims[2] & ~1, dims[3] & ~1
     if min_w > max_w or min_h > max_h:
-        return None, f"{name}: min size {dims[0]}x{dims[1]} exceeds max {dims[2]}x{dims[3]}"
+        return None, f"{name} min size {dims[0]}x{dims[1]} exceeds max {dims[2]}x{dims[3]}"
     # CodecInfoTest#testResolutionSupport requires equal width and height ranges
     min_w = min_h = max(min_w, min_h)
     max_w = max_h = min(max_w, max_h)
     if min_w > max_w:
-        return None, f"{name}: no size within {dims[0]}x{dims[1]}-{dims[2]}x{dims[3]} both ways round"
+        return None, f"{name} has no square size within {dims[0]}x{dims[1]}-{dims[2]}x{dims[3]}"
     instances = _int(raw.get("max_instances"), 1, MAX_INSTANCES)
     if instances is None:
-        return None, f"{name}: max_instances is not an integer in 1-{MAX_INSTANCES}"
+        return None, f"{name} max_instances is not an integer in 1-{MAX_INSTANCES}"
     out = {"name": name, "mime": mime, "kind": kind, "va_profiles": list(profiles), "bit_depths": sorted(set(depths)),
            "min_width": min_w, "min_height": min_h, "max_width": max_w, "max_height": max_h,
            "max_instances": instances}
     features = raw.get("features", [])
     if not isinstance(features, list):
-        return None, f"{name}: features is not a list"
+        return None, f"{name} features is not a list"
     out["features"] = [f for f in FEATURES[kind] if f in features]
     if kind == "encoder":
         controls = raw.get("rate_controls")
         if not isinstance(controls, list):
-            return None, f"{name}: rate_controls is not a list"
+            return None, f"{name} rate_controls is not a list"
         offered = {RATE_CONTROLS.get(c.lower()) for c in controls if isinstance(c, str)}
         modes = [m for m in ENCODER_MODES[codec] if m in offered]
         if not modes:
-            return None, f"{name}: no rate control the framework names ({controls!r})"
+            return None, f"{name} has no rate control in ENCODER_MODES ({controls!r})"
         out["rate_controls"] = [m.lower() for m in modes]
     return out, None
 
@@ -198,7 +198,7 @@ def parse_probe(text):
         if comp is None:
             rejected.append(why)
         elif comp["name"] in seen:
-            rejected.append(f"{comp['name']}: listed twice")
+            rejected.append(f"{comp['name']} is listed twice")
         else:
             seen.add(comp["name"])
             kept.append(comp)
@@ -209,7 +209,7 @@ def parse_probe(text):
 
 
 def cover_encoders(components):
-    """clamp each encoder's sizes and limits to its codec's decoder"""
+    """clamp the sizes and limits of each encoder to a decoder of an equal codec, or to SW_DECODERS[codec]"""
     out, refused = [], []
     for c in components:
         _mime, kind, codec = CODECS[c["name"]]
@@ -226,7 +226,7 @@ def cover_encoders(components):
             low, high, by = max(c["min_width"], sw["min"]), min(c["max_width"], sw["max"], side) & ~1, sw["name"]
             limits = {"blocks_per_second": sw["blocks_per_second"], "bitrate": sw["bitrate"]}
         if low > high:
-            refused.append(f"{c['name']}: no size it encodes ({c['min_width']}-{c['max_width']}) is one {by} decodes")
+            refused.append(f"{c['name']} has no size in {c['min_width']}-{c['max_width']} that {by} decodes")
             continue
         c = dict(c, min_width=low, min_height=low, max_width=high, max_height=high, decoded_by=by)
         if limits:
@@ -252,7 +252,7 @@ def _measurement(raw, components):
 
 
 def attach_measurements(components, measurements):
-    """attach each component's checked measurements, smallest size first"""
+    """set the measured list of each component, smallest size first, and return the measurement count"""
     for c in components:
         c.pop("measured", None)
     results = measurements.get("results") if isinstance(measurements, dict) else None
@@ -284,17 +284,17 @@ def framework_point(w, h, rate, block):
 
 
 def point_covers(a, b):
-    """return true when point a covers point b"""
+    """return whether a >= b in macroblocks, frame rate and macroblocks/s"""
     return a[0] >= b[0] and a[1] >= b[1] and a[2] >= b[2]
 
 
 def point_key(w, h):
-    """return the key MediaCodecsXmlParser files a performance-point Limit under"""
+    """return the MediaCodecsXmlParser key of a performance-point Limit"""
     return f"performance-point-{w}x{h}-range"
 
 
 def native_order_is_java(points, block):
-    """return true when the native list's order equals Java's"""
+    """return true when the native point order equals the Java point order"""
     rev = sorted(points, key=lambda p: point_key(p[0], p[1]), reverse=True)
     java = sorted(points, key=lambda p: tuple(-v for v in framework_point(p[0], p[1], p[2], block)))
     return rev == java
@@ -333,9 +333,7 @@ def capacity_conf(components):
     rows = [(name, rate) for name, rate in rows if rate]
     if not rows:
         return None
-    return ("# Written by Rhizo's launcher at each launch: each hardware codec's throughput, the luma samples per\n"
-            "# second of the largest performance point media_codecs.xml declares for it (its size in 16x16 blocks),\n"
-            "# the capacity of the store's throughput resource. A codec not listed declares no point.\n"
+    return ("# codec name and luma samples/s of the largest media_codecs.xml performance point, rounded up to 16x16 blocks\n"
             + "".join(f"{name} {rate}\n" for name, rate in rows))
 
 
@@ -346,7 +344,7 @@ def measured_range(fps):
 
 
 def _blocks(comp, codec):
-    """return the probe's largest size in the codec's blocks"""
+    """return the block count of comp max_width x max_height"""
     b = BLOCK[codec]
     return -(-comp["max_width"] // b) * -(-comp["max_height"] // b)
 
@@ -413,13 +411,7 @@ def codec_element(comp):
 
 
 XML_HEAD = ('<?xml version="1.0" encoding="utf-8"?>\n'
-            "<!-- Written by Rhizo's launcher at each launch from rhizo-codec2-probe: the hardware codecs this\n"
-            "     host's GPU driver offers through VA-API. Sizes are the driver's; block counts and rates are the\n"
-            "     largest size at 30 fps and bitrates the lowest level holding it, since VA reports no throughput.\n"
-            "     Performance points are what one session sustained on this machine, measured by the probe\n"
-            "     (rhizo-codec2-probe in its measure mode) and cached for this driver, device, payload and kernel: at\n"
-            "     each measured size the largest common frame rate within 0.9 of the measured one. Profiles, levels\n"
-            "     and colour formats come from each component. -->\n")
+            "<!-- VA-API hardware codecs from rhizo-codec2-probe -->\n")
 
 
 def media_codecs_xml(components):
@@ -434,10 +426,7 @@ def media_codecs_xml(components):
 
 
 PERF_HEAD = ('<?xml version="1.0" encoding="utf-8"?>\n'
-             "<!-- Written by Rhizo's launcher at each launch: the frame rates one session of each hardware codec\n"
-             "     sustained on this machine, measured by rhizo-codec2-probe in its measure mode and cached for this\n"
-             "     driver, device, payload and kernel; each range is 0.7 to 1.3 of the measured rate. Nothing\n"
-             "     measured, nothing claimed. -->\n")
+             "<!-- measured frame rates from rhizo-codec2-probe, ranges 0.7 to 1.3 of each measured rate -->\n")
 
 
 def performance_xml(components=()):
@@ -460,11 +449,11 @@ def performance_xml(components=()):
 
 
 def xml_problems(text, components):
-    """return why a generated media_codecs.xml fails the framework's parser"""
+    """return the MediaCodecsXmlParser problems of a generated media_codecs.xml"""
     try:
         root = ElementTree.fromstring(text)
     except ElementTree.ParseError as e:
-        return [f"not well-formed: {e}"]
+        return [f"failed to parse ({e})"]
     bad = []
     if root.tag != "MediaCodecs":
         bad.append(f"root is {root.tag}")
@@ -492,7 +481,7 @@ def xml_problems(text, components):
                             and int(w) & (int(w) - 1) == 0 and int(h) & (int(h) - 1) == 0):
                         bad.append(f"{codec.get('name')} {limit.get('name')} {limit.get('value')} is not a power of two")
     if sorted(names) != sorted(c["name"] for c in components) or len(set(names)) != len(names):
-        bad.append(f"names {names} are not the components'")
+        bad.append(f"MediaCodec {names} != component {sorted(c['name'] for c in components)}")
     return bad
 
 
@@ -513,7 +502,7 @@ def probe_command(fd, payload=None, gsi=None, gpu_dir=None, drivers=None, libcxx
 
 
 def _driver_dir(tree):
-    """return a new directory of the tree's VA driver links"""
+    """create a directory of the VA driver links of tree and return the directory"""
     d = tempfile.mkdtemp(prefix="rhizo-codec2-probe-", dir=PROBE_SCRATCH)
     os.chmod(d, 0o755)
     for name, _text, src in core.va_driver_links(tree):
@@ -522,7 +511,7 @@ def _driver_dir(tree):
 
 
 def _libcxx_dir(gsi):
-    """return a new directory holding the GSI's libc++.so"""
+    """create a directory with the GSI libc++.so and return the directory"""
     d = tempfile.mkdtemp(prefix="rhizo-codec2-libcxx-", dir=PROBE_SCRATCH)
     os.chmod(d, 0o755)
     os.symlink(f"{gsi}/lib64/libc++.so", os.path.join(d, "libc++.so"))
@@ -538,7 +527,7 @@ def _remove_driver_dir(d):
 
 def run_probe(render_node, payload=None, gsi=None, gpu_dir=None, run=subprocess.run, timeout=PROBE_TIMEOUT_S,
               extra=()):
-    """run the probe as nobody and return its stdout"""
+    """run the probe as nobody and return the probe stdout and a refusal reason"""
     payload = payload or beside()
     gsi = gsi or core.GSI
     gpu_dir = gpu_dir or core.gpu_driver_dir()
@@ -550,7 +539,7 @@ def run_probe(render_node, payload=None, gsi=None, gpu_dir=None, run=subprocess.
     try:
         fd = os.open(render_node, os.O_RDWR | os.O_CLOEXEC)
     except OSError as e:
-        kmsg(f"codec2 probe: cannot open {render_node}: {e}")
+        kmsg(f"codec2 probe failed to open {render_node} ({e})")
         return None, "render-node-unopenable"
     drivers = libcxx = None
     try:
@@ -562,7 +551,7 @@ def run_probe(render_node, payload=None, gsi=None, gpu_dir=None, run=subprocess.
     except subprocess.TimeoutExpired:
         return None, "probe-timeout"
     except OSError as e:
-        kmsg(f"codec2 probe: could not run: {e!r}")
+        kmsg(f"codec2 probe failed ({e!r})")
         return None, "probe-failed"
     finally:
         os.close(fd)
@@ -570,7 +559,7 @@ def run_probe(render_node, payload=None, gsi=None, gpu_dir=None, run=subprocess.
             if d:
                 _remove_driver_dir(d)
     for line in (r.stderr or "").splitlines()[:20]:
-        kmsg(f"codec2 probe: {line[:300]}")
+        kmsg(f"codec2 probe stderr {line[:300]}")
     if r.returncode != 0:
         return None, f"probe-exit-{r.returncode}"
     return r.stdout, None
@@ -583,13 +572,13 @@ def _log_probe(text):
         with open(PROBE_LOG, "w") as f:
             f.write(text[:PROBE_OUTPUT_MAX + 1])
     except OSError as e:
-        kmsg(f"codec2 probe: could not keep its output at {PROBE_LOG}: {e}")
+        kmsg(f"failed to write {PROBE_LOG} ({e})")
     compact = " ".join(text.split())
-    kmsg(f"codec2 probe output ({len(text)} bytes, {PROBE_LOG}): {compact[:700]}")
+    kmsg(f"codec2 probe output bytes={len(text)} path={PROBE_LOG} {compact[:700]}")
 
 
 def decide(policy, render_node, run=subprocess.run, **refusal_args):
-    """return this launch's checked and measured components"""
+    """return the checked and measured components and a refusal reason"""
     why = refusal(policy, **refusal_args)
     if why:
         return None, why
@@ -605,13 +594,13 @@ def decide(policy, render_node, run=subprocess.run, **refusal_args):
             measurements = performance(text, render_node, payload=refusal_args.get("payload"), run=run)
             n = attach_measurements(components, measurements)
             if not xml_problems(media_codecs_xml(components), components):
-                kmsg(f"codec2 performance: {n} measured sizes claimed")
+                kmsg(f"codec2 performance measured_sizes={n}")
             else:
                 attach_measurements(components, None)
-                kmsg("codec2 performance: the measured file would not check clean: nothing claimed")
+                kmsg("codec2 performance xml_problems() is not empty for the measured components")
         except Exception as e:  # noqa: BLE001
             attach_measurements(components, None)
-            kmsg(f"codec2 performance: nothing claimed: {e!r}")
+            kmsg(f"codec2 performance failed ({e!r})")
     return components, why
 
 
@@ -642,7 +631,7 @@ def _pci_id(render_node):
 
 
 def measure_clips(payload=None):
-    """return the VP9/AV1 clip directory and its manifest's sha256"""
+    """return the VP9/AV1 clip directory and the clips.tsv sha256"""
     d = os.path.join(payload or beside(), "gfx_hal", MEASURE_CLIPS)
     try:
         with open(os.path.join(d, "clips.tsv"), "rb") as f:
@@ -654,14 +643,14 @@ def measure_clips(payload=None):
             continue
         fields = line.split("\t")
         if len(fields) != 7 or not re.fullmatch(r"[a-z0-9]+-[0-9]+x[0-9]+\.ivf", fields[0]):
-            return None, f"a clips.tsv line is not a clip: {line[:60]!r}"
+            return None, f"clips.tsv line {line[:60]!r} is not 7 fields with a NAME-WxH.ivf name"
         if _sha256(os.path.join(d, fields[0])) != fields[6]:
-            return None, f"{fields[0]} is not the clip clips.tsv names"
+            return None, f"{fields[0]} sha256 does not match clips.tsv"
     return d, hashlib.sha256(text).hexdigest()
 
 
 def measure_key(driver, render_node, payload=None, gpu_dir=None):
-    """return the cache key for this launch's measurement"""
+    """return the measurement cache key"""
     payload = payload or beside()
     lib = os.path.join(payload, gpu_dir or core.gpu_driver_dir(), "lib")
     clips, digest = measure_clips(payload)
@@ -692,11 +681,11 @@ def _write_cache(doc, path=None):
         os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     except OSError as e:
-        kmsg(f"codec2 performance: could not keep the measurement at {path}: {e}")
+        kmsg(f"failed to write {path} ({e})")
 
 
 def performance(text, render_node, payload=None, run=subprocess.run, cache=None, now=time.time):
-    """return the cached or freshly taken measurements, or None"""
+    """return the cached or probed measurements, or None"""
     doc = json.loads(text)
     driver = doc.get("driver") if isinstance(doc, dict) else None
     if not isinstance(driver, str):
@@ -705,14 +694,14 @@ def performance(text, render_node, payload=None, run=subprocess.run, cache=None,
     cached = _read_cache(cache)
     if cached and cached.get("key") == key:
         if cached.get("failed"):
-            kmsg(f"codec2 performance: none claimed: the measurement for this key failed ({cached['failed']})")
+            kmsg(f"codec2 performance cached failure ({cached['failed']})")
             return None
-        kmsg("codec2 performance: measured before for this driver, device, payload and kernel")
+        kmsg("codec2 performance cache hit")
         return cached.get("measurements")
     t0 = now()
     clips, clips_why = measure_clips(payload)
     if not clips:
-        kmsg(f"codec2 performance: VP9 and AV1 are not measured: {clips_why}")
+        kmsg(f"codec2 performance skipped VP9 and AV1 ({clips_why})")
     out, why = run_probe(render_node, payload=payload, run=run, timeout=MEASURE_TIMEOUT_S,
                          extra=("--measure", "--measure-budget-ms", str(MEASURE_BUDGET_MS))
                          + (("--measure-clips", clips) if clips else ()))
@@ -727,15 +716,15 @@ def performance(text, render_node, payload=None, run=subprocess.run, cache=None,
         if not isinstance(measurements, dict):
             why = "no-measurements"
     if why:
-        kmsg(f"codec2 performance: the measurement failed after {ms} ms ({why}): nothing claimed")
+        kmsg(f"codec2 performance measurement failed after {ms} ms ({why})")
         _write_cache({"key": key, "failed": why, "ms": ms, "at": int(now())}, cache)
         return None
-    kmsg(f"codec2 performance: measured in {ms} ms (probe {measurements.get('elapsed_ms')} ms, "
-         f"{'complete' if measurements.get('complete') else 'budget reached'}, "
-         f"{len(measurements.get('results') or [])} results)")
+    kmsg(f"codec2 performance ms={ms} probe_ms={measurements.get('elapsed_ms')} "
+         f"complete={'1' if measurements.get('complete') else '0'} "
+         f"results={len(measurements.get('results') or [])}")
     steps = measurements.get("steps")
     if isinstance(steps, dict) and steps:
-        kmsg("codec2 performance: where it went: " + ", ".join(
+        kmsg("codec2 performance steps " + ", ".join(
             f"{k} {v} ms" for k, v in sorted(steps.items(), key=lambda kv: -kv[1] if isinstance(kv[1], (int, float))
                                              else 0)))
     _write_cache({"key": key, "measurements": measurements, "ms": ms, "at": int(now())}, cache)
@@ -743,28 +732,28 @@ def performance(text, render_node, payload=None, run=subprocess.run, cache=None,
 
 
 def checked_components(text):
-    """return a probe's components when their media_codecs.xml checks clean"""
+    """return the probe components when xml_problems() is empty"""
     try:
         parsed, why = parse_probe(text)
         if why:
             return None, f"probe-{why}"
         components, rejected = parsed
         for reason in rejected:
-            kmsg(f"codec2 probe: component refused: {reason}")
+            kmsg(f"codec2 probe rejected component {reason}")
         if not components:
             return None, "no-components"
         problems = xml_problems(media_codecs_xml(components), components)
     except Exception as e:  # noqa: BLE001
-        kmsg(f"codec2 probe: its output broke the checker: {e!r}")
+        kmsg(f"checked_components failed ({e!r})")
         return None, "probe-output-unhandled"
     if problems:
-        kmsg(f"codec2: the generated media_codecs.xml would not parse: {problems}")
+        kmsg(f"failed to parse the generated media_codecs.xml ({problems})")
         return None, "xml-invalid"
     return components, None
 
 
 def plan(policy=None, run=subprocess.run):
-    """record whether this launch declares the hardware Codec2 store"""
+    """set the Codec2 components and log RHIZO_MARKER codec2"""
     policy = policy or capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID)
     render = None
     if policy.allows("devices.dri") and not core.software_rendering():
@@ -779,14 +768,14 @@ def plan(policy=None, run=subprocess.run):
 
 
 def _write(path, text):
-    """write text to path, making its directory"""
+    """create the parent directory of path and write text to path"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(text)
 
 
 def _unlink(path):
-    """remove path if it exists"""
+    """remove path if path exists"""
     try:
         os.unlink(path)
     except FileNotFoundError:
@@ -801,7 +790,7 @@ def rc_text():
 
 
 def staging_gap(root):
-    """return what the armed store lacks on this root"""
+    """return the first unstaged Codec2 store file under root, or None"""
     if not os.path.exists(f"{root}{STORE_EXEC}"):
         return "store-not-staged"
     if not all(os.path.isfile(f"{root}/vendor/lib64/{lib}") for lib in VA_LIBS):
@@ -813,7 +802,7 @@ def staging_gap(root):
 
 
 def apply_shape(rewrite_manifest=False, root=None, payload=None):
-    """stage or remove this launch's Codec2 store files"""
+    """stage or remove the Codec2 store files"""
     root = root or RUN_ROOT
     payload = payload or beside()
     components = core.codec2_components()
@@ -847,7 +836,7 @@ def apply_shape(rewrite_manifest=False, root=None, payload=None):
 
 
 def disarm(reason, root=None, payload=None):
-    """declare no store when its files could not be staged"""
+    """clear the Codec2 components and remove the store files"""
     core.set_codec2_components(())
     kmsg(f"RHIZO_MARKER codec2_refused={reason}")
     apply_shape(rewrite_manifest=True, root=root, payload=payload)

@@ -39,14 +39,14 @@ std::map<std::string, uint64_t> ParseCapacity(const std::string& text) {
     std::string name, rate, extra;
     if (!(fields >> name)) continue;
     if (!(fields >> rate) || (fields >> extra)) {
-      klogf("capacity: malformed line for %s, left out", name.c_str());
+      klogf("failed to parse the capacity line for %s", name.c_str());
       continue;
     }
     char* end = nullptr;
     errno = 0;
     unsigned long long v = strtoull(rate.c_str(), &end, 10);
     if (end == rate.c_str() || *end != '\0' || v == 0 || rate[0] == '-' || errno == ERANGE) {
-      klogf("capacity: %s has no usable rate (%s), left out", name.c_str(), rate.c_str());
+      klogf("%s has no valid capacity rate (%s)", name.c_str(), rate.c_str());
       continue;
     }
     out[name] = v;

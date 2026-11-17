@@ -1,5 +1,5 @@
 [Unit]
-Description=Rhizo audio host
+Description=Rhizo PipeWire audio relay
 After=androidd.service
 ConditionPathExists=/run/rhizo-desktop/session.env
 PartOf=androidd.service

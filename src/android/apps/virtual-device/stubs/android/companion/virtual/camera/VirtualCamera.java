@@ -4,10 +4,10 @@ import java.io.Closeable;
 
 // compile-time stub of VirtualCamera
 public final class VirtualCamera implements Closeable {
-    // forbid direct construction
+    // private constructor
     private VirtualCamera() {}
 
-    // return null in place of a camera id
+    // return null
     public String getId() { return null; }
     @Override public void close() {}
 }

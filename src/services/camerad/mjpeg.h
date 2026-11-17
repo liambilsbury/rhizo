@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERAD_MJPEG_H
 #define RHIZO_CAMERAD_MJPEG_H
 
-// decode baseline MJPEG camera frames to I420
+// baseline MJPEG to I420 decoder
 
 #include <stddef.h>
 #include <stdint.h>
@@ -12,7 +12,7 @@ extern "C" {
 
 struct mjpeg_decoder;
 
-// return a decoder, or NULL when out of memory
+// allocate a decoder, or return NULL
 struct mjpeg_decoder *mjpeg_decoder_new(void);
 
 void mjpeg_decoder_free(struct mjpeg_decoder *d);

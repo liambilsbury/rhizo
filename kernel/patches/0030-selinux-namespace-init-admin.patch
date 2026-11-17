@@ -1,0 +1,32 @@
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index f7ef96a31..b9978be54 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -8184,10 +8184,10 @@ static int selinux_lsm_setattr(u64 attr, void *value, size_t size)
+ 		/*
+ 		 * TODO: Figure out how we want to control unsharing
+ 		 * of the SELinux namespace. For now, require CAP_SYS_ADMIN
+-		 * and check SELinux unshare_selinuxns in this and all ancestor
+-		 * namespaces.
++		 * in the initial user namespace and check SELinux
++		 * unshare_selinuxns in this and all ancestor namespaces.
+ 		 */
+-		if (!ns_capable(current_user_ns(), CAP_SYS_ADMIN)) {
++		if (!capable(CAP_SYS_ADMIN)) {
+ 			error = -EPERM;
+ 			break;
+ 		}
+diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
+index c6552e58f..c5d3557c4 100644
+--- a/security/selinux/selinuxfs.c
++++ b/security/selinux/selinuxfs.c
+@@ -2284,9 +2284,6 @@ static struct file_system_type sel_fs_type = {
+ 	.name		= "selinuxfs",
+ 	.init_fs_context = sel_init_fs_context,
+ 	.kill_sb	= sel_kill_sb,
+-#ifdef CONFIG_SECURITY_SELINUX_NS
+-	.fs_flags	= FS_USERNS_MOUNT,
+-#endif
+ };
+ 
+ struct path selinux_null __ro_after_init;

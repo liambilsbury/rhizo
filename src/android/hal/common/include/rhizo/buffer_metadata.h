@@ -38,7 +38,8 @@ constexpr int kPlaneInts = 3;
 constexpr int kPlaneFdIndex = 0;
 constexpr int kPlaneOffset = 1;
 constexpr int kPlaneStride = 2;
-static_assert(kPlaneTable + kMaxPlanes * kPlaneInts == kMetaFdIndex, "the plane table ends before the meta fd");
+static_assert(kPlaneTable + kMaxPlanes * kPlaneInts == kMetaFdIndex,
+              "kPlaneTable + kMaxPlanes * kPlaneInts == kMetaFdIndex");
 
 constexpr int kNameLenIndex = kNumInts;
 
@@ -56,7 +57,8 @@ struct SharedMetadata {
   int32_t dataspace;
   int32_t reserved;
 };
-static_assert(sizeof(SharedMetadata) == 16 && offsetof(SharedMetadata, dataspace) == 8, "Mesa reads offset 8");
+static_assert(sizeof(SharedMetadata) == 16 && offsetof(SharedMetadata, dataspace) == 8,
+              "sizeof(SharedMetadata) == 16 && offsetof(SharedMetadata, dataspace) == 8");
 
 // combine two 32-bit halves into a 64-bit value
 inline uint64_t pack64(int32_t hi, int32_t lo) {
@@ -96,7 +98,7 @@ struct DecodedHandle {
   bool valid = false;
 };
 
-// the fields a handle is encoded from
+// buffer handle fields for Encode
 struct HandleFields {
   int32_t width = 0;
   int32_t height = 0;
@@ -113,7 +115,7 @@ struct HandleFields {
   bool hasMetaFd = false;
 };
 
-// parse the name trailer from the ints
+// parse the name trailer after kNumInts into d->name
 inline void DecodeNameTrailer(const int32_t* ints, size_t count, DecodedHandle* d) {
   if (count <= static_cast<size_t>(kNumInts)) return;
   int32_t nameLen = ints[kNameLenIndex];
@@ -124,7 +126,7 @@ inline void DecodeNameTrailer(const int32_t* ints, size_t count, DecodedHandle* 
   d->name.assign(bytes, static_cast<size_t>(nameLen));
 }
 
-// decode a handle from its ints
+// decode a buffer handle from ints
 inline DecodedHandle DecodeInts(const int32_t* ints, size_t count, int numFds = -1) {
   DecodedHandle d;
   if (!ints || count < static_cast<size_t>(kNumInts)) return d;
@@ -163,13 +165,13 @@ inline DecodedHandle DecodeInts(const int32_t* ints, size_t count, int numFds = 
   return d;
 }
 
-// decode a buffer handle into its fields
+// decode a native_handle_t into a DecodedHandle
 inline DecodedHandle Decode(const native_handle_t* h) {
   if (!h || h->numFds < 1 || h->numFds > kMaxFds || h->numInts < kNumInts) return DecodedHandle();
   return DecodeInts(h->data + h->numFds, static_cast<size_t>(h->numInts), h->numFds);
 }
 
-// create a native_handle_t that owns fds
+// create a native_handle_t with fds and the fields of f
 inline native_handle_t* Encode(const HandleFields& f, const int* fds, int32_t numFds, const char* name = nullptr,
                                int32_t nameLen = 0) {
   int32_t planeFds = f.hasMetaFd ? numFds - 1 : numFds;
@@ -226,7 +228,7 @@ constexpr int32_t kPixelFormatImplementationDefined = 0x22;
 constexpr int32_t kPixelFormatYCbCr420_888 = 0x23;
 constexpr int32_t kPixelFormatYV12 = 0x32315659;
 
-// check for YV12 or YCbCr 420 888
+// return whether pixelFormat is YV12 or YCbCr_420_888
 inline bool IsYuv420Flexible(int32_t pixelFormat) {
   return pixelFormat == kPixelFormatYV12 || pixelFormat == kPixelFormatYCbCr420_888;
 }
@@ -238,7 +240,7 @@ constexpr uint64_t kUsageVideoDecoder = 1ULL << 22;
 constexpr uint64_t kUsageYuvProducerOrConsumer =
     kUsageVideoEncoder | kUsageCameraOutput | kUsageCameraInput | kUsageVideoDecoder;
 
-// return the format a requested format allocates with
+// resolve IMPLEMENTATION_DEFINED to YV12 or RGBX_8888 by usage
 inline int32_t ResolvePixelFormat(int32_t pixelFormat, uint64_t usage) {
   if (pixelFormat != kPixelFormatImplementationDefined) return pixelFormat;
   return (usage & kUsageYuvProducerOrConsumer) ? kPixelFormatYV12 : kPixelFormatRGBX8888;

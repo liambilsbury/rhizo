@@ -12,7 +12,7 @@ using ndk::ScopedAStatus;
 
 namespace {
 
-// write a message to the kernel log
+// write msg to /dev/kmsg
 void klog(const char* msg) {
   int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
   if (fd >= 0) {
@@ -26,7 +26,7 @@ ScopedAStatus bcError(int32_t code) { return ScopedAStatus::fromServiceSpecificE
 
 constexpr int32_t kNumSlots = 2;
 
-// check that a slot number is in range
+// return whether slot is in 0..kNumSlots-1
 bool validSlot(int32_t slot) { return slot >= 0 && slot < kNumSlots; }
 
 class RhizoBootControl : public BnBootControl {
@@ -119,19 +119,17 @@ class RhizoBootControl : public BnBootControl {
 
 // register the boot control service and join the binder thread pool
 int main() {
-  klog("main() entered");
   auto device = ndk::SharedRefBase::make<RhizoBootControl>();
   const std::string instance = std::string(RhizoBootControl::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(device->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

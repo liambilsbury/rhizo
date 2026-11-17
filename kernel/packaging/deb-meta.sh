@@ -1,5 +1,5 @@
 #!/bin/bash
-# build the linux-image-rhizo and linux-headers-rhizo packages
+# linux-image-rhizo and linux-headers-rhizo meta packages
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 out=$1

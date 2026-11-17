@@ -1,5 +1,5 @@
 #!/bin/bash
-# print llvm-config output for the Android LLVM build
+# llvm-config shim for toolchain/llvm-android
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LLVM_DL="$REPO_ROOT/toolchain/llvm-android"
@@ -42,7 +42,7 @@ done
 if (( want_libs )); then
   for m in "${modules[@]}"; do
     if ! grep -qw "$m" <<<"$KNOWN_MODULES"; then
-      echo "llvm-config-android-shim: module '$m' is not in KNOWN_MODULES ($KNOWN_MODULES)" >&2
+      echo "module '$m' is not in KNOWN_MODULES ($KNOWN_MODULES)" >&2
       exit 1
     fi
   done

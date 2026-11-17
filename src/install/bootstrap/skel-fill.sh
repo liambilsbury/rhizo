@@ -1,5 +1,5 @@
 #!/bin/sh
-# fill this account's empty home from /etc/skel
+# copy /etc/skel into the empty home of the calling uid
 set -u
 PROG=rhizo-skel-fill
 SKEL=/etc/skel
@@ -25,7 +25,7 @@ entries=$(ls -A -- "$home") || exit 1
 
 if ! find "$SKEL" -mindepth 1 -maxdepth 1 \
      -exec cp -RP --preserve=mode,timestamps --update=none -t "$home" -- {} +; then
-  echo "$PROG: copying $SKEL into $home failed" >&2
+  echo "[$PROG] failed to copy $SKEL to $home" >&2
   exit 1
 fi
-echo "$PROG: filled $home from $SKEL"
+echo "[$PROG] copied $SKEL to $home"

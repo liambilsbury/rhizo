@@ -63,7 +63,7 @@ struct DecodeSession::State {
 
   Vpp vpp;
 
-  // map a frame's readback and pass it to use
+  // map a frame's readback and pass the readback to use
   Status ReadFrame(const Frame& frame, const std::function<void(const SemiPlanar&)>& use);
 
   PoolSurface* Find(VASurfaceID id) {
@@ -79,7 +79,7 @@ struct DecodeSession::State {
       PoolSurface& s = surfaces[i];
       if (s.id != id) continue;
       if (s.refs == 0) {
-        LogErrorf("surface %u released more times than it was held", id);
+        LogErrorf("surface %u released with refs == 0", id);
         return;
       }
       if (--s.refs == 0 && s.retired) {
@@ -88,7 +88,7 @@ struct DecodeSession::State {
       }
       return;
     }
-    LogErrorf("release of surface %u, which is not in the pool", id);
+    LogErrorf("released surface %u is not in the pool", id);
   }
 
   // destroy the context and retire the pool
@@ -115,7 +115,7 @@ std::unique_ptr<DecodeSession> DecodeSession::Create(Codec codec, DecodeCallback
                                                      VaDevice& device) {
   DecoderCoreFactory factory = CoreFactoryFor(codec);
   if (!factory) {
-    LogErrorf("no decoder core for codec %d is linked into this build", static_cast<int>(codec));
+    LogErrorf("no decoder core linked for codec %d", static_cast<int>(codec));
     if (status) *status = Status::kUnsupported;
     return nullptr;
   }
@@ -195,9 +195,9 @@ Status DecodeSession::Configure(const StreamInfo& info, VAContextID* context) {
   bool limited = known && ComponentLimits(s.dpy, codec, Kind::kDecoder, &caps);
   if (limited && (info.coded_width < caps.min_width || info.coded_height < caps.min_height ||
                   info.coded_width > caps.max_width || info.coded_height > caps.max_height)) {
-    LogErrorf("%s: coded size %ux%u is outside %ux%u..%ux%u%s, refused", caps.name.c_str(), info.coded_width,
+    LogErrorf("%s coded size %ux%u is outside %ux%u..%ux%u%s", caps.name.c_str(), info.coded_width,
               info.coded_height, caps.min_width, caps.min_height, caps.max_width, caps.max_height,
-              caps.min_from_driver ? "" : " (the minimum is radeonsi's floor: the driver reports none)");
+              caps.min_from_driver ? "" : ", radeonsi minimum");
     return Status::kUnsupported;
   }
   {
@@ -206,7 +206,7 @@ Status DecodeSession::Configure(const StreamInfo& info, VAContextID* context) {
     VAConfigAttrib rt{VAConfigAttribRTFormat, info.rt_format};
     VAStatus st = vaCreateConfig(s.dpy, info.profile, VAEntrypointVLD, &rt, 1, &s.config);
     if (st != VA_STATUS_SUCCESS) {
-      LogErrorf("decode config %s: %s", ProfileName(info.profile), vaErrorStr(st));
+      LogErrorf("vaCreateConfig %s for decode failed (%s)", ProfileName(info.profile), vaErrorStr(st));
       s.config = VA_INVALID_ID;
       return st == VA_STATUS_ERROR_UNSUPPORTED_PROFILE || st == VA_STATUS_ERROR_UNSUPPORTED_RT_FORMAT
                  ? Status::kUnsupported
@@ -236,11 +236,11 @@ Status DecodeSession::Configure(const StreamInfo& info, VAContextID* context) {
         st = vaCreateContext(s.dpy, s.config, static_cast<int>(cw), static_cast<int>(ch), VA_PROGRESSIVE, ids.data(),
                              static_cast<int>(n), &s.context);
         if (st == VA_STATUS_SUCCESS) break;
-        LogErrorf("decode context %ux%u: %s", w, h, vaErrorStr(st));
+        LogErrorf("vaCreateContext %ux%u for decode failed (%s)", w, h, vaErrorStr(st));
         vaDestroySurfaces(s.dpy, ids.data(), static_cast<int>(n));
         s.context = VA_INVALID_ID;
       } else {
-        LogErrorf("%u decode surfaces of %ux%u: %s", n, w, h, vaErrorStr(st));
+        LogErrorf("vaCreateSurfaces of %u decode surfaces %ux%u failed (%s)", n, w, h, vaErrorStr(st));
       }
       if (w == info.coded_width && h == info.coded_height) {
         vaDestroyConfig(s.dpy, s.config);
@@ -248,7 +248,7 @@ Status DecodeSession::Configure(const StreamInfo& info, VAContextID* context) {
         if (st == VA_STATUS_ERROR_RESOLUTION_NOT_SUPPORTED) return Status::kUnsupported;
         return st == VA_STATUS_ERROR_ALLOCATION_FAILED ? Status::kNoMemory : Status::kVaError;
       }
-      Logf("announced maximum %ux%u refused, falling back to the coded size %ux%u", w, h, info.coded_width,
+      Logf("failed to allocate announced maximum %ux%u, retrying at coded size %ux%u", w, h, info.coded_width,
            info.coded_height);
       w = info.coded_width;
       h = info.coded_height;
@@ -259,7 +259,7 @@ Status DecodeSession::Configure(const StreamInfo& info, VAContextID* context) {
     s.surf_h = h;
     s.configured = true;
     *context = s.context;
-    Logf("decoder configured: %s %ux%u (visible %ux%u+%u+%u), %u-bit, %u surfaces of %ux%u",
+    Logf("configured decoder %s %ux%u (visible %ux%u+%u+%u), %u-bit, %u surfaces of %ux%u",
          ProfileName(info.profile), info.coded_width, info.coded_height, info.visible.width, info.visible.height,
          info.visible.left, info.visible.top, info.bit_depth, n, w, h);
   }
@@ -299,13 +299,13 @@ void DecodeSession::ReleaseSurface(VASurfaceID surface) {
 void DecodeSession::Output(VASurfaceID surface, uint64_t tag, const Rect& crop, const ColorInfo& color) {
   State& s = *s_;
   VAStatus st = vaSyncSurface(s.dpy, surface);
-  if (st != VA_STATUS_SUCCESS) LogErrorf("sync of decoded surface %u: %s", surface, vaErrorStr(st));
+  if (st != VA_STATUS_SUCCESS) LogErrorf("vaSyncSurface of decoded surface %u failed (%s)", surface, vaErrorStr(st));
   Frame f{};
   {
     std::lock_guard<std::mutex> lock(s.mutex);
     PoolSurface* p = s.Find(surface);
     if (!p) {
-      LogErrorf("output of surface %u, which is not in the pool", surface);
+      LogErrorf("decoded surface %u is not in the pool", surface);
       if (s.cb.skip) s.cb.skip(tag);
       return;
     }
@@ -386,7 +386,7 @@ Status DecodeSession::ToRgbaSurface(const Frame& frame, VASurfaceID surface, uin
   VAStatus vs = vaPutImage(s.dpy, surface, s.rgba.image_id, 0, 0, width, height, 0, 0, width, height);
   if (vs == VA_STATUS_SUCCESS) vs = vaSyncSurface(s.dpy, surface);
   if (vs != VA_STATUS_SUCCESS) {
-    LogErrorf("RGBA upload into the output surface: %s", vaErrorStr(vs));
+    LogErrorf("failed to upload RGBA into the output surface (%s)", vaErrorStr(vs));
     return Status::kVaError;
   }
   return Status::kOk;
@@ -407,7 +407,7 @@ Status DecodeSession::State::ReadFrame(const Frame& frame, const std::function<v
     fmt.bits_per_pixel = frame.fourcc == VA_FOURCC_P010 ? 24 : 12;
     VAStatus st = vaCreateImage(dpy, &fmt, static_cast<int>(frame.width), static_cast<int>(frame.height), &image);
     if (st != VA_STATUS_SUCCESS) {
-      LogErrorf("readback image %ux%u: %s", frame.width, frame.height, vaErrorStr(st));
+      LogErrorf("failed to create readback image %ux%u (%s)", frame.width, frame.height, vaErrorStr(st));
       return Status::kNoMemory;
     }
     image_valid = true;
@@ -415,13 +415,13 @@ Status DecodeSession::State::ReadFrame(const Frame& frame, const std::function<v
   VAStatus st = vaGetImage(dpy, frame.surface, static_cast<int>(frame.crop.left), static_cast<int>(frame.crop.top),
                            frame.crop.width, frame.crop.height, image.image_id);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("vaGetImage of surface %u: %s", frame.surface, vaErrorStr(st));
+    LogErrorf("vaGetImage of surface %u failed (%s)", frame.surface, vaErrorStr(st));
     return Status::kVaError;
   }
   void* map = nullptr;
   st = vaMapBuffer(dpy, image.buf, &map);
   if (st != VA_STATUS_SUCCESS || !map) {
-    LogErrorf("map of the readback image: %s", vaErrorStr(st));
+    LogErrorf("failed to map the readback image (%s)", vaErrorStr(st));
     return Status::kVaError;
   }
   uint8_t* base = static_cast<uint8_t*>(map);

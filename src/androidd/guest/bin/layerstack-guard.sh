@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# repair the layerstack of a display
+# layerStack repair for a display with layerStack 4294967295
 export PATH=/system/bin:/system/xbin:/vendor/bin:$PATH
 
 LOGID="$1"
@@ -17,7 +17,7 @@ GUARD_WINDOW_S=10
 # print the current time in seconds
 now_t() { date +%s.%N; }
 
-# check $1 >= $2
+# return whether $1 >= $2
 ge() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a>=b)}'; }
 # print the sum of two times
 add_t() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.6f", a+b}'; }
@@ -43,7 +43,7 @@ display_dump() {
   fi
 }
 
-# print the physical id and layer stack
+# print the physical id and layerStack of HWC display $1
 sf_layerstack() {
   awk -v cid="$1" '
     $0 ~ "\\(HWC display " cid "\\):" { physid = $2 }
@@ -61,7 +61,7 @@ sf_layerstack() {
   '
 }
 
-# print mCurrentLayerStack for a physical display
+# print mCurrentLayerStack of physical display $1
 dms_layerstack() {
   awk -v physid="$1" '
     $0 ~ ("mUniqueId=local:" physid "$") { grab = 6; next }
@@ -75,7 +75,7 @@ dms_layerstack() {
   '
 }
 
-# turn the display off and on
+# call cmd display power-off and power-reset
 repair_display() {
   cmd display power-off "$LOGID"
   off_deadline=$(add_t "$(now_t)" "$GUARD_REPAIR_OFF_CONFIRM_S")

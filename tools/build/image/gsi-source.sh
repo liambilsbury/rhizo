@@ -1,20 +1,20 @@
 #!/bin/bash
-# packs the source of GSI projects whose license requires sharing it
+# var/gsi-build/gpl-source-<BUILD_ID>-<REVISION>.tar.zst of the gsi-share-list.py projects
 set -uo pipefail
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX \
       GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 
-# print a prefixed progress line
+# print a [gsi-source] line to stderr
 log() { echo "[gsi-source] $*" >&2; }
 # print the usage text
 usage() {
   cat <<'EOF'
-usage: gsi-source.sh [--release a16|a17] [--revision N]
-       gsi-source.sh --selftest
+gsi-source.sh [--release a16|a17] [--revision N]
+gsi-source.sh --selftest
 EOF
 }
 
-# print the AOSP projects the share list names
+# print the AOSP projects in column 1 of the share list
 share_projects() { cut -d, -f1 "$1" | sed '/^$/d; /^UPSTREAM$/d' | sort -u; }
 
 # print the upstream components missing a source tarball
@@ -50,25 +50,25 @@ selftest() {
   done
   printf 'external/iptables,/system/bin/iptables:iptables\nexternal/e2fsprogs,/system/bin/mke2fs:e2fsprogs\nexternal/iptables,/system/bin/ip6tables:iptables\nUPSTREAM,apex:com.x.apex/etc/kernel Linux\n' > "$tmp/share.csv"
   list=$(share_projects "$tmp/share.csv")
-  [[ "$list" == $'external/e2fsprogs\nexternal/iptables' ]] || { echo "FAIL projects listed once each, sorted -- got: $list"; fail=1; }
+  [[ "$list" == $'external/e2fsprogs\nexternal/iptables' ]] || { echo "FAIL share_projects == sorted unique projects ($list)"; fail=1; }
   archive_projects "$tmp/aosp" "$tmp/out.tar" <<< "$list" 2>/dev/null
-  [[ "$(tar -tf "$tmp/out.tar" 2>/dev/null | grep -c README)" == 2 ]] || { echo "FAIL both projects archived"; fail=1; }
-  tar -tf "$tmp/out.tar" 2>/dev/null | grep -qx 'external/iptables/README' || { echo "FAIL archived under the project path"; fail=1; }
+  [[ "$(tar -tf "$tmp/out.tar" 2>/dev/null | grep -c README)" == 2 ]] || { echo "FAIL out.tar has 2 README entries"; fail=1; }
+  tar -tf "$tmp/out.tar" 2>/dev/null | grep -qx 'external/iptables/README' || { echo "FAIL out.tar has external/iptables/README"; fail=1; }
   mkdir -p "$tmp/upstream"
   out=$(missing_upstream "$tmp/share.csv" "$tmp/upstream")
-  [[ "$out" == "apex:com.x.apex/etc/kernel" ]] || { echo "FAIL an upstream component with no bundled source is named -- got: $out"; fail=1; }
+  [[ "$out" == "apex:com.x.apex/etc/kernel" ]] || { echo "FAIL missing_upstream == apex:com.x.apex/etc/kernel ($out)"; fail=1; }
   touch "$tmp/upstream/kernel.source.tar.zst"
   out=$(missing_upstream "$tmp/share.csv" "$tmp/upstream")
-  [[ -z "$out" ]] || { echo "FAIL an upstream component with its source bundled is not named -- got: $out"; fail=1; }
+  [[ -z "$out" ]] || { echo "FAIL missing_upstream == '' with kernel.source.tar.zst ($out)"; fail=1; }
   local self="${BASH_SOURCE[0]}"
   out=$(RHIZO_AOSP_A17_DIR="$tmp/none" "$self" --release a17 2>&1)
-  [[ $? -ne 0 && "$out" == *"no $tmp/none/out-gsi-user -- run tools/build/image/gsi.sh --release a17 --variant user first"* ]] \
-    || { echo "FAIL an a17 bundle reads the android17 checkout -- got: $out"; fail=1; }
+  [[ $? -ne 0 && "$out" == *"no $tmp/none/out-gsi-user"* ]] \
+    || { echo "FAIL gsi-source.sh --release a17 with RHIZO_AOSP_A17_DIR=none prints no none/out-gsi-user ($out)"; fail=1; }
   out=$("$self" --release a18 2>&1)
-  [[ $? -eq 2 && "$out" == *"--release must be a16 or a17"* ]] || { echo "FAIL an unknown release is refused -- got: $out"; fail=1; }
+  [[ $? -eq 2 && "$out" == *"--release a18 is not a16 or a17"* ]] || { echo "FAIL gsi-source.sh --release a18 exits 2 ($out)"; fail=1; }
   rm -rf "$tmp"
-  if (( fail )); then echo "gsi-source.sh selftest: FAILED"; return 1; fi
-  echo "gsi-source.sh selftest: ok"
+  if (( fail )); then echo "FAIL gsi-source.sh --selftest"; return 1; fi
+  echo "ok gsi-source.sh --selftest"
 }
 
 # print the paths inside an apex, extracting an erofs payload deapexer cannot list
@@ -102,7 +102,7 @@ case "$RELEASE" in
        PREBUILT_TABLE=tools/build/image/gsi-prebuilt-licenses.tsv ;;
   a17) AOSP_DIR="$(readlink -f "${RHIZO_AOSP_A17_DIR:-$ROOT/aosp-android17}")" PIN_VAR=AOSP_A17_BUILD_ID PIN_FILE=tools/fetch/aosp-a17.sh
        PREBUILT_TABLE=tools/build/image/gsi-prebuilt-licenses-a17.tsv ;;
-  *) log "--release must be a16 or a17"; exit 2 ;;
+  *) log "--release $RELEASE is not a16 or a17"; exit 2 ;;
 esac
 BUILD_DIR="$ROOT/var/gsi-build"
 PIN_ID=$(sed -n "s/^$PIN_VAR=//p" "$ROOT/$PIN_FILE")
@@ -110,14 +110,13 @@ PIN_ID=$(sed -n "s/^$PIN_VAR=//p" "$ROOT/$PIN_FILE")
 OUT_DIR="out-gsi-user"
 BASE="$BUILD_DIR/gpl-source-$PIN_ID-$REVISION.tar"
 LIST="$BUILD_DIR/gpl-projects-$PIN_ID-$REVISION.txt"
-[[ -d "$AOSP_DIR/$OUT_DIR" ]] || { log "no $AOSP_DIR/$OUT_DIR -- run tools/build/image/gsi.sh --release $RELEASE --variant user first"; exit 1; }
+[[ -d "$AOSP_DIR/$OUT_DIR" ]] || { log "no $AOSP_DIR/$OUT_DIR"; exit 1; }
 PRODUCT_OUT="$OUT_DIR/target/product/generic_x86_64"
 BIN="$AOSP_DIR/$OUT_DIR/host/linux-x86/bin"
 UPSTREAM_DIR="$BUILD_DIR/upstream"; [[ "$RELEASE" == a16 ]] || UPSTREAM_DIR="$BUILD_DIR/upstream-$RELEASE"
 mkdir -p "$UPSTREAM_DIR"
 TF="$AOSP_DIR/$OUT_DIR/dist/gsi_x86_64-target_files-rhizo$REVISION.zip"
-[[ -f "$TF" ]] || { log "no $TF -- build revision $REVISION first"; exit 1; }
-log "listing the image's files and each APEX's contents"
+[[ -f "$TF" ]] || { log "no $TF"; exit 1; }
 unzip -Z1 "$TF" 'SYSTEM/*' | sed -n 's|^SYSTEM/||p' > "$BUILD_DIR/image.txt" || exit 1
 : > "$BUILD_DIR/apex.txt"
 t=$(mktemp -d)
@@ -125,31 +124,30 @@ for f in "$AOSP_DIR/$PRODUCT_OUT"/system/apex/*.apex "$AOSP_DIR/$PRODUCT_OUT"/sy
   [[ -f "$f" ]] || continue
   a="$f"
   if [[ "$f" == *.capex ]]; then
-    unzip -q -o "$f" original_apex -d "$t" || { log "cannot unpack $f"; exit 1; }
+    unzip -q -o "$f" original_apex -d "$t" || { log "failed to extract original_apex from $f"; exit 1; }
     a="$t/original_apex"
   fi
-  apex_paths "$a" | sed "s|^\./||; s|^|${f##*/}\t|" >> "$BUILD_DIR/apex.txt" || { log "deapexer cannot list $f"; exit 1; }
+  apex_paths "$a" | sed "s|^\./||; s|^|${f##*/}\t|" >> "$BUILD_DIR/apex.txt" || { log "deapexer list $f failed"; exit 1; }
 done
 rm -rf "$t"
-log "listing the projects of every GPL-family module and file in the image"
 python3 "$ROOT/tools/build/image/gsi-share-list.py" "$AOSP_DIR" "$PRODUCT_OUT" \
   "$AOSP_DIR/$OUT_DIR/soong/compliance-metadata/gsi_x86_64/compliance-metadata.db" "$BUILD_DIR/apex.txt" "$BUILD_DIR/image.txt" \
-  "$ROOT/$PREBUILT_TABLE" > "$BUILD_DIR/share.csv" || { log "the share list is incomplete -- see above"; exit 1; }
+  "$ROOT/$PREBUILT_TABLE" > "$BUILD_DIR/share.csv" || { log "gsi-share-list.py failed"; exit 1; }
 cp "$BUILD_DIR/share.csv" "$LIST"
 share_projects "$BUILD_DIR/share.csv" > "$BUILD_DIR/share.projects"
-log "$(wc -l < "$BUILD_DIR/share.projects") projects to share"
+log "share_projects=$(wc -l < "$BUILD_DIR/share.projects")"
 rm -f "$BASE" "$BASE.zst" "$BASE.zst."*
 archive_projects "$AOSP_DIR" "$BASE" < "$BUILD_DIR/share.projects" || exit 1
 zstd -q -f -T0 --rm "$BASE" -o "$BASE.zst" || exit 1
 if (( $(stat -c%s "$BASE.zst") > 1900 * 1024 * 1024 )); then
   split -b 1900M -d -a 3 "$BASE.zst" "$BASE.zst." && rm "$BASE.zst"
-  parts=("$BASE.zst."*); log "split into ${#parts[@]} parts"
+  parts=("$BASE.zst."*); log "split $BASE.zst into ${#parts[@]} parts"
 fi
 chmod 0644 "$BASE.zst"* "$LIST"
 log "wrote $BASE.zst* and $LIST"
 missing=$(missing_upstream "$BUILD_DIR/share.csv" "$UPSTREAM_DIR")
 if [[ -n "$missing" ]]; then
-  log "these GPL prebuilts have no bundled source in $UPSTREAM_DIR (<name>.source.tar.*):"
+  log "GPL prebuilts without <name>.source.tar.* in $UPSTREAM_DIR"
   printf '  %s\n' $missing >&2
   exit 2
 fi

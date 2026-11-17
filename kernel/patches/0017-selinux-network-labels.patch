@@ -1,8 +1,8 @@
 diff --git a/security/selinux/avc.c b/security/selinux/avc.c
-index 0344d6f5d..8fee1ebde 100644
+index 4dc35aca3..71ad48c05 100644
 --- a/security/selinux/avc.c
 +++ b/security/selinux/avc.c
-@@ -78,7 +78,7 @@ struct avc_cache {
+@@ -79,7 +79,7 @@ struct avc_cache {
  };
  
  struct avc_callback_node {
@@ -11,7 +11,7 @@ index 0344d6f5d..8fee1ebde 100644
  	u32 events;
  	struct avc_callback_node *next;
  };
-@@ -805,14 +805,15 @@ noinline int slow_avc_audit(struct selinux_state *state,
+@@ -812,14 +812,15 @@ noinline int slow_avc_audit(struct selinux_state *state,
  
  /**
   * avc_add_callback - Register a callback for security events.
@@ -29,7 +29,7 @@ index 0344d6f5d..8fee1ebde 100644
  {
  	struct avc_callback_node *c;
  	int rc = 0;
-@@ -980,11 +981,12 @@ static atomic_t avc_resets = ATOMIC_INIT(0);
+@@ -985,11 +986,12 @@ static atomic_t avc_resets = ATOMIC_INIT(0);
  
  /**
   * avc_ss_reset - Flush the cache and revalidate migrated permissions.
@@ -44,7 +44,7 @@ index 0344d6f5d..8fee1ebde 100644
  	struct avc_callback_node *c;
  	int rc = 0, tmprc;
  
-@@ -992,7 +994,7 @@ int avc_ss_reset(struct selinux_avc *avc, u32 seqno)
+@@ -997,7 +999,7 @@ int avc_ss_reset(struct selinux_avc *avc, u32 seqno)
  
  	for (c = avc_callbacks; c; c = c->next) {
  		if (c->events & AVC_CALLBACK_RESET) {
@@ -53,7 +53,7 @@ index 0344d6f5d..8fee1ebde 100644
  			/* save the first error encountered for the return
  			   value and continue processing the callbacks */
  			if (!rc)
-@@ -1899,6 +1901,85 @@ int selinux_state_has_perm(struct selinux_state *state, u32 ssid, u32 tsid,
+@@ -1886,6 +1888,45 @@ int selinux_state_has_perm(struct selinux_state *state, u32 ssid, u32 tsid,
  	return 0;
  }
  
@@ -96,54 +96,14 @@ index 0344d6f5d..8fee1ebde 100644
 +	return 0;
 +}
 +
-+/**
-+ * cred_policy_object_has_perm - Check a policy-labelled object per level
-+ * @cred: subject credentials
-+ * @ssid: source security identifier in @cred's namespace
-+ * @object_sid: gives the SID a namespace's own policy gives the object
-+ * @arg: the object, passed to @object_sid
-+ * @tclass: target security class
-+ * @requested: requested permissions, interpreted based on @tclass
-+ * @ad: auxiliary audit data
-+ *
-+ * As cred_ssid_has_perm(), but each namespace checks the object by the SID its
-+ * own policy gives it, such as a port or node label.
-+ * Return %0 if all @requested permissions are granted, -%EACCES if any
-+ * permissions are denied, or another -errno upon other errors.
-+ */
-+int cred_policy_object_has_perm(const struct cred *cred, u32 ssid,
-+				object_sid_fn object_sid, const void *arg,
-+				u16 tclass, u32 requested,
-+				struct common_audit_data *ad)
-+{
-+	struct cred_security_struct *crsec = selinux_cred(cred);
-+	u32 tsid;
-+	int rc;
-+
-+	for (;;) {
-+		rc = object_sid(crsec->state, arg, &tsid);
-+		if (rc)
-+			return rc;
-+		rc = avc_has_perm(crsec->state, ssid, tsid, tclass, requested,
-+				  ad);
-+		if (rc)
-+			return rc;
-+
-+		if (!crsec->parent_cred)
-+			return 0;
-+		crsec = selinux_cred(crsec->parent_cred);
-+		ssid = crsec->sid;
-+	}
-+}
-+
  u32 avc_policy_seqno(struct selinux_state *state)
  {
- 	return state->avc->avc_cache.latest_notif;
+ 	/* Writers hold notif_lock; readers only sample the sequence number. */
 diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
-index 01a1b3e15..4275465ba 100644
+index 7ad944c34..6e5d41ecb 100644
 --- a/security/selinux/global_sidtab.c
 +++ b/security/selinux/global_sidtab.c
-@@ -914,7 +914,21 @@ int security_netlbl_secattr_to_sid(struct selinux_state *state,
+@@ -1076,7 +1076,21 @@ int security_netlbl_secattr_to_sid(struct selinux_state *state,
  		return 0;
  	}
  
@@ -167,10 +127,10 @@ index 01a1b3e15..4275465ba 100644
  		return rc;
  
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 6c3e0e351..21f99ea14 100644
+index 3b3601b29..f7ef96a31 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -185,21 +185,23 @@ static int selinux_peerlbl_enabled(void)
+@@ -187,21 +187,23 @@ static int selinux_peerlbl_enabled(void)
  		netlbl_enabled() || selinux_xfrm_enabled());
  }
  
@@ -200,7 +160,7 @@ index 6c3e0e351..21f99ea14 100644
  		call_blocking_lsm_notifier(LSM_POLICY_CHANGE, NULL);
  	}
  
-@@ -6148,6 +6150,45 @@ static int selinux_socket_socketpair(struct socket *socka,
+@@ -6242,6 +6244,45 @@ static int selinux_socket_socketpair(struct socket *socka,
     Need to determine whether we should perform a name_bind
     permission check between the socket and the port number. */
  
@@ -243,10 +203,10 @@ index 6c3e0e351..21f99ea14 100644
 +	return sel_netif_sid(state, k->ns, k->ifindex, sid);
 +}
 +
- static int selinux_socket_bind(struct socket *sock, struct sockaddr *address, int addrlen)
+ static int __selinux_socket_bind(struct sock *sk, struct sockaddr *address, int addrlen)
  {
- 	const struct cred *cred = current_cred();
-@@ -6170,7 +6211,8 @@ static int selinux_socket_bind(struct socket *sock, struct sockaddr *address, in
+ 	struct sk_security_struct *sksec = selinux_sock(sk);
+@@ -6262,7 +6303,8 @@ static int __selinux_socket_bind(struct sock *sk, struct sockaddr *address, int
  		struct sockaddr_in6 *addr6 = NULL;
  		u16 family_sa;
  		unsigned short snum;
@@ -256,7 +216,7 @@ index 6c3e0e351..21f99ea14 100644
  
  		/*
  		 * sctp_bindx(3) calls via selinux_sctp_bind_connect()
-@@ -6228,14 +6270,15 @@ static int selinux_socket_bind(struct socket *sock, struct sockaddr *address, in
+@@ -6320,15 +6362,15 @@ static int __selinux_socket_bind(struct sock *sk, struct sockaddr *address, int
  
  			if (inet_port_requires_bind_service(sock_net(sk), snum) ||
  			    snum < low || snum > high) {
@@ -264,28 +224,28 @@ index 6c3e0e351..21f99ea14 100644
 -						      snum, &sid);
 -				if (err)
 -					goto out;
--				err = cred_ssid_has_perm(cred, sksec->sid,
--							 sid, sksec->sclass,
--							 SOCKET__NAME_BIND,
--							 &ad);
+-				err = selinux_state_has_perm(sksec->state,
+-							     sksec->sid, sid,
+-							     sksec->sclass,
+-							     SOCKET__NAME_BIND,
+-							     &ad);
 +				struct port_key pk = { sk->sk_protocol, snum };
 +
-+				err = cred_policy_object_has_perm(cred,
-+								  sksec->sid,
-+								  port_sid_in,
-+								  &pk,
-+								  sksec->sclass,
-+								  SOCKET__NAME_BIND,
-+								  &ad);
++				err = selinux_state_policy_object_has_perm(sksec->state,
++									   sksec->sid,
++									   port_sid_in,
++									   &pk,
++									   sksec->sclass,
++									   SOCKET__NAME_BIND,
++									   &ad);
  				if (err)
  					goto out;
  			}
-@@ -6259,18 +6302,16 @@ static int selinux_socket_bind(struct socket *sock, struct sockaddr *address, in
+@@ -6352,17 +6394,18 @@ static int __selinux_socket_bind(struct sock *sk, struct sockaddr *address, int
  			break;
  		}
  
--		err = sel_netnode_sid(current_selinux_state, addrp, family_sa,
--				      &sid);
+-		err = sel_netnode_sid(sksec->state, addrp, family_sa, &sid);
 -		if (err)
 -			goto out;
 -
@@ -294,17 +254,19 @@ index 6c3e0e351..21f99ea14 100644
  		else
  			ad.u.net->v6info.saddr = addr6->sin6_addr;
  
--		err = cred_ssid_has_perm(cred, sksec->sid, sid,
--					 sksec->sclass, node_perm, &ad);
+-		err = selinux_state_has_perm(sksec->state, sksec->sid, sid,
+-					     sksec->sclass, node_perm, &ad);
 +		nk.addr = addrp;
 +		nk.family = family_sa;
-+		err = cred_policy_object_has_perm(cred, sksec->sid, node_sid_in,
-+						  &nk, sksec->sclass, node_perm,
-+						  &ad);
++		err = selinux_state_policy_object_has_perm(sksec->state,
++							   sksec->sid,
++							   node_sid_in, &nk,
++							   sksec->sclass,
++							   node_perm, &ad);
  		if (err)
  			goto out;
  	}
-@@ -6317,7 +6358,8 @@ static int selinux_socket_connect_helper(struct socket *sock,
+@@ -6412,7 +6455,8 @@ static int selinux_socket_connect_helper(struct sock *sk,
  		struct sockaddr_in *addr4 = NULL;
  		struct sockaddr_in6 *addr6 = NULL;
  		unsigned short snum;
@@ -314,7 +276,7 @@ index 6c3e0e351..21f99ea14 100644
  
  		/* sctp_connectx(3) calls via selinux_sctp_bind_connect()
  		 * that validates multiple connect addresses. Because of this
-@@ -6347,9 +6389,8 @@ static int selinux_socket_connect_helper(struct socket *sock,
+@@ -6442,9 +6486,8 @@ static int selinux_socket_connect_helper(struct sock *sk,
  				return -EAFNOSUPPORT;
  		}
  
@@ -326,18 +288,21 @@ index 6c3e0e351..21f99ea14 100644
  
  		switch (sksec->sclass) {
  		case SECCLASS_TCP_SOCKET:
-@@ -6364,8 +6405,8 @@ static int selinux_socket_connect_helper(struct socket *sock,
+@@ -6459,8 +6502,11 @@ static int selinux_socket_connect_helper(struct sock *sk,
  		ad.u.net = &net;
  		ad.u.net->dport = htons(snum);
  		ad.u.net->family = address->sa_family;
--		err = cred_ssid_has_perm(cred, sksec->sid, sid,
--					 sksec->sclass, perm, &ad);
-+		err = cred_policy_object_has_perm(cred, sksec->sid, port_sid_in,
-+						  &pk, sksec->sclass, perm, &ad);
+-		err = selinux_state_has_perm(sksec->state, sksec->sid, sid,
+-					     sksec->sclass, perm, &ad);
++		err = selinux_state_policy_object_has_perm(sksec->state,
++							   sksec->sid,
++							   port_sid_in, &pk,
++							   sksec->sclass, perm,
++							   &ad);
  		if (err)
  			return err;
  	}
-@@ -6524,23 +6565,55 @@ static int selinux_inet_sys_rcv_skb(struct selinux_state *state,
+@@ -6636,23 +6682,55 @@ static int selinux_inet_sys_rcv_skb(struct selinux_state *state,
  				    char *addrp, u16 family, u32 peer_sid,
  				    struct common_audit_data *ad)
  {
@@ -405,7 +370,7 @@ index 6c3e0e351..21f99ea14 100644
  }
  
  static int selinux_sock_rcv_skb_compat(struct sock *sk, struct sk_buff *skb,
-@@ -6612,19 +6685,23 @@ static int selinux_socket_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
+@@ -6724,19 +6802,23 @@ static int selinux_socket_sock_rcv_skb(struct sock *sk, struct sk_buff *skb)
  		return err;
  
  	if (peerlbl_active) {
@@ -431,7 +396,7 @@ index 6c3e0e351..21f99ea14 100644
  		if (err) {
  			selinux_netlbl_err(skb, family, err, 0);
  			return err;
-@@ -6825,13 +6902,18 @@ static int selinux_sctp_process_new_assoc(struct sctp_association *asoc,
+@@ -6926,13 +7008,18 @@ static int selinux_sctp_process_new_assoc(struct sctp_association *asoc,
  		 */
  		sksec->peer_sid = asoc->peer_secid;
  	} else if (sksec->peer_sid != asoc->peer_secid) {
@@ -453,7 +418,7 @@ index 6c3e0e351..21f99ea14 100644
  		if (err)
  			return err;
  	}
-@@ -7416,20 +7498,26 @@ static unsigned int selinux_ip_postroute(void *priv,
+@@ -7515,20 +7602,26 @@ static unsigned int selinux_ip_postroute(void *priv,
  			return NF_DROP_ERR(-ECONNREFUSED);
  
  	if (peerlbl_active) {
@@ -490,7 +455,7 @@ index 6c3e0e351..21f99ea14 100644
  	}
  
  	return NF_ACCEPT;
-@@ -8372,51 +8460,58 @@ static int selinux_watch_key(struct key *key)
+@@ -8458,51 +8551,58 @@ static int selinux_watch_key(struct key *key)
  #endif
  
  #ifdef CONFIG_SECURITY_INFINIBAND
@@ -571,7 +536,7 @@ index 6c3e0e351..21f99ea14 100644
  }
  
  static int selinux_ib_alloc_security(void *ib_sec)
-@@ -9115,13 +9210,11 @@ unsigned int selinux_maxnsdepth = CONFIG_SECURITY_SELINUX_MAXNSDEPTH;
+@@ -9188,13 +9288,11 @@ unsigned int selinux_maxnsdepth = CONFIG_SECURITY_SELINUX_MAXNSDEPTH;
  
  static atomic_t selinux_nsnum = ATOMIC_INIT(0);
  
@@ -585,7 +550,7 @@ index 6c3e0e351..21f99ea14 100644
  
  /* ids of SELinux namespaces, never reused */
  static atomic64_t selinux_state_ids = ATOMIC64_INIT(0);
-@@ -9197,6 +9290,8 @@ int selinux_state_create(const struct cred *cred)
+@@ -9274,6 +9372,8 @@ int selinux_state_create(const struct cred *cred)
  	if (parent) {
  		put_cred(crsec->parent_cred);
  		crsec->parent_cred = get_current_cred();
@@ -594,7 +559,7 @@ index 6c3e0e351..21f99ea14 100644
  	}
  	return 0;
  err:
-@@ -9213,6 +9308,11 @@ static void selinux_state_free(struct work_struct *work)
+@@ -9290,6 +9390,11 @@ static void selinux_state_free(struct work_struct *work)
  	do {
  		parent = state->parent;
  		global_sidtab_invalidate_state(state);
@@ -607,7 +572,7 @@ index 6c3e0e351..21f99ea14 100644
  			__free_page(state->status_page);
  		selinux_state_policy_free(state);
 diff --git a/security/selinux/ibpkey.c b/security/selinux/ibpkey.c
-index ca19e5671..5d0532403 100644
+index 57d4239cf..e607975e1 100644
 --- a/security/selinux/ibpkey.c
 +++ b/security/selinux/ibpkey.c
 @@ -60,15 +60,17 @@ static unsigned int sel_ib_pkey_hashfn(u16 pkey)
@@ -774,21 +739,16 @@ index 4b25da3f1..528f17f83 100644
  /**
   * selinux_audit_rule_init - alloc/init an selinux audit rule structure.
 diff --git a/security/selinux/include/avc.h b/security/selinux/include/avc.h
-index d693d48fb..c5f724cbb 100644
+index 90eea9725..70934c3a7 100644
 --- a/security/selinux/include/avc.h
 +++ b/security/selinux/include/avc.h
-@@ -189,6 +189,21 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
+@@ -191,6 +191,16 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
  			u16 tclass, u32 requested,
  			struct common_audit_data *ad);
  
 +/* give the SID @state's own policy gives the object @arg names */
 +typedef int (*object_sid_fn)(struct selinux_state *state, const void *arg,
 +			     u32 *sid);
-+
-+int cred_policy_object_has_perm(const struct cred *cred, u32 ssid,
-+				object_sid_fn object_sid, const void *arg,
-+				u16 tclass, u32 requested,
-+				struct common_audit_data *ad);
 +
 +int selinux_state_policy_object_has_perm(struct selinux_state *state, u32 ssid,
 +					 object_sid_fn object_sid,
@@ -799,7 +759,7 @@ index d693d48fb..c5f724cbb 100644
  int cred_peer_has_perm(const struct cred *cred, const struct cred *other,
  		       u16 tclass, u32 requested,
  		       struct common_audit_data *ad);
-@@ -213,7 +228,8 @@ u32 avc_reset_generation(void);
+@@ -215,7 +225,8 @@ u32 avc_reset_generation(void);
  #define AVC_CALLBACK_AUDITDENY_DISABLE	128
  #define AVC_CALLBACK_ADD_XPERMS		256
  
@@ -902,10 +862,10 @@ index 9096a8289..3f4d21502 100644
  
  #endif
 diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
-index ecf2b8f5e..17577855d 100644
+index 8ccb6b4d7..59388c8c9 100644
 --- a/security/selinux/include/objsec.h
 +++ b/security/selinux/include/objsec.h
-@@ -130,7 +130,7 @@ struct netif_security_struct {
+@@ -136,7 +136,7 @@ struct netif_security_struct {
  	const struct net *ns; /* network namespace */
  	int ifindex; /* device index */
  	u32 sid; /* SID for this interface */
@@ -914,7 +874,7 @@ index ecf2b8f5e..17577855d 100644
  };
  
  struct netnode_security_struct {
-@@ -140,13 +140,14 @@ struct netnode_security_struct {
+@@ -146,13 +146,14 @@ struct netnode_security_struct {
  	} addr;
  	u32 sid; /* SID for this node */
  	u16 family; /* address family */
@@ -930,7 +890,7 @@ index ecf2b8f5e..17577855d 100644
  };
  
  struct sk_security_struct {
-@@ -186,6 +187,7 @@ struct pkey_security_struct {
+@@ -192,6 +193,7 @@ struct pkey_security_struct {
  	u64 subnet_prefix; /* Port subnet prefix */
  	u16 pkey; /* PKey number */
  	u32 sid; /* SID of pkey */
@@ -1180,7 +1140,7 @@ index 06ce45f62..3cda83442 100644
  }
  
 diff --git a/security/selinux/netnode.c b/security/selinux/netnode.c
-index 77989e1eb..43154cc44 100644
+index f1dd9eded..43154cc44 100644
 --- a/security/selinux/netnode.c
 +++ b/security/selinux/netnode.c
 @@ -121,7 +121,7 @@ static struct sel_netnode *sel_netnode_find(struct selinux_state *state,
@@ -1192,7 +1152,15 @@ index 77989e1eb..43154cc44 100644
  			switch (family) {
  			case PF_INET:
  				if (node->nsec.addr.ipv4 == *(const __be32 *)addr)
-@@ -230,7 +230,7 @@ static int sel_netnode_sid_slow(struct selinux_state *state, const void *addr,
+@@ -172,7 +172,6 @@ static void sel_netnode_insert(struct sel_netnode *node)
+ 				lockdep_is_held(&sel_netnode_lock)),
+ 			struct sel_netnode, list);
+ 		list_del_rcu(&tail->list);
+-		put_selinux_state(tail->nsec.state);
+ 		kfree_rcu(tail, rcu);
+ 	} else
+ 		sel_netnode_hash[idx].size++;
+@@ -231,7 +230,7 @@ static int sel_netnode_sid_slow(struct selinux_state *state, const void *addr,
  	if (ret == 0 && new) {
  		new->nsec.family = family;
  		new->nsec.sid = *sid;
@@ -1201,7 +1169,7 @@ index 77989e1eb..43154cc44 100644
  		sel_netnode_insert(new);
  	} else
  		kfree(new);
-@@ -275,13 +275,15 @@ int sel_netnode_sid(struct selinux_state *state, const void *addr, u16 family,
+@@ -276,13 +275,15 @@ int sel_netnode_sid(struct selinux_state *state, const void *addr, u16 family,
  }
  
  /**
@@ -1220,7 +1188,7 @@ index 77989e1eb..43154cc44 100644
  {
  	unsigned int idx;
  	struct sel_netnode *node, *node_tmp;
-@@ -290,11 +292,12 @@ void sel_netnode_flush(void)
+@@ -291,11 +292,12 @@ void sel_netnode_flush(void)
  	for (idx = 0; idx < SEL_NETNODE_HASH_SIZE; idx++) {
  		list_for_each_entry_safe(node, node_tmp,
  					 &sel_netnode_hash[idx].list, list) {
@@ -1417,10 +1385,10 @@ index 0890f7d38..fcfcc2061 100644
  	spin_unlock_bh(&sel_netport_lock);
  }
 diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
-index 4c18de105..3ebdad63f 100644
+index 9bb4792c1..c6552e58f 100644
 --- a/security/selinux/selinuxfs.c
 +++ b/security/selinux/selinuxfs.c
-@@ -189,7 +189,7 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
+@@ -187,7 +187,7 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
  			audit_get_sessionid(current));
  		enforcing_set(state, new_value);
  		if (new_value)
@@ -1430,11 +1398,11 @@ index 4c18de105..3ebdad63f 100644
  		selinux_status_update_setenforce(state, new_value);
  		if (!new_value)
 diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
-index 79454ed65..ee03037b1 100644
+index 0daca75f4..e8a19b5c4 100644
 --- a/security/selinux/ss/services.c
 +++ b/security/selinux/ss/services.c
-@@ -2167,10 +2167,12 @@ static void selinux_notify_policy_change(struct selinux_state *state,
- 					u32 seqno)
+@@ -2260,10 +2260,12 @@ static void selinux_notify_policy_change(struct selinux_state *state,
+ 					 u32 seqno)
  {
  	/* Flush external caches and notify userspace of policy load */
 -	avc_ss_reset(state->avc, seqno);
@@ -1448,7 +1416,7 @@ index 79454ed65..ee03037b1 100644
  	selinux_xfrm_notify_policyload();
  	selinux_ima_measure_state_locked(state);
  }
-@@ -3548,7 +3550,7 @@ struct selinux_audit_rule {
+@@ -3502,7 +3504,7 @@ struct selinux_audit_rule {
  	struct context au_ctxt;
  };
  
@@ -1457,7 +1425,7 @@ index 79454ed65..ee03037b1 100644
  {
  	if (event == AVC_CALLBACK_RESET)
  		return audit_update_lsm_rules();
-@@ -3925,7 +3927,8 @@ int selinux_ss_netlbl_secattr_to_sid(struct selinux_state *state,
+@@ -3863,7 +3865,8 @@ int selinux_ss_netlbl_secattr_to_sid(struct selinux_state *state,
  		if (rc)
  			goto out;
  

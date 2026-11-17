@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 
 // storage for pasted files
 final class PasteStore {
-    // forbid instances
+    // private constructor
     private PasteStore() {}
 
     // write the paste files and return a URI
@@ -18,7 +18,7 @@ final class PasteStore {
             throws IOException {
         File dir = new File(context.getFilesDir(), "paste");
         if (!dir.exists() && !dir.mkdirs()) {
-            throw new IOException("cannot create " + dir);
+            throw new IOException("failed to create " + dir);
         }
         String name = prefix + System.nanoTime();
         try (FileOutputStream out = new FileOutputStream(new File(dir, name))) {

@@ -31,7 +31,7 @@ inline constexpr size_t kMaxLineBytes = 512;
 inline constexpr std::chrono::seconds kRetryDelay{2};
 inline constexpr int64_t kDefaultIntervalMs = 1000;
 
-// write a message to the kernel log
+// write msg to the kernel log
 inline void Klog(const char* msg) { rhizo_device::Klog("rhizo-gnss", msg); }
 
 // desktop fix from rhizo-locationd
@@ -48,7 +48,7 @@ struct HostFix {
   int64_t timeMs = 0;
 };
 
-// return the socket path a --source value names
+// return the socket path of a --source host:<path> value
 inline std::string SocketPathOf(const std::string& source) {
   const size_t prefix = sizeof(kSourcePrefix) - 1;
   if (source.compare(0, prefix, kSourcePrefix) != 0) return "";
@@ -57,7 +57,7 @@ inline std::string SocketPathOf(const std::string& source) {
   return path;
 }
 
-// split a protocol line into its verb and key=value fields
+// split a protocol line into the verb and key=value fields
 inline std::string SplitLine(const std::string& line, std::map<std::string, std::string>* fields) {
   std::string verb;
   bool first = true;
@@ -139,14 +139,14 @@ inline bool ParseFix(const std::map<std::string, std::string>& fields, HostFix* 
   return true;
 }
 
-// return a fix's boot-clock time from its wall-clock age
+// return the boot-clock time of a fix from the fix's wall-clock age
 inline int64_t FixElapsedRealtimeNs(int64_t fixTimeMs, int64_t nowRealMs, int64_t nowBootNs) {
   int64_t ageMs = nowRealMs - fixTimeMs;
   if (ageMs < 0) ageMs = 0;
   return nowBootNs - ageMs * 1000000;
 }
 
-// sanitize a daemon token
+// return up to 32 [A-Za-z0-9_-] characters of raw, or -
 inline std::string LogToken(const std::string& raw) {
   std::string out;
   for (char c : raw) {
@@ -191,7 +191,7 @@ class HostSource {
   HostSource(const HostSource&) = delete;
   HostSource& operator=(const HostSource&) = delete;
 
-  // store the callback and report the source's capabilities
+  // store the callback and call gnssSetCapabilitiesCb
   void setCallback(const std::shared_ptr<IGnssCallback>& callback) {
     {
       std::lock_guard<std::mutex> lg(mutex_);
@@ -204,12 +204,12 @@ class HostSource {
     std::lock_guard<std::mutex> lg(mutex_);
     return callback_;
   }
-  // set the interval sent in the next hello
+  // set the interval_ms value of the next hello line
   void setPositionIntervalMs(int64_t intervalMs) {
     std::lock_guard<std::mutex> lg(mutex_);
     intervalMs_ = intervalMs > 0 ? intervalMs : kDefaultIntervalMs;
   }
-  // open a session that connects until it is stopped
+  // start a session and wake the connection thread
   void start() {
     {
       std::lock_guard<std::mutex> lg(mutex_);
@@ -220,7 +220,7 @@ class HostSource {
     }
     cv_.notify_all();
   }
-  // close the session and wait for a report in flight
+  // stop the session and wait for dispatch_
   void stop() {
     {
       std::lock_guard<std::mutex> lg(mutex_);
@@ -230,7 +230,7 @@ class HostSource {
     cv_.notify_all();
     std::lock_guard<std::mutex> dispatchGuard(dispatch_);
   }
-  // stop and drop the callback
+  // stop the session and clear the callback
   void close() {
     stop();
     std::lock_guard<std::mutex> lg(mutex_);
@@ -238,11 +238,11 @@ class HostSource {
   }
 
  private:
-  // end a blocked read on the open connection
+  // call shutdown(fd_, SHUT_RDWR)
   void wakeLocked() {
     if (fd_ >= 0) shutdown(fd_, SHUT_RDWR);
   }
-  // return true while a session is the open one
+  // return whether session is the current started session
   bool currentLocked(uint64_t session) const { return !quit_ && started_ && session_ == session; }
 
   // connect and retry while the session is started
@@ -273,7 +273,7 @@ class HostSource {
     }
   }
 
-  // log a refused connection once per session
+  // log a connection failure unless refusedSession_ equals session
   void logRefused(uint64_t session, const char* what, int err) {
     {
       std::lock_guard<std::mutex> lg(mutex_);
@@ -281,7 +281,7 @@ class HostSource {
       refusedSession_ = session;
     }
     char buf[256];
-    snprintf(buf, sizeof(buf), "host source: %s %s: %s -- retrying every 2 s while started", what,
+    snprintf(buf, sizeof(buf), "failed to %s %s (%s)", what,
              path_.c_str(), strerror(err));
     Klog(buf);
   }
@@ -290,12 +290,12 @@ class HostSource {
   int connectSocket(uint64_t session) {
     sockaddr_un addr{};
     if (path_.size() >= sizeof(addr.sun_path)) {
-      logRefused(session, "a socket path too long for", ENAMETOOLONG);
+      logRefused(session, "connect to", ENAMETOOLONG);
       return -1;
     }
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
-      logRefused(session, "socket for", errno);
+      logRefused(session, "create a socket for", errno);
       return -1;
     }
     addr.sun_family = AF_UNIX;
@@ -303,13 +303,13 @@ class HostSource {
     if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
       int err = errno;
       ::close(fd);
-      logRefused(session, "connect", err);
+      logRefused(session, "connect to", err);
       return -1;
     }
     return fd;
   }
 
-  // send a whole buffer
+  // write len bytes of data to fd with send()
   static bool sendAll(int fd, const char* data, size_t len) {
     while (len > 0) {
       ssize_t n = send(fd, data, len, MSG_NOSIGNAL);
@@ -321,16 +321,16 @@ class HostSource {
     return true;
   }
 
-  // send hello and read lines until the connection ends
+  // call sendAll with the hello line and read lines from fd
   void serve(int fd, uint64_t session, int64_t intervalMs) {
     char hello[64];
     int len = snprintf(hello, sizeof(hello), "hello v=1 interval_ms=%lld\n",
                        static_cast<long long>(intervalMs));
     if (!sendAll(fd, hello, static_cast<size_t>(len))) {
-      Klog("host source: hello not sent, the daemon closed the connection");
+      Klog("sendAll failed for the hello line to rhizo-locationd");
       return;
     }
-    Klog("host source: connected to rhizo-locationd");
+    Klog("connected to rhizo-locationd");
     std::string line;
     bool overlong = false;
     char buf[1024];
@@ -341,7 +341,7 @@ class HostSource {
       for (ssize_t i = 0; i < got; i++) {
         if (buf[i] == '\n') {
           if (overlong) {
-            Klog("host source: a line over 512 bytes was dropped");
+            Klog("dropped a line over 512 bytes");
           } else {
             handleLine(line, session);
           }
@@ -355,7 +355,7 @@ class HostSource {
       }
     }
     std::lock_guard<std::mutex> lg(mutex_);
-    if (currentLocked(session)) Klog("host source: the daemon closed the connection, retrying in 2 s");
+    if (currentLocked(session)) Klog("rhizo-locationd closed the connection");
   }
 
   // handle a line from the daemon
@@ -365,7 +365,7 @@ class HostSource {
     if (verb == "fix") {
       HostFix fix;
       if (!ParseFix(fields, &fix)) {
-        Klog("host source: a malformed fix was dropped");
+        Klog("dropped a malformed fix line");
         return;
       }
       report(fix, session);
@@ -373,14 +373,14 @@ class HostSource {
       auto value = fields.find("value");
       auto reason = fields.find("reason");
       char buf[160];
-      snprintf(buf, sizeof(buf), "host source: state %s reason=%s",
+      snprintf(buf, sizeof(buf), "rhizo-locationd state=%s reason=%s",
                LogToken(value == fields.end() ? "" : value->second).c_str(),
                LogToken(reason == fields.end() ? "" : reason->second).c_str());
       Klog(buf);
     }
   }
 
-  // report a new fix with its boot time
+  // call gnssLocationCb with fix and the fix's boot time
   void report(const HostFix& fix, uint64_t session) {
     std::lock_guard<std::mutex> dispatchGuard(dispatch_);
     std::shared_ptr<IGnssCallback> cb;
@@ -396,7 +396,7 @@ class HostSource {
     const int64_t nowRealMs = NowRealMs();
     const int64_t elapsedNs = FixElapsedRealtimeNs(fix.timeMs, nowRealMs, NowBootNs());
     if (elapsedNs <= 0) {
-      Klog("host source: a fix taken before this boot was dropped");
+      Klog("dropped a fix with time_ms before boot");
       return;
     }
     GnssLocation loc;
@@ -422,7 +422,7 @@ class HostSource {
     cb->gnssLocationCb(loc);
     if (first) {
       char buf[128];
-      snprintf(buf, sizeof(buf), "host source: first fix of the session reported, age %lld ms",
+      snprintf(buf, sizeof(buf), "gnssLocationCb with lastTimeMs_=0 age_ms=%lld",
                static_cast<long long>(nowRealMs - fix.timeMs));
       Klog(buf);
     }

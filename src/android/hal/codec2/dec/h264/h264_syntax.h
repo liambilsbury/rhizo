@@ -31,7 +31,7 @@ constexpr int kMaxSps = 32;
 constexpr int kMaxPps = 256;
 constexpr int kMaxRefs = 32;
 
-// trace the parsed syntax elements
+// receiver of the parsed syntax elements
 class SyntaxTrace {
  public:
   virtual ~SyntaxTrace() = default;
@@ -226,7 +226,7 @@ bool ParseNalHeader(uint8_t byte, NalHeader* out);
 // parse seq_parameter_set_rbsp()
 bool ParseSps(const uint8_t* rbsp, size_t size, Sps* out, SyntaxTrace* trace = nullptr);
 
-// read the ids of a PPS, or parse it against its SPS
+// read the ids of a PPS, or parse a PPS against the SPS
 bool PeekPpsIds(const uint8_t* rbsp, size_t size, uint32_t* pps_id, uint32_t* sps_id);
 bool ParsePps(const uint8_t* rbsp, size_t size, const Sps& sps, Pps* out, SyntaxTrace* trace = nullptr);
 

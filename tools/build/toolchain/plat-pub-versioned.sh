@@ -1,20 +1,20 @@
 #!/bin/bash
-# build plat_pub_versioned.cil into var/share
+# var/share/plat_pub_versioned.cil RHIZO_BUILD_J=
 set -euo pipefail
 
-# print a prefixed progress line
+# print a [plat-pub-versioned] line to stderr
 log() { echo "[plat-pub-versioned] $*" >&2; }
 
 OUT=""
 case "${1:-}" in
   "") ;;
-  --out) [[ $# -eq 2 ]] || { echo "usage: $0 [--out FILE]" >&2; exit 2; }; OUT="$(realpath -m -- "$2")" ;;
-  *) echo "usage: $0 [--out FILE]" >&2; exit 2 ;;
+  --out) [[ $# -eq 2 ]] || { echo "$0 [--out FILE]" >&2; exit 2; }; OUT="$(realpath -m -- "$2")" ;;
+  *) echo "$0 [--out FILE]" >&2; exit 2 ;;
 esac
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT="$(pwd)"
 OUT="${OUT:-$ROOT/var/share/plat_pub_versioned.cil}"
-[[ -d "$ROOT/aosp-android16-qpr2" ]] || { log "ERROR: no aosp-android16-qpr2/ checkout in $ROOT"; exit 1; }
+[[ -d "$ROOT/aosp-android16-qpr2" ]] || { log "no $ROOT/aosp-android16-qpr2"; exit 1; }
 AOSP_DIR="$(cd "$ROOT/aosp-android16-qpr2" && pwd)"
 SEPOLICY="$AOSP_DIR/system/sepolicy"
 PUBLIC="$SEPOLICY/prebuilts/api/202404/public"
@@ -23,8 +23,8 @@ M4="$AOSP_DIR/prebuilts/build-tools/linux-x86/bin/m4"
 HOST_BIN="$AOSP_DIR/out/host/linux-x86/bin"
 J="${RHIZO_BUILD_J:-18}"
 
-[[ -d "$PUBLIC" && -d "$REQD_MASK" ]] || { log "ERROR: $AOSP_DIR has no system/sepolicy 202404 prebuilts"; exit 1; }
-[[ -x "$M4" ]] || { log "ERROR: no m4 at $M4"; exit 1; }
+[[ -d "$PUBLIC" && -d "$REQD_MASK" ]] || { log "no $PUBLIC or $REQD_MASK"; exit 1; }
+[[ -x "$M4" ]] || { log "no $M4"; exit 1; }
 
 M4_DEFS=(
   -D mls_num_sens=1 -D mls_num_cats=1024 -D target_arch=x86_64
@@ -96,16 +96,15 @@ PUBLIC_TE_ORDER=(
 
 # build checkpolicy, version_policy and build_sepolicy into out/host
 build_tools() {
-  log "building checkpolicy version_policy build_sepolicy (lunch aosp_x86_64 bp2a userdebug, -j$J) ..."
   ( set +u
     cd "$AOSP_DIR"
     source build/envsetup.sh >/dev/null
     lunch aosp_x86_64 bp2a userdebug >/dev/null
     m -j"$J" checkpolicy version_policy build_sepolicy
-  ) >&2 || { log "ERROR: soong could not build the sepolicy host tools"; return 1; }
+  ) >&2 || { log "m checkpolicy version_policy build_sepolicy failed"; return 1; }
   local t
   for t in checkpolicy version_policy build_sepolicy; do
-    [[ -x "$HOST_BIN/$t" ]] || { log "ERROR: no $HOST_BIN/$t after the build"; return 1; }
+    [[ -x "$HOST_BIN/$t" ]] || { log "no $HOST_BIN/$t"; return 1; }
   done
 }
 
@@ -115,7 +114,7 @@ check_te_order() {
   want=$(printf '%s\n' "${PUBLIC_TE_ORDER[@]}" | sort)
   have=$(cd "$PUBLIC" && ls -- *.te | sort)
   [[ "$want" == "$have" ]] || {
-    log "ERROR: PUBLIC_TE_ORDER does not list exactly $PUBLIC/*.te:"
+    log "PUBLIC_TE_ORDER != $PUBLIC/*.te"
     diff <(echo "$want") <(echo "$have") | sed 's/^/    /' >&2
     return 1
   }
@@ -133,7 +132,7 @@ trim_access_vectors() {
     { print }
   ' "$src" > "$dst"
   dropped=$(( $(wc -l < "$src") - $(wc -l < "$dst") ))
-  (( dropped == 6 )) || { log "ERROR: the trim dropped $dropped lines of $src, expected 6"; return 1; }
+  (( dropped == 6 )) || { log "awk dropped $dropped lines of $src, expected 6"; return 1; }
 }
 
 check_te_order
@@ -145,7 +144,6 @@ trim_access_vectors "$REQD_MASK/access_vectors" "$WORK/access_vectors"
 TES=()
 for f in "${PUBLIC_TE_ORDER[@]}"; do TES+=("$PUBLIC/$f"); done
 
-log "m4 -> 202404_reqd_policy_mask.conf, 202404_plat_pub_policy.conf"
 "$M4" --fatal-warnings "${M4_DEFS[@]}" -s \
   "$SEPOLICY/flagging/flagging_macros" "$REQD_MASK/security_classes" \
   "$REQD_MASK/initial_sids" "$WORK/access_vectors" \
@@ -164,12 +162,10 @@ log "m4 -> 202404_reqd_policy_mask.conf, 202404_plat_pub_policy.conf"
   "$REQD_MASK/users" "$REQD_MASK/initial_sid_contexts" \
   > "$WORK/plat_pub_policy.conf"
 
-log "checkpolicy -> CIL, filter out the reqd_mask-only part"
 "$HOST_BIN/checkpolicy" -C -M -L -c 30 -o "$WORK/reqd_policy_mask.cil" "$WORK/reqd_policy_mask.conf"
 "$HOST_BIN/checkpolicy" -C -M -L -c 30 -o "$WORK/plat_pub_policy.cil" "$WORK/plat_pub_policy.conf"
 "$HOST_BIN/build_sepolicy" filter_out -f "$WORK/reqd_policy_mask.cil" -t "$WORK/plat_pub_policy.cil"
 
-log "version_policy -n 202404"
 "$HOST_BIN/version_policy" -b "$WORK/plat_pub_policy.cil" -t "$WORK/plat_pub_policy.cil" \
   -n 202404 -o "$WORK/plat_pub_versioned.cil"
 
@@ -177,4 +173,4 @@ mkdir -p "$(dirname "$OUT")"
 grep -v '^;;' "$WORK/plat_pub_versioned.cil" > "$OUT.part"
 mv "$OUT.part" "$OUT"
 
-log "wrote $OUT ($(stat -c%s "$OUT") bytes, sha256 $(sha256sum "$OUT" | cut -d' ' -f1))"
+log "wrote $OUT bytes=$(stat -c%s "$OUT") sha256=$(sha256sum "$OUT" | cut -d' ' -f1)"

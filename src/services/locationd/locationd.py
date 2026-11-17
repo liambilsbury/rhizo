@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""relay the host's GeoClue location to android's GNSS HAL over a unix socket"""
+"""GeoClue location relay for Android's GNSS HAL over a unix socket"""
 import argparse
 import math
 import os
@@ -43,8 +43,8 @@ LINE_MAX = 512
 
 
 def log(msg):
-    """print a line to the log"""
-    print("rhizo-locationd: " + msg, flush=True)
+    """print msg to stdout"""
+    print(msg, flush=True)
 
 
 def proc_cgroup(pid):
@@ -60,14 +60,14 @@ def proc_cgroup(pid):
 
 
 def peer_verdict(conn, want_uid, cgroup_re):
-    """return the peer's pid and any reason to refuse it"""
+    """return the peer pid and the refusal reason, or None"""
     pid, uid, _ = PEERCRED.unpack(conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, PEERCRED.size))
     if uid != want_uid:
         return pid, "uid %d is not uid %d" % (uid, want_uid)
     try:
         pidfd = conn.getsockopt(socket.SOL_SOCKET, SO_PEERPIDFD)
     except OSError as e:
-        return pid, "no pidfd for it (%s)" % e.strerror
+        return pid, "SO_PEERPIDFD failed (%s)" % e.strerror
     try:
         cgroup = proc_cgroup(pid)
         waiter = select.poll()
@@ -76,7 +76,7 @@ def peer_verdict(conn, want_uid, cgroup_re):
     finally:
         os.close(pidfd)
     if exited:
-        return pid, "it exited before its cgroup could be read"
+        return pid, "pid exited before /proc/pid/cgroup was read"
     if cgroup is None or not cgroup_re.match(cgroup):
         return pid, "cgroup %s is not a Rhizo sandbox cgroup" % cgroup
     return pid, None
@@ -107,7 +107,7 @@ class Hal:
     """an accepted HAL connection"""
 
     def __init__(self, sock, pid, n):
-        """keep the socket, its peer pid and its sequence number"""
+        """store sock, pid and n"""
         self.sock = sock
         self.pid = pid
         self.n = n
@@ -115,7 +115,7 @@ class Hal:
 
 
 class Relay:
-    """the socket, its HAL connections and their shared GeoClue client"""
+    """HAL socket server with one GeoClue client for the HAL connections"""
 
     def __init__(self, path, bus_address, peer_uid, cgroup_re):
         """start with no HAL, no bus and no client"""
@@ -174,16 +174,16 @@ class Relay:
         try:
             pid, why = peer_verdict(conn, self.peer_uid, self.cgroup_re)
         except OSError as e:
-            pid, why = 0, "no peer credentials (%s)" % e.strerror
+            pid, why = 0, "SO_PEERCRED failed (%s)" % e.strerror
         if why:
-            log("peer refused: pid %d: %s" % (pid, why))
+            log("refused peer pid %d (%s)" % (pid, why))
             conn.close()
             return
         conn.setblocking(False)
         self.seq += 1
         hal = Hal(conn, pid, self.seq)
         self.hals[conn.fileno()] = hal
-        log("hal %d connected: pid %d" % (hal.n, pid))
+        log("hal %d connected pid=%d" % (hal.n, pid))
         if len(self.hals) == 1:
             self.begin()
         elif self.status:
@@ -211,42 +211,42 @@ class Relay:
                 fields = dict(w.split("=", 1) for w in words[1:] if "=" in w)
                 log("hal %d hello v=%s interval_ms=%s" % (hal.n, fields.get("v", "?"), fields.get("interval_ms", "?")))
         if len(hal.buf) > LINE_MAX:
-            self.drop(hal, "a line over %d bytes" % LINE_MAX)
+            self.drop(hal, "line over %d bytes" % LINE_MAX)
 
     def send(self, hal, line):
-        """send a line to a HAL or drop it"""
+        """write line to hal.sock, or drop hal on a short write"""
         data = (line + "\n").encode("ascii")
         try:
             sent = hal.sock.send(data)
         except OSError:
             sent = -1
         if sent != len(data):
-            self.drop(hal, "not reading")
+            self.drop(hal, "short write")
 
     def broadcast(self, line):
-        """send a line to the HALs and keep it"""
+        """store line in status and write line to each HAL"""
         self.status = line
         for hal in list(self.hals.values()):
             if self.hals.get(hal.sock.fileno()) is hal:
                 self.send(hal, line)
 
     def state(self, value, reason):
-        """send a new state to the HALs"""
+        """broadcast a state line that differs from status"""
         line = "state value=%s reason=%s" % (value, reason)
         if line != self.status:
             log(line)
             self.broadcast(line)
 
     def drop(self, hal, why):
-        """close a HAL connection, ending the session after the last"""
+        """close a HAL connection and call end when no HAL is left"""
         self.hals.pop(hal.sock.fileno(), None)
         hal.sock.close()
-        log("hal %d gone: %s" % (hal.n, why))
+        log("dropped hal %d (%s)" % (hal.n, why))
         if not self.hals:
             self.end()
 
     def connect(self):
-        """connect to the system bus and return whether it succeeded"""
+        """connect to the system bus and return whether the connect succeeded"""
         bus = None
         try:
             bus = dbus_min.Connection.connect(self.bus_address)
@@ -254,7 +254,7 @@ class Relay:
             for rule in MATCHES:
                 bus.add_match(rule)
         except (OSError, ValueError, dbus_min.DBusError) as e:
-            log("system bus unreachable: %s" % e)
+            log("failed to connect to the system bus (%s)" % e)
             if bus is not None:
                 bus.close()
             return False
@@ -262,8 +262,8 @@ class Relay:
         return True
 
     def lose_bus(self, why):
-        """drop the bus and its state"""
-        log("system bus lost: %s" % why)
+        """close the bus and clear the bus state"""
+        log("lost the system bus (%s)" % why)
         try:
             self.bus.close()
         except OSError:
@@ -276,7 +276,7 @@ class Relay:
             self.reset("unavailable", "no-bus")
 
     def call(self, kind, path, iface, member, signature="", args=(), client=None):
-        """send a GeoClue call and record its kind and client"""
+        """call a GeoClue method and store the kind and client by serial"""
         if self.bus is None:
             return None
         try:
@@ -288,7 +288,7 @@ class Relay:
         return serial
 
     def begin(self):
-        """request a client from GeoClue"""
+        """call GetClient on the GeoClue manager"""
         self.deadline = None
         if self.bus is None and self.connect():
             self.on_bus()
@@ -301,7 +301,7 @@ class Relay:
             self.deadline = time.monotonic() + GETCLIENT_TIMEOUT_S
 
     def start(self):
-        """configure the client and start it"""
+        """set the client properties and call Start"""
         self.phase = "starting"
         for name, sig, value in (("DesktopId", "s", DESKTOP_ID), ("RequestedAccuracyLevel", "u", ACCURACY_EXACT),
                                  ("DistanceThreshold", "u", 0), ("TimeThreshold", "u", 0)):
@@ -310,7 +310,7 @@ class Relay:
         self.call("start", self.client, GC_CLIENT_IFACE, "Start")
 
     def release(self, path):
-        """delete a client"""
+        """call DeleteClient for path"""
         self.call("delete", GC_MANAGER, GC_MANAGER_IFACE, "DeleteClient", "o", (path,), client=path)
 
     def forget(self):
@@ -329,11 +329,11 @@ class Relay:
         self.deadline = time.monotonic() + RETRY_S
 
     def end(self):
-        """stop and release the client once no HAL is left"""
+        """call Stop and DeleteClient for the client"""
         if self.client:
             self.call("stop", self.client, GC_CLIENT_IFACE, "Stop")
             self.release(self.client)
-            log("last hal gone: client stopped and released after %d fix(es)" % self.fixes)
+            log("stopped and deleted the GeoClue client after %d fixes" % self.fixes)
         self.forget()
         self.phase = "idle"
         self.deadline = None
@@ -341,7 +341,7 @@ class Relay:
         self.fixes = 0
 
     def set_active(self, active):
-        """follow the client's Active property"""
+        """set active from the client Active property"""
         if active and not self.active:
             self.active = True
             self.state("waiting", "started")
@@ -350,7 +350,7 @@ class Relay:
             self.state("denied", "revoked")
 
     def on_deadline(self):
-        """act on a GetClient timeout or a due retry"""
+        """handle a GetClient timeout or a due retry"""
         self.deadline = None
         if self.phase == "getting":
             self.state("unavailable", "no-agent")
@@ -386,11 +386,11 @@ class Relay:
     def on_reply(self, kind, client, m):
         """handle the reply to a call"""
         failed = m.mtype == dbus_min.ERROR
-        text = "%s: %s" % (m.error_name, m.body[0] if m.body else "") if failed else ""
+        text = "%s (%s)" % (m.error_name, m.body[0] if m.body else "") if failed else ""
         if kind == "getclient":
             if failed:
                 if m.reply_serial == self.getclient and self.phase == "getting" and self.hals:
-                    log("GetClient failed: %s" % text)
+                    log("GetClient failed with %s" % text)
                     reason = ("no-geoclue" if m.error_name in NO_GEOCLUE else
                               "no-agent" if m.error_name in NO_REPLY else "dbus-error")
                     self.reset("unavailable", reason)
@@ -403,13 +403,13 @@ class Relay:
             self.client = client
             self.owner = m.sender
             self.deadline = None
-            log("geoclue client %s" % client)
+            log("GetClient returned %s" % client)
             self.start()
         elif client != self.client:
             if failed and kind == "delete":
-                log("DeleteClient %s failed: %s" % (client, text))
+                log("DeleteClient %s failed with %s" % (client, text))
         elif kind == "set" and failed:
-            log("setting up %s failed: %s" % (client, text))
+            log("Set on %s failed with %s" % (client, text))
             self.reset("unavailable", "dbus-error")
         elif kind == "start":
             if not failed:
@@ -419,20 +419,20 @@ class Relay:
                 self.phase = "denied"
                 self.deadline = time.monotonic() + RETRY_S
                 self.state("denied", "disabled" if "disabled" in text else "refused")
-                log("Start refused: %s" % text)
+                log("Start failed with %s" % text)
             else:
-                log("Start failed: %s" % text)
+                log("Start failed with %s" % text)
                 self.reset("unavailable", "dbus-error")
         elif kind == "getall":
             if failed:
-                log("reading a location failed: %s" % text)
+                log("GetAll failed with %s" % text)
                 return
             line = fix_line(m.body[0])
             if line is None:
-                log("fix dropped: GeoClue gave no usable latitude, longitude, accuracy or timestamp")
+                log("dropped a Location with no valid Latitude, Longitude, Accuracy or Timestamp")
                 return
             if not self.fixes:
-                log("first fix: accuracy %s m" % line.split("acc=", 1)[1].split()[0])
+                log("fixes=1 acc=%s" % line.split("acc=", 1)[1].split()[0])
             self.fixes += 1
             self.broadcast(line)
 
@@ -440,7 +440,7 @@ class Relay:
         """handle a signal from GeoClue or the bus"""
         if m.sender == BUS_NAME and m.member == "NameOwnerChanged":
             if len(m.body) == 3 and m.body[0] == GC and not m.body[2] and self.client:
-                log("geoclue left the bus")
+                log("org.freedesktop.GeoClue2 has no owner")
                 self.forget()
                 self.reset("unavailable", "no-geoclue")
             return
@@ -463,8 +463,7 @@ def main(argv=None):
     parser.add_argument("--peer-cgroup", default=SANDBOX_CGROUP_RE, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if (args.bus, args.peer_uid, args.peer_cgroup) != (SYSTEM_BUS, HAL_UID, SANDBOX_CGROUP_RE):
-        log("test override: bus %s, peers uid %d in cgroups matching %s" % (args.bus, args.peer_uid, args.peer_cgroup))
-    # a stop through `systemctl mask --now` keeps the runtime directory
+        log("bus=%s peer_uid=%d peer_cgroup=%s" % (args.bus, args.peer_uid, args.peer_cgroup))
     signal.signal(signal.SIGTERM, lambda *_: (os.path.lexists(args.socket) and os.unlink(args.socket), os._exit(0)))
     Relay(args.socket, args.bus, args.peer_uid, re.compile(args.peer_cgroup)).run()
     return 0

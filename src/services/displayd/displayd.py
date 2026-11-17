@@ -6,9 +6,13 @@ import subprocess
 import sys
 import time
 
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [_here, os.path.join(_here, ".."), os.path.join(_here, "..", "common")]
+import control_open  # noqa: E402
+
 
 def _instanced(base, sandbox_id, sep="-"):
-    """return the instance name for the sandbox id"""
+    """return base for sandbox_id 0, else base, sep and sandbox_id"""
     return base if sandbox_id == 0 else "%s%s%d" % (base, sep, sandbox_id)
 
 
@@ -31,7 +35,7 @@ def log(msg):
 
 
 def read_fd(fd, offset, end):
-    """read the bytes of fd from offset"""
+    """read the bytes of fd from offset to end"""
     chunks = []
     while offset < end:
         chunk = os.pread(fd, end - offset, offset)
@@ -51,7 +55,7 @@ DONE = "RHIZO_DISPLAYD_DONE="
 
 
 def init_pid():
-    """return the sandbox init pid from its file"""
+    """return the sandbox init pid from INIT_PID_FILE"""
     try:
         with open(INIT_PID_FILE) as f:
             pid = f.read().strip()
@@ -70,7 +74,7 @@ def init_pid():
 
 
 def stack_init_pid():
-    """find the init second_stage pid in instance 0"""
+    """return the lowest init second_stage pid in STACK_CGROUPS, or None"""
     for entry in sorted(os.listdir(PROC_ROOT), key=lambda e: int(e) if e.isdigit() else -1):
         if not entry.isdigit():
             continue
@@ -96,16 +100,16 @@ def android(cmd):
         out = subprocess.run([PROBE_CLIENT, PROBE_SOCK, "30", body],
                              capture_output=True, text=True, timeout=45).stdout
     except Exception as e:
-        log("probe channel failed: %s" % e)
+        log("probe client failed (%s)" % e)
         return None
     if DONE not in out:
-        log("no completion trailer from the sandbox")
+        log("no RHIZO_DISPLAYD_DONE= in the probe output")
         return None
     return out[:out.rindex(DONE)]
 
 
 def announce_born(composer_id, port):
-    """reset density and send the cursor scale"""
+    """reset the density override and call tell_composer_cursor_scale"""
     if composer_id not in _density_checked and reset_density_override(port):
         _density_checked.add(composer_id)
     return tell_composer_cursor_scale(composer_id, port)
@@ -124,7 +128,7 @@ def reset_density_override(port):
         return False
     if "Override density" in out:
         android("wm density reset -d %s" % logical)
-        log("display %s (port %d) was born under a density override -- cleared: %s"
+        log("display %s (port %d) density override reset (%s)"
             % (logical, port, " ".join(out.split())))
     remember_base(port, logical)
     return True
@@ -134,13 +138,13 @@ _base = {}
 
 
 def remember_base(port, logical, reported_dpi=None):
-    """record a port's density and DPI at its scale if the framework holds that DPI"""
+    """set _base[port] to (physical_density, device_dpi) when device_dpi is within 1 of reported_dpi"""
     physical = physical_density(logical)
     held = device_dpi(port)
     if not (physical and held):
         return False
     if reported_dpi is not None and abs(held - reported_dpi) >= 1:
-        log("display %s (port %d): framework holds %gdpi, not %ddpi; base kept at %r"
+        log("display %s (port %d) device_dpi=%g reported_dpi=%d base=%r"
             % (logical, port, held, reported_dpi, _base.get(port)))
         return False
     _base[port] = (physical, held)
@@ -148,7 +152,7 @@ def remember_base(port, logical, reported_dpi=None):
 
 
 def wanted_density(port, physical, reported_dpi, held_dpi):
-    """return the density for a scale"""
+    """return scaled_density from _base[port], or from physical and held_dpi"""
     base = _base.get(port)
     if base and (base[0] != physical or base[1] != held_dpi):
         return scaled_density(base[0], reported_dpi, base[1])
@@ -173,7 +177,7 @@ PHYSICAL_DENSITY_RE = re.compile(r"Physical density:\s*(\d+)")
 
 
 def physical_density(logical):
-    """return the framework density of a display"""
+    """return the wm density Physical density of a display"""
     out = android("wm density -d %s" % logical)
     if out is None:
         return None
@@ -194,7 +198,7 @@ def device_dpi(port):
 
 
 def scaled_density(physical, reported_dpi, held_dpi):
-    """return the density times the DPI ratio"""
+    """return physical * reported_dpi / held_dpi rounded"""
     return int(round(physical * reported_dpi / held_dpi))
 
 
@@ -213,7 +217,7 @@ _default = {}
 
 
 def follow_default_display():
-    """hold Android's default display at the most scaled window's density"""
+    """set the display 0 density to Physical density times the largest _scales value"""
     if not _scales:
         return True
     scale = max(_scales.values())
@@ -234,10 +238,9 @@ def follow_default_display():
     back = android("wm density -d 0") or ""
     over = re.search(r"Override density:\s*(\d+)", back)
     if (int(over.group(1)) if over else physical) != want:
-        log("the default display did not take %ddpi: %s" % (want, " ".join(back.split())))
+        log("wm density %d -d 0 failed (%s)" % (want, " ".join(back.split())))
         return False
-    log("the default display is now %ddpi -- %d x %g, the most scaled window's scale, so apps and Google Play "
-        "see the host's density" % (want, physical, scale))
+    log("display 0 density=%d physical=%d scale=%g" % (want, physical, scale))
     _default["want"] = want
     return True
 
@@ -309,21 +312,21 @@ ACCEL_SETTING = "mouse_pointer_acceleration_enabled"
 
 
 def acceleration_off():
-    """turn off mouse pointer acceleration"""
+    """set mouse_pointer_acceleration_enabled to 0"""
     got = (android("settings get system %s" % ACCEL_SETTING) or "").strip()
     if got == "0":
         return True
     android("settings put system %s 0" % ACCEL_SETTING)
     back = (android("settings get system %s" % ACCEL_SETTING) or "").strip()
     if back == "0":
-        log("mouse pointer acceleration was %r -- turned off" % (got or "unset"))
+        log("mouse_pointer_acceleration_enabled %r -> 0" % (got or "unset"))
         return True
-    log("mouse pointer acceleration still %r after turning it off (was %r)" % (back, got))
+    log("mouse_pointer_acceleration_enabled is %r after settings put 0 (was %r)" % (back, got))
     return None
 
 
 def tell_composer_cursor_scale(composer_id, port):
-    """send the composer the cursor scale"""
+    """write display cursor-scale to the composer control fifo"""
     dump = android("dumpsys input") or ""
     off = False
     if UNSCALED_RE.search(dump):
@@ -333,22 +336,21 @@ def tell_composer_cursor_scale(composer_id, port):
     milli, why = cursor_gain(dump, port, off)
     if milli is None:
         if why == NO_CONSTANT_GAIN:
-            log("composer display %s (port %d): mouse acceleration cannot be turned off -- "
-                "no cursor scale sent" % (composer_id, port))
+            log("composer display %s (port %d) cursor_gain returned no-constant-gain" % (composer_id, port))
         return why
     accel = " 1" if why == ACCELERATED else ""
     out = android("echo display cursor-scale %s %d%s > %s" % (composer_id, milli, accel, CONTROL_IN))
     if out is None:
-        log("could not tell the composer display %s's cursor scale" % composer_id)
+        log("failed to write display cursor-scale for composer display %s" % composer_id)
         return UNBOUND
-    log("composer display %s (port %d): mouse deltas scale by %d/1000%s"
+    log("composer display %s (port %d) cursor-scale %d/1000%s"
         % (composer_id, port, milli,
-           " below Android's first acceleration threshold" if accel else ""))
+           " accel=1" if accel else ""))
     return "told"
 
 
 def apply(composer_id, port, scale, dpi):
-    """apply a display scaled line"""
+    """set the wm density of the framework display on port for scale and dpi"""
     logical = logical_id_for_port(port)
     if logical is None:
         return False
@@ -360,17 +362,17 @@ def apply(composer_id, port, scale, dpi):
         android("wm density reset -d %s" % logical)
         got = android("wm density -d %s" % logical)
         if got is None or "Override density" in got:
-            log("display %s (port %d): density override still set after the reset: %s"
-                % (logical, port, " ".join((got or "no answer").split())))
+            log("display %s (port %d) Override density after wm density reset (%s)"
+                % (logical, port, " ".join((got or "no output").split())))
         else:
-            log("display %s (port %d) back to its density" % (logical, port))
+            log("display %s (port %d) density reset" % (logical, port))
             remember_base(port, logical, dpi)
         if tell_composer_cursor_scale(composer_id, port) == UNBOUND:
-            log("display %s (port %d): no mouse bound to it to read a cursor scale from" % (logical, port))
+            log("display %s (port %d) tell_composer_cursor_scale returned unbound" % (logical, port))
         return True
     held = device_dpi(port)
     if held is None:
-        log("display %s (port %d): the framework's DPI for it was not read; not scaling its density"
+        log("display %s (port %d) device_dpi returned None"
             % (logical, port))
         return False
     want = wanted_density(port, physical, composer_dpi(port, dpi, held, scale), held)
@@ -378,33 +380,33 @@ def apply(composer_id, port, scale, dpi):
         android("wm density reset -d %s" % logical)
         got = android("wm density -d %s" % logical)
         if got is None or "Override density" in got:
-            log("display %s (port %d): density override still set after the reset: %s"
-                % (logical, port, " ".join((got or "no answer").split())))
+            log("display %s (port %d) Override density after wm density reset (%s)"
+                % (logical, port, " ".join((got or "no output").split())))
             return False
         moved = PHYSICAL_DENSITY_RE.search(got)
         if moved and int(moved.group(1)) != physical:
-            log("display %s (port %d): its density moved %d -> %s under the reset; scaling again"
+            log("display %s (port %d) physical density %d -> %s after wm density reset"
                 % (logical, port, physical, moved.group(1)))
             return False
-        log("display %s (port %d) is %ddpi at scale %g by its density -- no override"
+        log("display %s (port %d) density %d at scale %g without override"
             % (logical, port, want, scale))
         if tell_composer_cursor_scale(composer_id, port) == UNBOUND:
-            log("display %s (port %d): no mouse bound to it to read a cursor scale from" % (logical, port))
+            log("display %s (port %d) tell_composer_cursor_scale returned unbound" % (logical, port))
         return True
     android("wm density %d -d %s" % (want, logical))
     got = android("wm density -d %s" % logical) or ""
     moved = PHYSICAL_DENSITY_RE.search(got)
     if moved and int(moved.group(1)) != physical:
-        log("display %s (port %d): its density moved %d -> %s under the write of %d; scaling again"
+        log("display %s (port %d) physical density %d -> %s after wm density %d"
             % (logical, port, physical, moved.group(1), want))
         return False
     if ("Override density: %d" % want) not in got:
-        log("density %d did not stick on display %s: %s" % (want, logical, got.strip()))
+        log("wm density %d -d %s failed (%s)" % (want, logical, got.strip()))
         return True
-    log("display %s (port %d) is now %ddpi -- %d at %gdpi held, scale %g (composer reported %d)"
+    log("display %s (port %d) density=%d physical=%d device_dpi=%g scale=%g composer_dpi=%d"
         % (logical, port, want, physical, held, scale, dpi))
     if tell_composer_cursor_scale(composer_id, port) == UNBOUND:
-        log("display %s (port %d): no mouse bound to it to read a cursor scale from" % (logical, port))
+        log("display %s (port %d) tell_composer_cursor_scale returned unbound" % (logical, port))
     return True
 
 
@@ -415,7 +417,6 @@ CONTROLLER_RE = re.compile(r"^\s*(-?\d+)\s*:\s*PointerController:", re.M)
 RESOLVED_TYPE_RE = re.compile(r"resolvedPointerType:\s*(-?\d+)")
 POINTER_GREP = ("dumpsys input | grep -E "
                 "'PointerControllers:|DrawingTabletControllers:|PointerController:|resolvedPointerType:'")
-# Android draws a new type's image a frame or two late; the composer drops a reply older than the image
 POINTER_TYPE_SETTLE_S = 0.15
 
 
@@ -439,18 +440,18 @@ def resolved_pointer_type(dump, logical):
 
 
 def tell_composer_pointer_type(composer_id, port, digest, sleep=time.sleep):
-    """send the composer the pointer type its display's cursor image draws"""
+    """write display cursor-type for the resolvedPointerType of the display"""
     logical = logical_id_for_port(port)
     if logical is None:
         return False
     pointer_type = resolved_pointer_type(android(POINTER_GREP) or "", logical)
     if pointer_type is None:
-        log("display %s (port %d): no resolvedPointerType in dumpsys input for cursor image %d"
+        log("display %s (port %d) has no resolvedPointerType in dumpsys input for cursor image %d"
             % (logical, port, digest))
         return False
     sleep(POINTER_TYPE_SETTLE_S)
     if android("echo display cursor-type %s %d %d > %s" % (composer_id, digest, pointer_type, CONTROL_IN)) is None:
-        log("could not tell the composer display %s its pointer type" % composer_id)
+        log("failed to write display cursor-type for composer display %s" % composer_id)
         return False
     return True
 
@@ -498,11 +499,15 @@ def read_whole(path):
 
 
 def start_offset(path, pid):
-    """return the offset to start reading control.out"""
+    """return 0 when path is newer than the start of pid, else the size of path"""
     try:
-        st = os.stat(path)
+        fd = control_open.open_reply(HOST_DATA, path)
     except OSError:
         return 0
+    try:
+        st = os.fstat(fd)
+    finally:
+        os.close(fd)
     started = process_started_at(pid)
     if started is not None and st.st_mtime >= started:
         return 0
@@ -510,7 +515,7 @@ def start_offset(path, pid):
 
 
 def plan(lines):
-    """list the actions for reply lines"""
+    """return the (kind, args) actions for control.out lines"""
     gone_after = {}
     for i, line in enumerate(lines):
         m = GONE_RE.match(line.strip())
@@ -555,8 +560,11 @@ _now = time.monotonic
 def open_control():
     """open control.out for reading"""
     try:
-        return os.open(CONTROL_OUT, os.O_RDONLY | os.O_CLOEXEC)
-    except OSError:
+        return control_open.open_reply(HOST_DATA, CONTROL_OUT)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        control_open.refused_once(CONTROL_OUT, exc, log)
         return None
 
 
@@ -572,14 +580,14 @@ def seat_locked():
 
 
 def follow_desktop_lock(state):
-    """sleep or wake Android with the desktop lock"""
+    """call input keyevent KEYCODE_SLEEP or KEYCODE_WAKEUP on a LockedHint change"""
     state["passes"] = state.get("passes", 0) + 1
     if state["passes"] % 4:
         return
     try:
         locked = seat_locked()
     except (OSError, subprocess.SubprocessError) as e:
-        log("lock check failed: %s" % e)
+        log("loginctl failed (%s)" % e)
         return
     if locked is None or locked == state.get("locked"):
         return
@@ -652,8 +660,8 @@ def main():
                 if apply(*args):
                     del scales[cid]
                 elif _now() - since > PENDING_LOG_S:
-                    log("composer display %s (port %d): the framework has no display on that port "
-                        "%ds after it was scaled to %g -- stopped asking" % (cid, args[1], PENDING_LOG_S, args[2]))
+                    log("composer display %s (port %d) parked with apply False for %ds at scale %g"
+                        % (cid, args[1], PENDING_LOG_S, args[2]))
                     scales[cid][2] = True
             for cid in list(pending):
                 port, since, parked = pending[cid]
@@ -662,13 +670,13 @@ def main():
                 if announce_born(cid, port) != UNBOUND:
                     del pending[cid]
                 elif _now() - since > PENDING_LOG_S:
-                    log("composer display %s (port %d): no mouse bound on that port, or no settings "
-                        "provider, for %ds -- stopped asking" % (cid, port, PENDING_LOG_S))
+                    log("composer display %s (port %d) parked with announce_born unbound for %ds"
+                        % (cid, port, PENDING_LOG_S))
                     pending[cid][2] = True
             if default_due and follow_default_display():
                 default_due = False
         except Exception as e:
-            log("watch error: %s" % e)
+            log("watch loop failed (%s)" % e)
         follow_desktop_lock(lock_state)
         time.sleep(0.5)
 

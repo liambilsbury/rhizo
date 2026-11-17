@@ -31,8 +31,7 @@ def _stage_gralloc_and_libs(gfx_src):
     aidl_glue_dir = core.gsi_libs_dir()
     _mismatch = core.gsi_derived_mismatch()
     if _mismatch:
-        kmsg(f"RHIZO_MARKER gsi_libs_mismatch=1 {_mismatch} -- "
-             "install/prepare/fetch-gsi.sh --release <this release> --derive-only rebuilds the set")
+        kmsg(f"RHIZO_MARKER gsi_libs_mismatch=1 why={_mismatch}")
     for _lib in core.KEYMINT_GSI_LIBS:
         _src = os.path.join(aidl_glue_dir, _lib)
         _dst = f"{RUN_ROOT}/vendor/lib64/{_lib}"
@@ -40,9 +39,8 @@ def _stage_gralloc_and_libs(gfx_src):
             continue
         if os.path.exists(_src):
             core.stage_bulk(_src, _dst, 0o644)
-            kmsg(f"{_lib} staged on /vendor/lib64")
         else:
-            kmsg(f"{_lib} NOT FOUND at {_src}")
+            kmsg(f"no {_lib} at {_src}")
     m2test_src = f"{gfx_src}/m2_gate_test"
     if os.path.exists(m2test_src):
         _shg2.copy(m2test_src, f"{RUN_ROOT}/system_ext_upper/bin/hw/m2_gate_test")
@@ -77,7 +75,7 @@ def _stage_gralloc_and_libs(gfx_src):
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             f"{NETBPFLOAD_PRELOAD_PATH} u:object_r:bpfloader_exec:s0\n")
     else:
-        kmsg(f"rhizo_netbpfload_preload NOT FOUND at {preload_src}")
+        kmsg(f"no rhizo_netbpfload_preload at {preload_src}")
     open(f"{RUN_ROOT}/vendor/etc/init/rhizo-graphics-allocator.rc","w").write(allocator_rc_text())
 
 
@@ -110,7 +108,7 @@ def allocator_rc_text():
 
 
 def gpu_mode_or_exit(policy_loaded=False):
-    """log this launch's gpu mode or exit"""
+    """log RHIZO_MARKER gpu_mode or raise SystemExit with RHIZO_MARKER gpu_driver_refused"""
     software = core.software_rendering()
     loaded = core.loaded_policy_dri() if policy_loaded else None
     reason = core.host_policy_refusal() or core.gpu_refusal(
@@ -147,16 +145,16 @@ def stage_software_rro():
     os.chmod(dst, 0o644)
     with open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts", "a") as f:
         f.write("/system_ext/overlay/RhizoSoftwareRro\\.apk u:object_r:vendor_overlay_file:s0\n")
-    kmsg("RHIZO_MARKER software_rro=staged (no screen-off fade, no gl in system_server)")
+    kmsg("RHIZO_MARKER software_rro=staged")
     return True
 
 
 def stage_rotation_rro(root=None, src=None):
-    """stage the overlay that turns sensor rotation off"""
+    """stage RhizoRotationRro.apk"""
     root = root or RUN_ROOT
     src = src or beside("RhizoRotationRro.apk")
     if not os.path.exists(src):
-        kmsg(f"RHIZO_MARKER rotation_rro=absent path={src} -- an accelerometer may rotate Android's displays")
+        kmsg(f"RHIZO_MARKER rotation_rro=absent path={src}")
         return False
     dst = f"{root}/product_upper/overlay/RhizoRotationRro.apk"
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -164,7 +162,7 @@ def stage_rotation_rro(root=None, src=None):
     os.chmod(dst, 0o644)
     with open(f"{root}/vendor/etc/selinux/vendor_file_contexts", "a") as f:
         f.write("/product/overlay/RhizoRotationRro\\.apk u:object_r:vendor_overlay_file:s0\n")
-    kmsg("RHIZO_MARKER rotation_rro=staged (config_supportAutoRotation=false)")
+    kmsg("RHIZO_MARKER rotation_rro=staged config_supportAutoRotation=false")
     return True
 
 
@@ -228,12 +226,12 @@ def _stage_framework_rc():
 
 
 def _stage_screen_off():
-    """skip the screen-off staging"""
+    """return None"""
     return
 
 
 def stage_adb_keys(sources, out_path):
-    """write key lines from sources to out_path"""
+    """write the non-empty lines of sources to out_path or delete out_path, and return the lines"""
     lines = []
     for src in sources:
         try:
@@ -293,11 +291,10 @@ def _stage_adb(gfx_src):
     adbkey_pub_src = beside("adbkey.pub")
     adb_key_lines = stage_adb_keys((adbkey_pub_src, capabilities.OPERATOR_ADB_KEYS), SYSTEM_ADB_KEYS)
     if adb_key_lines:
-        kmsg(f"adb_keys staged: {len(adb_key_lines)} key(s) from adbkey.pub and "
-             f"{capabilities.OPERATOR_ADB_KEYS} into the sandbox's /adb_keys")
+        kmsg(f"wrote {len(adb_key_lines)} adb keys from adbkey.pub and "
+             f"{capabilities.OPERATOR_ADB_KEYS} to /adb_keys")
     else:
-        kmsg(f"no key at {adbkey_pub_src} or {capabilities.OPERATOR_ADB_KEYS}; "
-             "adb authorizes a host key on its first connection")
+        kmsg(f"no adb key in {adbkey_pub_src} or {capabilities.OPERATOR_ADB_KEYS}")
 
 
 def _stage_net_rc(gfx_src):
@@ -333,7 +330,6 @@ def _stage_net_rc(gfx_src):
     open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_service_contexts","a").write(
         "mapper/rhizo u:object_r:hal_graphics_allocator_service:s0\n"
     )
-    kmsg(f"rhizo gralloc allocator+mapper staged from {gfx_src}")
 
 
 def stage_hals():
@@ -349,7 +345,7 @@ def stage_hals():
         _stage_adb(gfx_src)
         _stage_net_rc(gfx_src)
     else:
-        kmsg(f"gfx_hal NOT FOUND at {gfx_src} -- gralloc allocator/mapper absent")
+        kmsg(f"no gfx_hal at {gfx_src}")
     composer_bin = f"{gfx_src}/rhizo-composer"
     if os.path.isdir(gfx_src) and os.path.exists(composer_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-composer"
@@ -381,9 +377,8 @@ def stage_hals():
             "/vendor/bin/hw/rhizo-composer u:object_r:rhizo_composer_exec:s0\n"
             "/data/rhizo_control(/.*)? u:object_r:rhizo_control_file:s0\n"
         )
-        kmsg("rhizo-composer staged on /vendor/bin/hw")
     else:
-        kmsg(f"rhizo-composer NOT FOUND at {composer_bin}")
+        kmsg(f"no rhizo-composer at {composer_bin}")
     health_bin = f"{gfx_src}/rhizo-health-service"
     if os.path.isdir(gfx_src) and os.path.exists(health_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-health-service"
@@ -396,9 +391,8 @@ def stage_hals():
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             "/vendor/bin/hw/rhizo-health-service u:object_r:rhizo_health_exec:s0\n"
         )
-        kmsg(f"rhizo-health-service staged on /vendor/bin/hw ({_battery_source} source)")
     else:
-        kmsg(f"rhizo-health-service NOT FOUND at {health_bin}")
+        kmsg(f"no rhizo-health-service at {health_bin}")
     power_bin = core.release_hal_bin(gfx_src, "rhizo-power-service")
     if os.path.isdir(gfx_src) and os.path.exists(power_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-power-service"
@@ -415,9 +409,8 @@ def stage_hals():
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             "/vendor/bin/hw/rhizo-power-service u:object_r:rhizo_power_exec:s0\n"
         )
-        kmsg(f"rhizo-power-service staged on /vendor/bin/hw from {power_bin}")
     else:
-        kmsg(f"rhizo-power-service NOT FOUND at {power_bin}")
+        kmsg(f"no rhizo-power-service at {power_bin}")
     bootctl_bin = f"{gfx_src}/rhizo-bootcontrol-service"
     if os.path.isdir(gfx_src) and os.path.exists(bootctl_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-bootcontrol-service"
@@ -430,9 +423,8 @@ def stage_hals():
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             "/vendor/bin/hw/rhizo-bootcontrol-service u:object_r:rhizo_bootcontrol_exec:s0\n"
         )
-        kmsg("rhizo-bootcontrol-service staged on /vendor/bin/hw")
     else:
-        kmsg(f"rhizo-bootcontrol-service NOT FOUND at {bootctl_bin}")
+        kmsg(f"no rhizo-bootcontrol-service at {bootctl_bin}")
     gk_bin = f"{gfx_src}/rhizo-gatekeeper-service"
     if os.path.isdir(gfx_src) and os.path.exists(gk_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-gatekeeper-service"
@@ -453,9 +445,8 @@ def stage_hals():
             "android.hardware.security.sharedsecret.ISharedSecret/gatekeeper "
             "u:object_r:hal_sharedsecret_service:s0\n"
         )
-        kmsg("rhizo-gatekeeper-service staged on /vendor/bin/hw")
     else:
-        kmsg(f"rhizo-gatekeeper-service NOT FOUND at {gk_bin}")
+        kmsg(f"no rhizo-gatekeeper-service at {gk_bin}")
     thermal_bin = f"{gfx_src}/rhizo-thermal-service"
     if os.path.isdir(gfx_src) and os.path.exists(thermal_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-thermal-service"
@@ -472,9 +463,8 @@ def stage_hals():
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             "/vendor/bin/hw/rhizo-thermal-service u:object_r:rhizo_thermal_exec:s0\n"
         )
-        kmsg("rhizo-thermal-service staged on /vendor/bin/hw")
     else:
-        kmsg(f"rhizo-thermal-service NOT FOUND at {thermal_bin}")
+        kmsg(f"no rhizo-thermal-service at {thermal_bin}")
     bluetooth_bin = f"{gfx_src}/rhizo-bluetooth-service"
     if os.path.isdir(gfx_src) and os.path.exists(bluetooth_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-bluetooth-service"
@@ -502,16 +492,15 @@ def stage_hals():
         kmsg("RHIZO_MARKER bluetooth_hal=staged armed=%d"
              % bluetooth_armed())
     else:
-        kmsg(f"rhizo-bluetooth-service NOT FOUND at {bluetooth_bin}")
+        kmsg(f"no rhizo-bluetooth-service at {bluetooth_bin}")
     camera_bin = f"{gfx_src}/{core.CAMERA_PROVIDER}"
     if os.path.isdir(gfx_src) and os.path.exists(camera_bin):
         core.stage_bulk(camera_bin, f"{RUN_ROOT}/vendor/bin/hw/{core.CAMERA_PROVIDER}", 0o755)
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             f"/vendor/bin/hw/{core.CAMERA_PROVIDER} u:object_r:rhizo_camera_provider_exec:s0\n"
         )
-        kmsg(f"{core.CAMERA_PROVIDER} staged on /vendor/bin/hw")
     else:
-        kmsg(f"{core.CAMERA_PROVIDER} NOT FOUND at {camera_bin}")
+        kmsg(f"no {core.CAMERA_PROVIDER} at {camera_bin}")
     gnss_bin = f"{gfx_src}/rhizo-gnss-service"
     _gnss_source = gnss_source_marked()
     if os.path.isdir(gfx_src) and os.path.exists(gnss_bin):
@@ -521,18 +510,16 @@ def stage_hals():
             "/vendor/bin/hw/rhizo-gnss-service u:object_r:rhizo_gnss_exec:s0\n"
         )
         if _gnss_source is None:
-            kmsg("rhizo-gnss-service staged but not armed: devices.location is off on the desktop profile")
+            kmsg("no rhizo-gnss.rc with devices.location off")
         else:
             _network = _gnss_source == "host" and stage_network_location()
             open(f"{RUN_ROOT}/product_upper/etc/permissions/rhizo-location.xml", "w").write(
                 gnss_feature_xml(_gnss_source, network_provider=_network))
-            kmsg(f"rhizo-location.xml staged with the gnss HAL ({_gnss_source} source)")
             open(f"{RUN_ROOT}/vendor/etc/init/rhizo-gnss.rc","w").write(
                 core.early_init_restorecon("/vendor/bin/hw/rhizo-gnss-service") +
                 "\n" + gnss_service_rc(_gnss_source))
-            kmsg(f"rhizo-gnss-service staged on /vendor/bin/hw ({_gnss_source} source)")
     else:
-        kmsg(f"rhizo-gnss-service NOT FOUND at {gnss_bin}")
+        kmsg(f"no rhizo-gnss-service at {gnss_bin}")
     audio_core_bin = f"{gfx_src}/rhizo-audio-core-service"
     if os.path.isdir(gfx_src) and os.path.exists(audio_core_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-audio-core-service"
@@ -545,9 +532,8 @@ def stage_hals():
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             "/vendor/bin/hw/rhizo-audio-core-service u:object_r:rhizo_audio_core_exec:s0\n"
         )
-        kmsg("rhizo-audio-core-service staged on /vendor/bin/hw")
     else:
-        kmsg(f"rhizo-audio-core-service NOT FOUND at {audio_core_bin}")
+        kmsg(f"no rhizo-audio-core-service at {audio_core_bin}")
     audio_effect_bin = f"{gfx_src}/rhizo-audio-effect-service"
     if os.path.isdir(gfx_src) and os.path.exists(audio_effect_bin):
         dst = f"{RUN_ROOT}/vendor/bin/hw/rhizo-audio-effect-service"
@@ -560,9 +546,8 @@ def stage_hals():
         open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts","a").write(
             "/vendor/bin/hw/rhizo-audio-effect-service u:object_r:rhizo_audio_effect_exec:s0\n"
         )
-        kmsg("rhizo-audio-effect-service staged on /vendor/bin/hw")
     else:
-        kmsg(f"rhizo-audio-effect-service NOT FOUND at {audio_effect_bin}")
+        kmsg(f"no rhizo-audio-effect-service at {audio_effect_bin}")
     stage_wifi_hal_bins()
     stage_sensors_hal_bin()
     stage_codec2_store_bin()
@@ -573,13 +558,13 @@ WIFI_HAL_LABELS = {"rhizo-wifi-service": "rhizo_wifi_exec",
 
 
 def stage_wifi_hal_bins():
-    """stage the Wi-Fi HAL binaries and their labels"""
+    """stage the Wi-Fi HAL binaries and vendor_file_contexts labels"""
     staged = []
     for src in core.wifi_hal_sources():
         name = os.path.basename(src)
         dst = f"{RUN_ROOT}/vendor/bin/hw/{name}"
         if core.is_prepared_bind_path(dst) and not os.path.exists(dst):
-            kmsg(f"{name} is not in the prepared tree -- not staged")
+            kmsg(f"no {name} in the prepared tree")
             continue
         core.stage_bulk(src, dst, 0o755)
         with open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts", "a") as f:
@@ -595,12 +580,12 @@ def wifi_hal_bins_staged():
 
 
 def stage_codec2_store_bin():
-    """stage the hardware Codec2 store binary and its label"""
+    """stage the Codec2 store binary and the rhizo_codec2_exec label"""
     staged = []
     for src in core.codec2_store_sources():
         dst = f"{RUN_ROOT}/vendor/bin/hw/{core.CODEC2_STORE_BIN}"
         if core.is_prepared_bind_path(dst) and not os.path.exists(dst):
-            kmsg(f"{core.CODEC2_STORE_BIN} is not in the prepared tree -- not staged")
+            kmsg(f"no {core.CODEC2_STORE_BIN} in the prepared tree")
             continue
         core.stage_bulk(src, dst, 0o755)
         with open(f"{RUN_ROOT}/vendor/etc/selinux/vendor_file_contexts", "a") as f:
@@ -611,7 +596,7 @@ def stage_codec2_store_bin():
 
 
 def _stage_virtual_device(upper, vendor_file_contexts_path, apk_src, rro_src):
-    """stage RhizoVirtualDevice and its RRO APK"""
+    """stage RhizoVirtualDevice.apk and RhizoAutomotiveProjectionRro.apk"""
     missing = [name for name, path in (("apk", apk_src), ("rro", rro_src))
                if not os.path.exists(path)]
     if missing:
@@ -638,7 +623,7 @@ def _stage_virtual_device(upper, vendor_file_contexts_path, apk_src, rro_src):
 
 
 def stage_virtual_device():
-    """stage RhizoVirtualDevice into the product tree"""
+    """stage RhizoVirtualDevice when devices.virtual is on"""
     policy = capabilities.policy_or_deny(log=kmsg)
     if not policy.allows("devices.virtual"):
         kmsg("RHIZO_MARKER virtual_device=off")
@@ -660,17 +645,14 @@ GAPPS_REQUIRED = ("priv-app/GmsCore/GmsCore.apk",
                   "priv-app/GoogleServicesFramework/GoogleServicesFramework.apk",
                   "priv-app/Phonesky/Phonesky.apk",
                   "etc/permissions/gapps-rhizo.xml")
-GAPPS_REFUSAL = ("Google apps are enabled, but this host has no valid Google apps payload for {release} ({why}). "
-                 "Starting Android without it would erase Google Play services' data and this device's "
-                 "registration, so Android was not started. Run 'sudo rhizo gapps enable' to fetch the payload "
-                 "again, or 'sudo rhizo gapps disable' to start Android without Google apps.")
+GAPPS_REFUSAL = "no valid Google apps payload for {release} ({why})"
 _MANIFEST_ROW = re.compile(r"([^\t]+)\t([0-9]+)\t([0-9a-f]{64})")
 _REASON_BAD = re.compile(r"[^A-Za-z0-9_.:=,/@-]")
 _COPY_CHUNK = 1 << 20
 
 
 def payload_dir(root):
-    """return the payload dir root/current links to, and why not"""
+    """return the root/current payload directory and a refusal reason"""
     current = os.path.join(root, "current")
     if not os.path.lexists(current):
         return None, "missing"
@@ -683,7 +665,7 @@ def payload_dir(root):
 
 
 def _payload_entries(payload, lower, contexts, required):
-    """return the manifest's rows, and why not"""
+    """return the manifest rows and a refusal reason"""
     try:
         with open(os.path.join(payload, PAYLOAD_MANIFEST), encoding="utf-8") as f:
             lines = f.read().splitlines()
@@ -721,7 +703,7 @@ def _payload_entries(payload, lower, contexts, required):
 
 
 def _copy_verified(src, dst, size, digest, made_files):
-    """copy and hash src to dst, and return why not"""
+    """copy and hash src to dst and return a refusal reason"""
     try:
         sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
@@ -774,7 +756,7 @@ def _make_dirs(upper, rel, made_dirs):
 
 
 def _reason(why):
-    """return why as a short marker-safe word"""
+    """return why with _REASON_BAD characters replaced and at most 160 characters"""
     return _REASON_BAD.sub("_", why)[:160]
 
 
@@ -874,7 +856,7 @@ def _stage_desktop_bridge(upper, vendor_file_contexts_path, apk_src):
 
 
 def stage_desktop_bridge():
-    """stage the RhizoDesktop APK"""
+    """stage RhizoDesktop when desktop_bridge_wanted() is true"""
     policy = capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID)
     if not desktop_bridge_wanted(policy):
         kmsg("RHIZO_MARKER desktop_bridge=off")
@@ -906,7 +888,7 @@ def _stage_host_delay(upper, vendor_file_contexts_path, vendor_service_contexts_
 
 
 def stage_host_delay():
-    """stage rhizo-host-delay onto /system_ext"""
+    """stage rhizo-host-delay when trace.host_delay is on"""
     policy = capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID)
     if not policy.allows("trace.host_delay"):
         kmsg("RHIZO_MARKER host_delay_daemon=withheld")
@@ -945,7 +927,7 @@ GNSS_SERVICE = {
 
 
 def gnss_source(policy=None):
-    """return this profile's gnss HAL source"""
+    """return the gnss HAL source for rhizo.profile"""
     if policy is None:
         policy = capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID)
     if policy.scope("rhizo.profile") == "server":
@@ -959,12 +941,12 @@ def gnss_source_marked():
     source = gnss_source(policy)
     kmsg(f"RHIZO_MARKER location_source={source or 'off'}")
     if source == "operator" and policy.allows("devices.location"):
-        kmsg("RHIZO_MARKER location_capability=ignored -- the server profile reports only the operator's fix")
+        kmsg("RHIZO_MARKER location_capability=ignored")
     return source
 
 
 def gnss_armed():
-    """return true when the profile starts the gnss HAL"""
+    """return whether gnss_source() is not None"""
     return gnss_source() is not None
 
 
@@ -980,8 +962,7 @@ def gnss_feature_xml(source, network_provider=True):
 def _stage_network_location(upper, vendor_file_contexts_path, apk_src):
     """stage the network location provider as a priv-app"""
     if not os.path.exists(apk_src):
-        kmsg(f"RHIZO_MARKER network_location=absent apk={apk_src} -- no network provider, "
-             f"no {NETWORK_LOCATION_FEATURE}")
+        kmsg(f"RHIZO_MARKER network_location=absent apk={apk_src}")
         return False
     for d in ("priv-app/RhizoNetworkLocation", "etc/default-permissions"):
         os.makedirs(os.path.join(upper, d), exist_ok=True)
@@ -1007,7 +988,7 @@ def stage_network_location():
 
 
 def network_location_armed():
-    """return true when the launch stages the network location provider"""
+    """return whether gnss_source() is host and RhizoNetworkLocation.apk exists"""
     return gnss_source() == "host" and os.path.exists(beside("RhizoNetworkLocation.apk"))
 
 
@@ -1025,7 +1006,7 @@ HEALTH_SERVICE_ARGV = {"operator": "", "off": "", "host": " --source host"}
 
 
 def battery_source(policy=None):
-    """return this profile's health HAL battery source"""
+    """return the health HAL battery source for rhizo.profile"""
     if policy is None:
         policy = capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID)
     profile = policy.scope("rhizo.profile")
@@ -1040,7 +1021,7 @@ def battery_source_marked():
     source = battery_source(policy)
     kmsg(f"RHIZO_MARKER battery_source={source}")
     if source == "operator" and policy.allows("devices.battery"):
-        kmsg("RHIZO_MARKER battery_capability=ignored -- the server profile reports only the operator's battery")
+        kmsg("RHIZO_MARKER battery_capability=ignored")
     return source
 
 
@@ -1093,7 +1074,6 @@ def _stage_camera(vendor_init, system_ext_init, permissions, vendor_file_context
         f.write(guest_files.read("init/camera-socket.rc"))
     with open(os.path.join(permissions, "rhizo-camera.xml"), "w") as f:
         f.write(guest_files.read("permissions/camera.xml"))
-    # MediaProfiles falls back to H.263 CIF in 3GPP without this file
     with open(os.path.join(vendor_etc, "media_profiles_V1_0.xml"), "w") as f:
         f.write(guest_files.read("vendor/media_profiles_V1_0.xml"))
     with open(vendor_file_contexts_path, "a") as f:
@@ -1104,7 +1084,7 @@ def _stage_camera(vendor_init, system_ext_init, permissions, vendor_file_context
 
 
 def stage_camera():
-    """stage the camera provider while devices.camera is on"""
+    """stage the camera provider when devices.camera is on and the provider exists"""
     policy = capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID)
     if not policy.allows("devices.camera"):
         kmsg("RHIZO_MARKER camera=off")
@@ -1130,7 +1110,7 @@ SENSORS_FILES = ("vendor/etc/rhizo-sensors.conf", "vendor/etc/init/rhizo-sensors
 
 
 def stage_sensors_hal_bin():
-    """stage the sensors HAL binary and its label"""
+    """stage the sensors HAL binary and the vendor_file_contexts label"""
     src = core.sensors_hal_source()
     dst = f"{RUN_ROOT}/vendor/bin/hw/{core.SENSORS_BIN}"
     if src is None:
@@ -1185,7 +1165,7 @@ def vendor_manifest_xml():
     """return the /vendor/manifest.xml text"""
     text = guest_files.read("vendor/manifest.xml")
     if core.RHIZO_RELEASE == "a15":
-        # a15's framework matrix accepts vendor sepolicy up to 202404; 202504 fails isBuildConsistent()
+        # the a15 framework compatibility matrix lists vendor sepolicy versions up to 202404
         text = text.replace("<version>202504</version>", "<version>202404</version>")
     if gnss_armed():
         text = text.replace("</manifest>", GNSS_MANIFEST_HAL + "</manifest>")
@@ -1201,7 +1181,7 @@ def vendor_manifest_xml():
     if not policy.allows("devices.virtual"):
         return text
     if "</manifest>" not in text:
-        kmsg("RHIZO_MARKER camera_provider_hal=absent -- vendor-manifest.xml has no </manifest>")
+        kmsg("RHIZO_MARKER camera_provider_hal=absent file=vendor-manifest.xml missing=</manifest>")
         return text
     camera_hal = (
         '    <hal format="aidl">\n'

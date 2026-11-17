@@ -80,7 +80,7 @@ struct Obu {
   size_t header_bytes;
 };
 
-// the sequence header OBU and its derived variables
+// the sequence header OBU and the derived variables
 struct SequenceHeader {
   uint32_t seq_profile = 0;
   bool still_picture = false;
@@ -165,7 +165,7 @@ struct FilmGrainParams {
   bool clip_to_restricted_range = false;
 };
 
-// the parameters a frame carries to the next
+// the parameters load_previous() loads from the primary reference frame
 struct CarriedParams {
   int32_t loop_filter_ref_deltas[kTotalRefsPerFrame] = {1, 0, 0, 0, -1, 0, -1, -1};
   int32_t loop_filter_mode_deltas[2] = {0, 0};
@@ -174,7 +174,7 @@ struct CarriedParams {
   int32_t gm_params[kTotalRefsPerFrame][6] = {};
 };
 
-// the slot contents the reference frame update stores
+// a slot of the reference frame update process
 struct RefSlot {
   bool valid = false;
   uint32_t frame_id = 0;
@@ -310,7 +310,7 @@ struct FrameHeader {
   size_t header_bits = 0;
 };
 
-// a tile's bytes in its tile group's buffer
+// the byte span of a tile in the tile group buffer
 struct TileSpan {
   size_t offset;
   uint32_t size;

@@ -1,5 +1,5 @@
 #!/bin/bash
-# generate the AIDL NDK glue for the HALs
+# toolchain/gen toolchain/gen_a15 toolchain/include_platform toolchain/boringssl_include toolchain/gfx_aidl_src RHIZO_AIDL=
 set -uo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cd "$(dirname "$SELF")" || exit
@@ -68,29 +68,28 @@ dump_dir() { echo "$AOSP/${DIR[$1]}/aidl_api/${PKG[$1]}/${VER[$1]}"; }
 # print the output folder of a package's generated glue
 out_dir() { echo "$TC/${OUT[$1]:-gen/$1}"; }
 
-# check the frozen dump's hash against the pin
+# return whether the frozen dump .hash has HASH[$1]
 assert_hash() {
   local d line have=""
   d=$(dump_dir "$1")
-  [[ -d "$d/android" ]] || { log "$1: no frozen dump at $d"; return 1; }
+  [[ -d "$d/android" ]] || { log "no frozen dump at $d"; return 1; }
   while IFS= read -r line; do
     have="$have $line"
     [[ "$line" == "${HASH[$1]}" ]] && return 0
   done < "$d/.hash"
-  log "$1: ${PKG[$1]} V${VER[$1]}'s frozen hash is '${have# }', pinned ${HASH[$1]}"
+  log "${PKG[$1]} V${VER[$1]} .hash is '${have# }', expected ${HASH[$1]}"
   return 1
 }
 
-# build the aidl compiler if missing and check its SDK version
+# build $AIDL with m aidl if missing and match aidl --version against AIDL_SDK
 ensure_aidl() {
   if [[ ! -x "$AIDL" ]]; then
-    log "no aidl at $AIDL, building it (m aidl in $AOSP)"
     ( set +u; cd "$AOSP" && source build/envsetup.sh && lunch aosp_x86_64 bp2a userdebug && m aidl ) \
       || { log "m aidl failed in $AOSP"; return 1; }
   fi
   local banner
   banner=$("$AIDL" --version 2>&1)
-  [[ "$banner" == *"platform SDK version $AIDL_SDK"* ]] || { log "$AIDL is not the SDK $AIDL_SDK compiler: $banner"; return 1; }
+  [[ "$banner" == *"platform SDK version $AIDL_SDK"* ]] || { log "$AIDL --version is not platform SDK version $AIDL_SDK ($banner)"; return 1; }
 }
 
 # generate the AIDL glue for a package
@@ -101,14 +100,14 @@ generate() {
   inc=(-I "$d")
   for i in ${IMPORTS[$g]}; do assert_hash "$i" || return 1; inc+=(-I "$(dump_dir "$i")"); done
   for i in ${INCS[$g]:-}; do
-    [[ -d "$AOSP/$i" ]] || { log "$g: no header-only AIDL folder at $AOSP/$i"; return 1; }
+    [[ -d "$AOSP/$i" ]] || { log "no $AOSP/$i for $g"; return 1; }
     inc+=(-I "$AOSP/$i")
   done
   while IFS= read -r i; do srcs+=("$i"); done < <(find "$d/android" -name '*.aidl' | sort)
   if [[ -n "${EXTRA[$g]:-}" ]]; then
     set -- ${EXTRA[$g]}
     extra="$AOSP/$1/aidl_api/$2/$3"
-    [[ -d "$extra/android" ]] || { log "$g: no dump for $2 V$3 at $extra"; return 1; }
+    [[ -d "$extra/android" ]] || { log "no $extra/android for $g"; return 1; }
     inc+=(-I "$extra")
     while IFS= read -r i; do srcs+=("$i"); done < <(find "$extra/android" -name '*.aidl' | sort)
   fi
@@ -116,8 +115,8 @@ generate() {
   mkdir -p "$out/ndk" "$out/header"
   "$AIDL" --lang=ndk --structured --stability=vintf --version="${VER[$g]}" --min_sdk_version="${MIN[$g]}" \
     --hash="${HASH[$g]}" "${inc[@]}" -o "$out/ndk" -h "$out/header" "${srcs[@]}" \
-    || { log "$g: aidl failed"; return 1; }
-  log "$g: ${PKG[$g]} V${VER[$g]} ${#srcs[@]} files -> ${out#$REPO_ROOT/}"
+    || { log "aidl failed for $g"; return 1; }
+  log "wrote ${PKG[$g]} V${VER[$g]} files=${#srcs[@]} to ${out#$REPO_ROOT/}"
 }
 
 # copy the platform headers from the checkout
@@ -141,7 +140,7 @@ copy_headers() {
   rm -rf "$m.part"; mkdir -p "$m.part/implutils"
   cp -rL "$s/include" "$m.part/include" && cp -r "$s/implutils/include" "$m.part/implutils/include" || return 1
   rm -rf "$m" && mkdir -p "$(dirname "$m")" && mv "$m.part" "$m"
-  log "headers: include_platform, boringssl_include, mapper stable-c copied from the checkout"
+  log "copied include_platform, boringssl_include and gfx_aidl_src/mapper/stable-c to $TC"
 }
 
 # check the glue rows against the build scripts
@@ -152,32 +151,32 @@ selftest() {
     case "$r" in toolchain/gen) continue ;; esac
     local found=0
     for g in "${GENS[@]}"; do [[ "toolchain/${OUT[$g]:-gen/$g}" == "$r" ]] && found=1; done
-    (( found )) || { echo "SELFTEST FAILED: build scripts read $r but no row generates it"; fail=1; }
+    (( found )) || { echo "FAIL a GENS row generates $r"; fail=1; }
   done <<<"$refs"
   for g in "${GENS[@]}"; do
     [[ "$g" == secureclock ]] && continue
     r="toolchain/${OUT[$g]:-gen/$g}"
-    grep -rq --include='*.sh' "$r/" "$REPO/tools/build" || { echo "SELFTEST FAILED: row $g generates $r, which no build script reads"; fail=1; }
+    grep -rq --include='*.sh' "$r/" "$REPO/tools/build" || { echo "FAIL a tools/build script reads $r/ of row $g"; fail=1; }
   done
   tmp=$(mktemp -d)
   mkdir -p "$tmp/hardware/interfaces/thermal/aidl/aidl_api/android.hardware.thermal/3/android"
   printf 'deadbeef\n' > "$tmp/hardware/interfaces/thermal/aidl/aidl_api/android.hardware.thermal/3/.hash"
   out=$(AOSP="$tmp" assert_hash thermal 2>&1)
-  [[ $? -ne 0 && "$out" == *"android.hardware.thermal V3's frozen hash is 'deadbeef'"* ]] \
-    || { echo "SELFTEST FAILED: a drifted hash was not refused by name -- got: $out"; fail=1; }
+  [[ $? -ne 0 && "$out" == *"android.hardware.thermal V3 .hash is 'deadbeef'"* ]] \
+    || { echo "FAIL assert_hash thermal with .hash deadbeef returns 1 ($out)"; fail=1; }
   out=$(AOSP="$tmp" assert_hash health 2>&1)
-  [[ $? -ne 0 && "$out" == *"no frozen dump"* ]] || { echo "SELFTEST FAILED: a missing dump was not refused -- got: $out"; fail=1; }
+  [[ $? -ne 0 && "$out" == *"no frozen dump"* ]] || { echo "FAIL assert_hash health without a dump returns 1 ($out)"; fail=1; }
   mkdir -p "$tmp/main/toolchain/gen" "$tmp/wt"
   ln -s "$tmp/main/toolchain" "$tmp/wt/toolchain"
   out=$(REPO_ROOT="$tmp/wt" own_output "$tmp/wt/toolchain" "$tmp/wt/toolchain/gen" 2>&1)
-  [[ $? -ne 0 && "$out" == *"toolchain resolves to $tmp/main/toolchain"*"rm toolchain && cp -a --reflink=auto $tmp/main/toolchain toolchain" ]] || { echo "SELFTEST FAILED: a toolchain linked to another checkout was not refused by name -- got: $out"; fail=1; }
-  REPO_ROOT="$tmp/main" own_output "$tmp/main/toolchain" "$tmp/main/toolchain/gen" >/dev/null 2>&1 || { echo "SELFTEST FAILED: a checkout's own toolchain was refused"; fail=1; }
+  [[ $? -ne 0 && "$out" == *"toolchain resolves to $tmp/main/toolchain"*"through the link toolchain" ]] || { echo "FAIL own_output with toolchain -> main/toolchain returns 1 ($out)"; fail=1; }
+  REPO_ROOT="$tmp/main" own_output "$tmp/main/toolchain" "$tmp/main/toolchain/gen" >/dev/null 2>&1 || { echo "FAIL own_output main/toolchain main/toolchain/gen returns 0"; fail=1; }
   rm -rf "$tmp"
   if [[ -d "$AOSP/hardware/interfaces" ]]; then
-    for g in "${GENS[@]}"; do assert_hash "$g" >/dev/null 2>&1 || { echo "SELFTEST FAILED: the checkout's dump for $g does not carry the pinned hash"; fail=1; }; done
+    for g in "${GENS[@]}"; do assert_hash "$g" >/dev/null 2>&1 || { echo "FAIL assert_hash $g returns 0"; fail=1; }; done
   fi
-  if (( fail )); then echo "regen-aidl-glue.sh selftest: FAILED"; return 1; fi
-  echo "regen-aidl-glue.sh selftest: ok"
+  if (( fail )); then echo "FAIL regen-aidl-glue.sh --selftest"; return 1; fi
+  echo "ok regen-aidl-glue.sh --selftest"
 }
 
 ONLY=()
@@ -185,17 +184,17 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --only) ONLY+=("$2"); shift 2 ;;
     --selftest) selftest; exit $? ;;
-    *) echo "usage: $0 [--only GEN]... [--selftest]" >&2; exit 2 ;;
+    *) echo "$0 [--only GEN]... [--selftest]" >&2; exit 2 ;;
   esac
 done
 [[ ${#ONLY[@]} -gt 0 ]] || ONLY=("${GENS[@]}")
 own_output "$TC" "$TC/gen" "$TC/gen_a15" "$TC/gfx_aidl_src" "$TC/out" || exit 1
-[[ -d "$AOSP/hardware/interfaces" ]] || { log "no AOSP checkout at $AOSP -- run tools/fetch/build-inputs.sh --only aosp"; exit 1; }
+[[ -d "$AOSP/hardware/interfaces" ]] || { log "no $AOSP/hardware/interfaces"; exit 1; }
 ensure_aidl || exit 1
 for g in "${ONLY[@]}"; do
-  [[ -n "${PKG[$g]:-}" ]] || { log "unknown glue dir '$g' (want: ${GENS[*]})"; exit 2; }
+  [[ -n "${PKG[$g]:-}" ]] || { log "unknown glue dir '$g', expected one of ${GENS[*]}"; exit 2; }
   generate "$g" || exit 1
 done
 [[ ${#ONLY[@]} -eq ${#GENS[@]} ]] && { copy_headers || exit 1; }
 rm -rf "$TC/out/gen_aidl_src" "$TC/out/x86/gen_aidl_src"
-log "removed toolchain/out/gen_aidl_src; rebuild every HAL"
+log "deleted toolchain/out/gen_aidl_src and toolchain/out/x86/gen_aidl_src"

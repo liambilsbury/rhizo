@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# add and enable a spare pool display
+# display pool-add and enable-display for a spare pool display
 export PATH=/system/bin:/system/xbin:/vendor/bin:$PATH
 
 W="$1"

@@ -10,7 +10,7 @@
 #define RHIZO_STREAM_FRAME_MAGIC 0x52535431u
 #define RHIZO_STREAM_ACK_MAGIC   0x52534b31u
 
-// header for a presented frame
+// frame header
 struct rhizo_stream_frame_header {
   uint32_t magic;
   uint32_t version;

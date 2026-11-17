@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_IMAGE_OPS_H
 #define RHIZO_CAMERA_IMAGE_OPS_H
 
-// scale, convert and encode host camera frames on the CPU
+// CPU scaling, conversion and JPEG encoding of host camera frames
 
 #include <stddef.h>
 #include <stdint.h>

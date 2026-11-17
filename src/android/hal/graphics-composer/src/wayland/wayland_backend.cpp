@@ -65,7 +65,7 @@ static_assert(rhizo::kShapeDefault == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT &&
                   rhizo::kShapeAllScroll == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL &&
                   rhizo::kShapeZoomIn == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_IN &&
                   rhizo::kShapeZoomOut == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_OUT,
-              "pointer_icon.h's shapes are wp_cursor_shape_device_v1's");
+              "rhizo::kShape* == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_*");
 
 namespace rhizo {
 namespace {
@@ -74,7 +74,7 @@ namespace {
 void klog(const char* msg) {
   __android_log_print(ANDROID_LOG_INFO, "rhizo-wayland-backend", "%s", msg);
 }
-// format the message and write it with klog
+// write the formatted message with klog
 void klogf(const char* fmt, ...) {
   char buf[320];
   va_list ap;
@@ -89,18 +89,18 @@ void SetFifoPriority2(const char* threadLabel) {
   struct sched_param sp {};
   sp.sched_priority = 2;
   if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
-    klogf("%s: sched_setscheduler(SCHED_FIFO, pri=2) FAILED errno=%d (%s) -- thread stays SCHED_OTHER",
+    klogf("%s sched_setscheduler(SCHED_FIFO, pri=2) failed errno=%d (%s)",
           threadLabel, errno, strerror(errno));
   }
 }
 
-// return the RHIZO_COMPOSER_DEBUG setting
+// read RHIZO_COMPOSER_DEBUG from the environment
 bool composerDebugEnabled() {
   static const bool on = getenv("RHIZO_COMPOSER_DEBUG") != nullptr;
   return on;
 }
 
-// return the clipboard enabled flag
+// read RHIZO_COMPOSER_CLIPBOARD from the environment
 bool composerClipboardEnabled() {
   static const bool on = [] {
     const char* v = getenv("RHIZO_COMPOSER_CLIPBOARD");
@@ -122,12 +122,12 @@ void WaitFence(int fenceFd) {
   struct pollfd pfd{fenceFd, POLLIN, 0};
   int pr = poll(&pfd, 1, 3000);
   if (pr <= 0) {
-    klogf("WaylandBackend: acquire fence wait pr=%d errno=%d (%s) -- proceeding anyway",
+    klogf("acquire fence poll returned pr=%d errno=%d (%s)",
           pr, errno, strerror(errno));
   }
 }
 
-// write the bytes to the file descriptor
+// write the bytes to fd within 5 s
 bool WriteAllWithDeadline(int fd, const uint8_t* data, size_t len, const char* what) {
   size_t remaining = len;
   const uint8_t* p = data;
@@ -135,23 +135,23 @@ bool WriteAllWithDeadline(int fd, const uint8_t* data, size_t len, const char* w
   while (remaining > 0) {
     const int64_t remainingMs = (deadlineNs - MonotonicNs()) / 1000000;
     if (remainingMs <= 0) {
-      klogf("WaylandBackend: %s write timed out, %zu/%zu bytes sent", what, len - remaining, len);
+      klogf("%s write timed out after %zu/%zu bytes", what, len - remaining, len);
       return false;
     }
     struct pollfd pfd{fd, POLLOUT, 0};
     int pr = poll(&pfd, 1, static_cast<int>(remainingMs));
     if (pr < 0) {
       if (errno == EINTR) continue;
-      klogf("WaylandBackend: %s send poll FAILED errno=%d (%s)", what, errno, strerror(errno));
+      klogf("%s poll for POLLOUT failed errno=%d (%s)", what, errno, strerror(errno));
       return false;
     }
     if (pr == 0) {
-      klogf("WaylandBackend: %s write timed out, %zu/%zu bytes sent", what, len - remaining, len);
+      klogf("%s write timed out after %zu/%zu bytes", what, len - remaining, len);
       return false;
     }
     ssize_t w = write(fd, p, remaining);
     if (w <= 0) {
-      klogf("WaylandBackend: %s write FAILED errno=%d (%s), %zu/%zu bytes sent", what, errno,
+      klogf("%s write failed errno=%d (%s) after %zu/%zu bytes", what, errno,
             strerror(errno), len - remaining, len);
       return false;
     }
@@ -165,11 +165,11 @@ bool WriteAllWithDeadline(int fd, const uint8_t* data, size_t len, const char* w
 int CreateAnonShmFile(size_t size) {
   int fd = memfd_create("rhizo-cursor", MFD_CLOEXEC);
   if (fd < 0) {
-    klogf("CreateAnonShmFile: memfd_create failed errno=%d (%s)", errno, strerror(errno));
+    klogf("memfd_create(rhizo-cursor) failed errno=%d (%s)", errno, strerror(errno));
     return -1;
   }
   if (ftruncate(fd, static_cast<off_t>(size)) < 0) {
-    klogf("CreateAnonShmFile: ftruncate(%zu) failed errno=%d (%s)", size, errno, strerror(errno));
+    klogf("ftruncate(rhizo-cursor, %zu) failed errno=%d (%s)", size, errno, strerror(errno));
     close(fd);
     return -1;
   }
@@ -253,7 +253,7 @@ struct DisplayState {
     bool shown = false;
   } fill;
   bool minSizeSet = false;
-  // configures not yet acked, oldest first
+  // xdg_surface configures to ack, oldest first
   struct PendingAck {
     uint32_t serial;
     int32_t width;
@@ -313,7 +313,7 @@ uint32_t ModLo(uint64_t m) { return static_cast<uint32_t>(m & 0xffffffffu); }
 
 std::mutex g_wlLogMutex;
 std::string g_wlLastLogMessage;
-// format a libwayland log message and store it as the last one
+// format a libwayland log message into g_wlLastLogMessage
 void WlLogHandler(const char* fmt, va_list args) {
   char buf[320];
   vsnprintf(buf, sizeof(buf), fmt, args);
@@ -433,7 +433,7 @@ struct WaylandBackend::Impl {
 
   wl_data_source* clipSource = nullptr;
   void* clipSourceCtx = nullptr;
-  // deferred clipboard set request
+  // SetSelection mime and payload parked while lastInputSerial is 0
   struct ParkedSelection {
     bool valid = false;
     std::string mime;
@@ -465,7 +465,7 @@ struct WaylandBackend::Impl {
   void QueueInput(int64_t displayId, WaylandInputEvent::Kind kind, double x, double y,
                   uint32_t code, int32_t value, uint32_t timeMsec) {
     if (displayId < 0) {
-      klogf("QueueInput: dropped kind=%d x=%.0f y=%.0f code=%u value=%d, no focused display",
+      klogf("dropped input kind=%d x=%.0f y=%.0f code=%u value=%d with no focused display",
             static_cast<int>(kind), x, y, code, value);
     }
     if (!inputCb || displayId < 0) return;
@@ -539,7 +539,7 @@ struct WaylandBackend::Impl {
     bool drained = ioThreadsCv.wait_for(lk, std::chrono::seconds(6),
                                          [&] { return activeIoThreads == 0; });
     if (!drained) {
-      klogf("WaylandBackend: %lld drag-and-drop I/O thread(s) still running at shutdown",
+      klogf("%lld drag-and-drop I/O threads are still running at shutdown",
             static_cast<long long>(activeIoThreads));
     }
   }
@@ -568,8 +568,7 @@ void WaylandBackend::Disconnect() {
     std::vector<int64_t> leftover;
     for (auto& kv : impl->displays) leftover.push_back(kv.first);
     for (int64_t id : leftover) {
-      klogf("WaylandBackend::Disconnect: display %lld still had a live surface -- "
-            "destroying it",
+      klogf("display %lld still has a surface at disconnect",
             static_cast<long long>(id));
       DestroyDisplayLocked(impl, id);
     }
@@ -659,7 +658,7 @@ void WaylandBackend::Disconnect() {
   impl->shmFormats.clear();
   impl->connected = false;
   impl->lastPresentWasDmabuf = false;
-  klog("WaylandBackend::Disconnect: connection torn down, ready to Connect() again");
+  klog("disconnected from Wayland");
 }
 
 namespace {
@@ -697,7 +696,7 @@ int32_t SurfaceLocal(int32_t px, int32_t scale120) {
   return scale120 > 0 ? (px * 120 + scale120 / 2) / scale120 : px;
 }
 
-// check for a fractional scale
+// return whether the display has a wp_fractional_scale_v1 preferred scale and a viewport
 bool FractionalLocked(const DisplayState* ds) {
   return ds->fractionalScale && ds->viewport && ds->preferredScale120 > 0;
 }
@@ -721,7 +720,7 @@ void ApplyOutputScaleLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
   if (ds->surface) {
     wl_surface_set_buffer_scale(ds->surface, fractional ? 1 : scale);
   }
-  klogf("WaylandBackend: display %lld buffer scale -> %d/120 (%s)", static_cast<long long>(ds->id),
+  klogf("display %lld buffer scale -> %d/120 (%s)", static_cast<long long>(ds->id),
         scale120, fractional ? "fractional, viewport" : "integer, buffer scale");
   QueueResizeLocked(impl, ds);
   if (ds->decorationMode == WaylandDecorationMode::kClientSide) RedrawCsdStripLocked(impl, ds);
@@ -733,12 +732,12 @@ void OnPreferredScale(void* data, wp_fractional_scale_v1*, uint32_t scale120) {
   DisplayState* ds = ctx->impl->Find(ctx->displayId);
   if (!ds || scale120 == 0) return;
   ds->preferredScale120 = static_cast<int32_t>(scale120);
-  klogf("WaylandBackend: display %lld preferred scale %u/120", static_cast<long long>(ds->id), scale120);
+  klogf("display %lld preferred scale %u/120", static_cast<long long>(ds->id), scale120);
   ApplyOutputScaleLocked(ctx->impl, ds);
 }
 constexpr wp_fractional_scale_v1_listener kFractionalScaleListener{.preferred_scale = OnPreferredScale};
 
-// reply to the xdg_wm_base ping
+// call xdg_wm_base_pong for the ping
 void OnWmBasePing(void*, xdg_wm_base* wmBase, uint32_t serial) {
   xdg_wm_base_pong(wmBase, serial);
 }
@@ -767,7 +766,7 @@ void OnXdgSurfaceConfigure(void* data, xdg_surface* surface, uint32_t serial) {
     ds->reportedWidth = ds->proposedWidth;
     ds->reportedHeight = ds->proposedHeight;
     QueueResizeLocked(ctx->impl, ds);
-    klogf("WaylandBackend: display %lld compositor sized it %dx%d surface-local (%dx%d px at scale %d/120)",
+    klogf("display %lld configured to %dx%d surface-local (%dx%d px at scale %d/120)",
           static_cast<long long>(ctx->displayId), ds->reportedWidth, ds->reportedHeight,
           ScaledPx(ds->reportedWidth, ds->appliedScale120), ScaledPx(ds->reportedHeight, ds->appliedScale120),
           ds->appliedScale120);
@@ -776,7 +775,7 @@ void OnXdgSurfaceConfigure(void* data, xdg_surface* surface, uint32_t serial) {
     }
   }
   if (first) {
-    klogf("WaylandBackend: display %lld xdg_surface.configure serial=%u ack'd (first)",
+    klogf("display %lld xdg_surface.configure serial=%u configured=1",
           static_cast<long long>(ctx->displayId), serial);
     ctx->impl->configureCv.notify_all();
   }
@@ -823,7 +822,7 @@ void OnToplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t heigh
   bool clamped = false;
   if (w > 0 && h > 0 && !fullscreen && !maximized && !resizing && ds->boundsWidth > 0 &&
       ds->boundsHeight > 0 && (w > ds->boundsWidth || h > ds->boundsHeight)) {
-    klogf("WaylandBackend: display %lld at %dx%d is past the compositor's bounds %dx%d -- asking for "
+    klogf("display %lld at %dx%d exceeds configure_bounds %dx%d, clamped to "
           "%dx%d", static_cast<long long>(ctx->displayId), w, h, ds->boundsWidth, ds->boundsHeight,
           std::min(w, ds->boundsWidth), std::min(h, ds->boundsHeight));
     w = std::min(w, ds->boundsWidth);
@@ -836,7 +835,7 @@ void OnToplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t heigh
   }
   if (maximized != ds->maximized || fullscreen != ds->fullscreen ||
       activated != ds->activated || resizing != ds->resizing) {
-    klogf("WaylandBackend: display %lld toplevel state -> maximized=%d fullscreen=%d "
+    klogf("display %lld toplevel state -> maximized=%d fullscreen=%d "
           "activated=%d resizing=%d",
           static_cast<long long>(ctx->displayId), maximized, fullscreen, activated, resizing);
   }
@@ -848,7 +847,7 @@ void OnToplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t heigh
 // queue the toplevel close event
 void OnToplevelClose(void* data, xdg_toplevel*) {
   auto* ctx = static_cast<DisplayCtx*>(data);
-  klogf("WaylandBackend: display %lld xdg_toplevel.close from compositor",
+  klogf("display %lld xdg_toplevel.close from compositor",
         static_cast<long long>(ctx->displayId));
   if (ctx->impl->closeCb) ctx->impl->pendingCloses.push_back(ctx->displayId);
 }
@@ -878,7 +877,7 @@ void OnDecorationConfigure(void* data, zxdg_toplevel_decoration_v1*, uint32_t mo
                             ? WaylandDecorationMode::kServerSide
                             : WaylandDecorationMode::kClientSide;
   if (newMode == ds->decorationMode) return;
-  klogf("WaylandBackend: display %lld decoration mode -> %s", static_cast<long long>(ds->id),
+  klogf("display %lld decoration mode -> %s", static_cast<long long>(ds->id),
         newMode == WaylandDecorationMode::kServerSide ? "ssd" : "csd");
   ds->decorationMode = newMode;
   if (newMode == WaylandDecorationMode::kClientSide) {
@@ -909,7 +908,7 @@ void OnDmabufModifier(void* data, zwp_linux_dmabuf_v1*, uint32_t format,
   auto* table = static_cast<std::map<uint32_t, std::vector<uint64_t>>*>(data);
   uint64_t modifier = (static_cast<uint64_t>(modifierHi) << 32) | modifierLo;
   (*table)[format].push_back(modifier);
-  klogf("WaylandBackend: compositor advertised format=0x%08x modifier=0x%016llx", format,
+  klogf("compositor advertised format=0x%08x modifier=0x%016llx", format,
         static_cast<unsigned long long>(modifier));
 }
 constexpr zwp_linux_dmabuf_v1_listener kDmabufListener{
@@ -954,7 +953,6 @@ constexpr wl_buffer_listener kCursorBufferListener{.release = OnCursorBufferRele
 
 // attach the cursor image to the pointer
 void ApplyCursorNowLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
-  // the host cursor theme draws all of the system pointers; only a custom icon uses Android's image
   if (impl->cursorShapeManager) {
     const uint32_t shape = rhizo::CursorShapeForPointerType(ds->cursor.pointerType);
     if (shape != rhizo::kShapeUseImage) {
@@ -991,7 +989,7 @@ void ApplyCursorNowLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
     if (fd < 0) return;
     slot->data = mmap(nullptr, static_cast<size_t>(needed), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (slot->data == MAP_FAILED) {
-      klog("ApplyCursorNowLocked: mmap failed");
+      klog("cursor mmap failed");
       close(fd);
       slot->data = nullptr;
       return;
@@ -1031,7 +1029,7 @@ void DestroyCsdStripLocked(DisplayState* ds) {
   csd.scale = 0;
 }
 
-// destroy the fill subsurface and its buffer
+// destroy the fill subsurface and the fill buffer
 void DestroyFillLocked(DisplayState* ds) {
   auto& f = ds->fill;
   if (f.viewport) { wp_viewport_destroy(f.viewport); f.viewport = nullptr; }
@@ -1168,7 +1166,7 @@ void RedrawCsdStripLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
     if (fd < 0) return;
     csd.data = mmap(nullptr, needed, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (csd.data == MAP_FAILED) {
-      klog("RedrawCsdStripLocked: mmap failed");
+      klog("CSD strip mmap failed");
       close(fd);
       csd.data = nullptr;
       return;
@@ -1193,7 +1191,7 @@ void RedrawCsdStripLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
 void CreateCsdStripLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
   if (ds->csd.surface) return;
   if (!impl->compositor || !impl->shm || !impl->subcompositor) {
-    klog("WaylandBackend: cannot build a CSD strip, missing wl_compositor/wl_shm/wl_subcompositor");
+    klog("failed to create the CSD strip with wl_compositor, wl_shm or wl_subcompositor unbound");
     return;
   }
   ds->csd.surface = wl_compositor_create_surface(impl->compositor);
@@ -1212,7 +1210,7 @@ void HandleCsdClickLocked(WaylandBackend::Impl* impl, int64_t displayId, double 
   const int32_t maxX0 = w - kCsdButtonWidth * 2;
   const int32_t minX0 = w - kCsdButtonWidth * 3;
   if (x >= closeX0) {
-    klogf("WaylandBackend: display %lld CSD close clicked", static_cast<long long>(displayId));
+    klogf("display %lld CSD close clicked", static_cast<long long>(displayId));
     if (impl->closeCb) impl->pendingCloses.push_back(displayId);
   } else if (x >= maxX0) {
     if (ds->maximized) xdg_toplevel_unset_maximized(ds->xdgToplevel);
@@ -1230,7 +1228,7 @@ constexpr wl_callback_listener kFrameListener{.done = OnFrameDone};
 
 // ignore the presentation feedback sync output event
 void OnFeedbackSyncOutput(void*, struct wp_presentation_feedback*, wl_output*) {}
-// queue the presented time and refresh for the frame's display
+// queue the feedback timestamp and refresh for the frame's display
 void OnFeedbackPresented(void* data, struct wp_presentation_feedback* fb, uint32_t tv_sec_hi,
                          uint32_t tv_sec_lo, uint32_t tv_nsec, uint32_t refresh, uint32_t,
                          uint32_t, uint32_t) {
@@ -1260,7 +1258,7 @@ constexpr wp_presentation_feedback_listener kFeedbackListener{
     .discarded = OnFeedbackDiscarded,
 };
 
-// request presentation feedback or a frame callback
+// call wp_presentation_feedback or wl_surface_frame
 void RequestCompletionLocked(WaylandBackend::Impl* impl, DisplayState* ds, int64_t commitNs) {
   auto* ctx = new DisplayCtx{ds->id, impl, commitNs};
   if (impl->presentation) {
@@ -1272,7 +1270,7 @@ void RequestCompletionLocked(WaylandBackend::Impl* impl, DisplayState* ds, int64
   wl_callback_add_listener(cb, &kFrameListener, ctx);
 }
 
-// request a completion on an empty commit
+// call RequestCompletionLocked and wl_surface_commit
 void KickLocked(WaylandBackend::Impl* impl, DisplayState* ds) {
   RequestCompletionLocked(impl, ds, 0);
   wl_surface_commit(ds->surface);
@@ -1310,7 +1308,7 @@ void OnPointerEnter(void* data, wl_pointer*, uint32_t serial, wl_surface* surfac
   impl->csdPointerFocus = -1;
   auto it = impl->surfaceToDisplay.find(surface);
   impl->pointerFocus = it == impl->surfaceToDisplay.end() ? -1 : it->second;
-  klogf("WaylandBackend: pointer entered display %lld at %.0f,%.0f",
+  klogf("pointer entered display %lld at %.0f,%.0f",
         static_cast<long long>(impl->pointerFocus), impl->pointerX, impl->pointerY);
   impl->QueueInput(impl->pointerFocus, WaylandInputEvent::Kind::PointerEnter, impl->pointerX,
                    impl->pointerY, 0, 0, 0);
@@ -1410,7 +1408,7 @@ void FlushPointerAxisLocked(WaylandBackend::Impl* impl) {
     p = WaylandBackend::Impl::PendingAxis{};
   }
 }
-// send the pending scroll axes
+// queue the pending scroll axes
 void OnPointerFrame(void* data, wl_pointer*) {
   FlushPointerAxisLocked(static_cast<WaylandBackend::Impl*>(data));
 }
@@ -1444,7 +1442,7 @@ void OnKeyboardKeymap(void* data, wl_keyboard*, uint32_t format, int32_t fd, uin
   void* map = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
   close(fd);
   if (map == MAP_FAILED) {
-    klogf("OnKeyboardKeymap: mmap FAILED errno=%d (%s)", errno, strerror(errno));
+    klogf("keymap mmap failed errno=%d (%s)", errno, strerror(errno));
     return;
   }
   const char* text = static_cast<const char*>(map);
@@ -1458,7 +1456,7 @@ void OnKeyboardEnter(void* data, wl_keyboard*, uint32_t serial, wl_surface* surf
   CompleteParkedSelectionLocked(impl);
   auto it = impl->surfaceToDisplay.find(surface);
   impl->keyboardFocus = it == impl->surfaceToDisplay.end() ? -1 : it->second;
-  klogf("WaylandBackend: keyboard focus -> display %lld",
+  klogf("keyboard focus -> display %lld",
         static_cast<long long>(impl->keyboardFocus));
 }
 // clear the keyboard focus
@@ -1532,10 +1530,10 @@ constexpr wl_touch_listener kTouchListener{
     .orientation = OnTouchOrientation,
 };
 
-// get or release the input devices to match the seat
+// get or release wl_pointer, wl_keyboard and wl_touch for the seat capabilities
 void OnSeatCapabilities(void* data, wl_seat* seat, uint32_t caps) {
   auto* impl = static_cast<WaylandBackend::Impl*>(data);
-  klogf("WaylandBackend: seat capabilities=0x%x", caps);
+  klogf("wl_seat capabilities=0x%x", caps);
   if ((caps & WL_SEAT_CAPABILITY_POINTER) && !impl->pointer) {
     impl->pointer = wl_seat_get_pointer(seat);
     wl_pointer_add_listener(impl->pointer, &kPointerListener, impl);
@@ -1601,7 +1599,7 @@ void OnDataDeviceDataOffer(void* data, wl_data_device*, wl_data_offer* id) {
   impl->pendingOfferMimes.clear();
   wl_data_offer_add_listener(id, &kDataOfferListener, impl);
 }
-// accept the dragged offer
+// call wl_data_offer_accept for the dragged offer
 void OnDataDeviceEnter(void* data, wl_data_device*, uint32_t serial, wl_surface* surface,
                         wl_fixed_t x, wl_fixed_t y, wl_data_offer* id) {
   auto* impl = static_cast<WaylandBackend::Impl*>(data);
@@ -1620,7 +1618,7 @@ void OnDataDeviceEnter(void* data, wl_data_device*, uint32_t serial, wl_surface*
   impl->pendingOfferMimes.clear();
 
   if (displayId < 0 || impl->dndOffer.mimeTypes.empty()) {
-    klogf("WaylandBackend: drag entered with no display/mime (display=%lld mimes=%zu), refusing",
+    klogf("drag entered with no display or mime type (display=%lld mimes=%zu)",
           static_cast<long long>(displayId), impl->dndOffer.mimeTypes.size());
     wl_data_offer_accept(id, serial, nullptr);
     wl_display_flush(impl->display);
@@ -1629,13 +1627,13 @@ void OnDataDeviceEnter(void* data, wl_data_device*, uint32_t serial, wl_surface*
   impl->dndOffer.acceptedMime = impl->dndOffer.mimeTypes.front();
   wl_data_offer_accept(id, serial, impl->dndOffer.acceptedMime.c_str());
   wl_display_flush(impl->display);
-  klogf("WaylandBackend: accepted offer %p serial=%u version=%d", static_cast<void*>(id), serial,
+  klogf("wl_data_offer_accept offer=%p serial=%u version=%d", static_cast<void*>(id), serial,
         wl_data_offer_get_version(id));
   if (wl_data_offer_get_version(id) >= WL_DATA_OFFER_SET_ACTIONS_SINCE_VERSION) {
     wl_data_offer_set_actions(id, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY,
                                WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
   }
-  klogf("WaylandBackend: drag entered display %lld mime=%s", static_cast<long long>(displayId),
+  klogf("drag entered display %lld mime=%s", static_cast<long long>(displayId),
         impl->dndOffer.acceptedMime.c_str());
 }
 // store the drag position
@@ -1645,28 +1643,27 @@ void OnDataDeviceMotion(void* data, wl_data_device*, uint32_t, wl_fixed_t x, wl_
   impl->dndOffer.x = wl_fixed_to_double(x);
   impl->dndOffer.y = wl_fixed_to_double(y);
 }
-// destroy the drag offer and clear it
+// destroy and clear the drag offer
 void OnDataDeviceLeave(void* data, wl_data_device*) {
   auto* impl = static_cast<WaylandBackend::Impl*>(data);
-  klogf("WaylandBackend: drag left (offer=%p)", static_cast<void*>(impl->dndOffer.offer));
+  klogf("drag left (offer=%p)", static_cast<void*>(impl->dndOffer.offer));
   if (impl->dndOffer.offer) {
     wl_data_offer_destroy(impl->dndOffer.offer);
     impl->dndOffer = {};
   }
 }
-// read the dropped data on a new thread
+// read the dropped data on a detached thread
 void OnDataDeviceDrop(void* data, wl_data_device*) {
   auto* impl = static_cast<WaylandBackend::Impl*>(data);
-  klogf("WaylandBackend: drop event received");
   if (!impl->dndOffer.offer || impl->dndOffer.acceptedMime.empty()) {
-    klog("WaylandBackend: drop with nothing accepted, ignoring");
+    klog("wl_data_device.drop with no dndOffer.offer or dndOffer.acceptedMime");
     if (impl->dndOffer.offer) wl_data_offer_destroy(impl->dndOffer.offer);
     impl->dndOffer = {};
     return;
   }
   int pipeFds[2];
   if (pipe2(pipeFds, O_CLOEXEC) != 0) {
-    klogf("WaylandBackend: drop pipe2 FAILED errno=%d (%s)", errno, strerror(errno));
+    klogf("drop pipe2 failed errno=%d (%s)", errno, strerror(errno));
     wl_data_offer_destroy(impl->dndOffer.offer);
     impl->dndOffer = {};
     return;
@@ -1692,24 +1689,24 @@ void OnDataDeviceDrop(void* data, wl_data_device*) {
     while (true) {
       const int64_t remainingMs = (deadlineNs - MonotonicNs()) / 1000000;
       if (remainingMs <= 0) {
-        klog("WaylandBackend: drop read timed out, discarding partial data");
+        klog("drop poll timed out");
         break;
       }
       struct pollfd pfd{readFd, POLLIN, 0};
       int pr = poll(&pfd, 1, static_cast<int>(remainingMs));
       if (pr < 0) {
         if (errno == EINTR) continue;
-        klogf("WaylandBackend: drop poll FAILED errno=%d (%s)", errno, strerror(errno));
+        klogf("drop poll failed errno=%d (%s)", errno, strerror(errno));
         break;
       }
       if (pr == 0) {
-        klog("WaylandBackend: drop read timed out, discarding partial data");
+        klog("drop poll timed out");
         break;
       }
       ssize_t r = read(readFd, buf, sizeof buf);
       if (r < 0) {
         if (errno == EINTR) continue;
-        klogf("WaylandBackend: drop read FAILED errno=%d (%s)", errno, strerror(errno));
+        klogf("drop read failed errno=%d (%s)", errno, strerror(errno));
         break;
       }
       if (r == 0) break;
@@ -1744,7 +1741,7 @@ void OnDataDeviceSelection(void* data, wl_data_device*, wl_data_offer* id) {
     impl->pendingOfferProxy = nullptr;
     impl->pendingOfferMimes.clear();
   }
-  klogf("WaylandBackend: selection event seq=%llu offer=%s mimes=%zu", static_cast<unsigned long long>(seq),
+  klogf("selection event seq=%llu offer=%s mimes=%zu", static_cast<unsigned long long>(seq),
         id ? "yes" : "none", mimes.size());
 
   if (!composerClipboardEnabled()) {
@@ -1756,7 +1753,7 @@ void OnDataDeviceSelection(void* data, wl_data_device*, wl_data_offer* id) {
     return;
   }
   if (std::find(mimes.begin(), mimes.end(), kPasswordHintMime) != mimes.end()) {
-    klog("WaylandBackend: selection carries a password-manager hint, not syncing");
+    klog("selection offers x-kde-passwordManagerHint");
     wl_data_offer_destroy(id);
     PushUncarriedSelection(impl);
     return;
@@ -1766,7 +1763,7 @@ void OnDataDeviceSelection(void* data, wl_data_device*, wl_data_offer* id) {
     if (std::find(mimes.begin(), mimes.end(), pref) != mimes.end()) { chosen = pref; break; }
   }
   if (chosen.empty()) {
-    klogf("WaylandBackend: selection offers nothing this composer syncs (%zu mime(s))", mimes.size());
+    klogf("selection offers no kSelectionMimePreference type mimes=%zu", mimes.size());
     wl_data_offer_destroy(id);
     PushUncarriedSelection(impl);
     return;
@@ -1774,7 +1771,7 @@ void OnDataDeviceSelection(void* data, wl_data_device*, wl_data_offer* id) {
 
   int pipeFds[2];
   if (pipe2(pipeFds, O_CLOEXEC) != 0) {
-    klogf("WaylandBackend: selection pipe2 FAILED errno=%d (%s)", errno, strerror(errno));
+    klogf("selection pipe2 failed errno=%d (%s)", errno, strerror(errno));
     wl_data_offer_destroy(id);
     PushUncarriedSelection(impl);
     return;
@@ -1789,15 +1786,15 @@ void OnDataDeviceSelection(void* data, wl_data_device*, wl_data_offer* id) {
       impl->selections, impl->mutex_, pipeFds[0], seq, 5000,
       [impl, mime, id, seq](rhizo_selection::Verdict verdict, rhizo_selection::Read outcome, int err,
                             std::vector<uint8_t>&& bytes) {
-        klogf("WaylandBackend: selection read seq=%llu mime=%s bytes=%zu verdict=%s",
+        klogf("ReadInThread seq=%llu mime=%s bytes=%zu verdict=%s",
               static_cast<unsigned long long>(seq), mime.c_str(), bytes.size(),
-              verdict == rhizo_selection::Verdict::kReport      ? "report"
-              : verdict == rhizo_selection::Verdict::kUncarried ? "uncarried"
-                                                                : "superseded");
+              verdict == rhizo_selection::Verdict::kReport      ? "kReport"
+              : verdict == rhizo_selection::Verdict::kUncarried ? "kUncarried"
+                                                                : "kSuperseded");
         if (outcome == rhizo_selection::Read::kTimedOut) {
-          klogf("WaylandBackend: selection read timed out after %zu byte(s), not carried", bytes.size());
+          klogf("ReadPayload returned kTimedOut after %zu bytes", bytes.size());
         } else if (outcome == rhizo_selection::Read::kFailed) {
-          klogf("WaylandBackend: selection read FAILED errno=%d (%s), not carried", err, strerror(err));
+          klogf("ReadPayload returned kFailed errno=%d (%s)", err, strerror(err));
         }
         wl_data_offer_destroy(id);
         if (impl->display) wl_display_flush(impl->display);
@@ -1805,8 +1802,6 @@ void OnDataDeviceSelection(void* data, wl_data_device*, wl_data_offer* id) {
           impl->pendingSelections.push_back({mime, std::move(bytes), true});
         } else if (verdict == rhizo_selection::Verdict::kUncarried) {
           PushUncarriedSelection(impl);
-        } else {
-          klog("WaylandBackend: selection read superseded by a newer selection, not reported");
         }
         impl->activeIoThreads--;
         impl->ioThreadsCv.notify_all();
@@ -1823,7 +1818,7 @@ constexpr wl_data_device_listener kDataDeviceListener{
 
 // ignore the data source target event
 void OnDataSourceTarget(void*, wl_data_source*, const char*) {}
-// write the drag payload on a new thread
+// write the drag payload on a detached thread
 void OnDataSourceSend(void* data, wl_data_source*, const char*, int32_t fd) {
   auto* ctx = static_cast<DragSourceCtx*>(data);
   WaylandBackend::Impl* impl = ctx->impl;
@@ -1845,18 +1840,18 @@ void DropDragSourceLocked(WaylandBackend::Impl* impl, wl_data_source* source) {
   impl->dragSource = nullptr;
   impl->dragSourceCtx = nullptr;
 }
-// log the canceled drag and drop its source
+// log the canceled drag and destroy the drag source
 void OnDataSourceCanceled(void* data, wl_data_source* source) {
   auto* ctx = static_cast<DragSourceCtx*>(data);
-  klog("WaylandBackend: drag canceled");
+  klog("drag canceled");
   DropDragSourceLocked(ctx->impl, source);
 }
 // ignore the drag source drop performed event
 void OnDataSourceDndDropPerformed(void*, wl_data_source*) {}
-// log the finished drag and drop its source
+// log the finished drag and destroy the drag source
 void OnDataSourceDndFinished(void* data, wl_data_source* source) {
   auto* ctx = static_cast<DragSourceCtx*>(data);
-  klog("WaylandBackend: drag finished");
+  klog("drag finished");
   DropDragSourceLocked(ctx->impl, source);
 }
 // ignore the drag source action event
@@ -1872,7 +1867,7 @@ constexpr wl_data_source_listener kDataSourceListener{
 
 // ignore the clipboard source target event
 void OnClipSourceTarget(void*, wl_data_source*, const char*) {}
-// write the clipboard payload on a new thread
+// write the clipboard payload on a detached thread
 void OnClipSourceSend(void* data, wl_data_source*, const char*, int32_t fd) {
   auto* ctx = static_cast<ClipSourceCtx*>(data);
   WaylandBackend::Impl* impl = ctx->impl;
@@ -1897,7 +1892,7 @@ void DropClipSourceLocked(WaylandBackend::Impl* impl, wl_data_source* source) {
 // log the replaced host selection and drop the clipboard source
 void OnClipSourceCanceled(void* data, wl_data_source* source) {
   auto* ctx = static_cast<ClipSourceCtx*>(data);
-  klog("WaylandBackend: host selection replaced or cleared");
+  klog("host selection replaced or cleared");
   DropClipSourceLocked(ctx->impl, source);
 }
 // ignore the clipboard source drop performed event
@@ -1915,7 +1910,7 @@ constexpr wl_data_source_listener kClipSourceListener{
     .action = OnClipSourceAction,
 };
 
-// set a new clipboard source offering the payload
+// create and set a clipboard wl_data_source offering the payload
 void CreateSelectionSourceLocked(WaylandBackend::Impl* impl, const std::string& mime,
                                   std::shared_ptr<const std::vector<uint8_t>> payload) {
   if (impl->clipSource) DropClipSourceLocked(impl, impl->clipSource);
@@ -1927,7 +1922,7 @@ void CreateSelectionSourceLocked(WaylandBackend::Impl* impl, const std::string& 
   impl->clipSourceCtx = ctx;
   wl_data_device_set_selection(impl->dataDevice, source, impl->lastInputSerial);
   wl_display_flush(impl->display);
-  klogf("WaylandBackend: clipboard set_selection mime=%s bytes=%zu serial=%u", mime.c_str(),
+  klogf("clipboard set_selection mime=%s bytes=%zu serial=%u", mime.c_str(),
         payload->size(), impl->lastInputSerial);
 }
 
@@ -1937,8 +1932,6 @@ void CompleteParkedSelectionLocked(WaylandBackend::Impl* impl) {
   const std::string mime = impl->parkedSelection.mime;
   auto payload = impl->parkedSelection.payload;
   impl->parkedSelection = {};
-  klogf("WaylandBackend: completing parked clipboard set, mime=%s, on a new serial",
-        mime.c_str());
   CreateSelectionSourceLocked(impl, mime, payload);
 }
 
@@ -1990,7 +1983,7 @@ void OnSurfaceEnter(void* data, wl_surface* surface, wl_output* output) {
   if (it == impl->surfaceToDisplay.end()) return;
   if (DisplayState* ds = impl->Find(it->second)) {
     ds->enteredOutputs.insert(output);
-    klogf("WaylandBackend: display %lld entered output %s", static_cast<long long>(ds->id),
+    klogf("display %lld entered output %s", static_cast<long long>(ds->id),
           impl->outputs.count(output) ? impl->outputs[output].name.c_str() : "(unknown)");
     ApplyOutputScaleLocked(impl, ds);
   }
@@ -2002,7 +1995,7 @@ void OnSurfaceLeave(void* data, wl_surface* surface, wl_output* output) {
   if (it == impl->surfaceToDisplay.end()) return;
   if (DisplayState* ds = impl->Find(it->second)) {
     ds->enteredOutputs.erase(output);
-    klogf("WaylandBackend: display %lld left output %s", static_cast<long long>(ds->id),
+    klogf("display %lld left output %s", static_cast<long long>(ds->id),
           impl->outputs.count(output) ? impl->outputs[output].name.c_str() : "(unknown)");
     ApplyOutputScaleLocked(impl, ds);
   }
@@ -2103,13 +2096,13 @@ bool WaylandBackend::Connect() {
   wl_log_set_handler_client(WlLogHandler);
 
   const char* waylandDisplay = getenv("WAYLAND_DISPLAY");
-  klogf("WaylandBackend::Connect: WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s",
+  klogf("wl_display_connect WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s",
         waylandDisplay ? waylandDisplay : "(unset)",
         getenv("XDG_RUNTIME_DIR") ? getenv("XDG_RUNTIME_DIR") : "(unset)");
 
   impl->display = wl_display_connect(nullptr);
   if (!impl->display) {
-    klogf("WaylandBackend::Connect: wl_display_connect FAILED errno=%d (%s)", errno,
+    klogf("wl_display_connect failed errno=%d (%s)", errno,
           strerror(errno));
     return false;
   }
@@ -2118,32 +2111,32 @@ bool WaylandBackend::Connect() {
   wl_registry_add_listener(impl->registry, &kRegistryListener, impl);
 
   if (wl_display_roundtrip(impl->display) < 0 || wl_display_roundtrip(impl->display) < 0) {
-    klog("WaylandBackend::Connect: roundtrip FAILED");
+    klog("wl_display_roundtrip failed");
     return false;
   }
 
   if (!impl->compositor || !impl->wmBase || !(impl->dmabuf || impl->shm)) {
     klogf(
-        "WaylandBackend::Connect: missing required global(s): compositor=%p wmBase=%p dmabuf=%p shm=%p",
+        "required globals unbound compositor=%p wmBase=%p dmabuf=%p shm=%p",
         static_cast<void*>(impl->compositor), static_cast<void*>(impl->wmBase),
         static_cast<void*>(impl->dmabuf), static_cast<void*>(impl->shm));
     return false;
   }
-  klogf("WaylandBackend::Connect: present paths dmabuf=%d shm=%d", impl->dmabuf != nullptr, impl->shm != nullptr);
-  if (!impl->presentation) klog("WaylandBackend::Connect: wp_presentation absent (soft, v1 doesn't need it)");
-  if (!impl->viewporter) klog("WaylandBackend::Connect: wp_viewporter absent (soft, v1 doesn't need it)");
+  klogf("zwp_linux_dmabuf_v1=%d wl_shm=%d", impl->dmabuf != nullptr, impl->shm != nullptr);
+  if (!impl->presentation) klog("wp_presentation is unbound");
+  if (!impl->viewporter) klog("wp_viewporter is unbound");
   if (!impl->dataDeviceManager) {
-    klog("WaylandBackend::Connect: wl_data_device_manager absent (soft, drag-and-drop stays off)");
+    klog("wl_data_device_manager is unbound");
   } else if (impl->seat) {
     impl->dataDevice = wl_data_device_manager_get_data_device(impl->dataDeviceManager, impl->seat);
     wl_data_device_add_listener(impl->dataDevice, &kDataDeviceListener, impl);
   } else {
-    klog("WaylandBackend::Connect: wl_data_device_manager present but no wl_seat, drag-and-drop stays off");
+    klog("wl_data_device_manager bound with no wl_seat");
   }
 
   impl->connected = true;
   impl->connectCount++;
-  klogf("WaylandBackend::Connect: OK (connectCount=%lld), dmabuf protocol version=%u, %zu formats "
+  klogf("connected to Wayland connectCount=%lld zwp_linux_dmabuf_v1 version=%u, %zu formats "
         "with modifiers",
         static_cast<long long>(impl->connectCount), impl->dmabufVersion, impl->modifierTable.size());
   return true;
@@ -2177,11 +2170,11 @@ bool WaylandBackend::CreateDisplay(int64_t displayId, const std::string& title, 
   Impl* impl = impl_.get();
   std::unique_lock<std::mutex> lk(impl->mutex_);
   if (!impl->connected) {
-    klog("WaylandBackend::CreateDisplay: not connected");
+    klog("CreateDisplay called with no Wayland connection");
     return false;
   }
   if (impl->displays.count(displayId)) {
-    klogf("WaylandBackend::CreateDisplay: display %lld already exists",
+    klogf("display %lld already exists",
           static_cast<long long>(displayId));
     return false;
   }
@@ -2232,7 +2225,7 @@ bool WaylandBackend::CreateDisplay(int64_t displayId, const std::string& title, 
       DisplayState* cur = impl->Find(displayId);
       if (!cur || cur->configured) break;
       if (wl_display_dispatch(impl->display) < 0) {
-        klog("WaylandBackend::CreateDisplay: wl_display_dispatch FAILED waiting for configure");
+        klog("wl_display_dispatch failed before xdg_surface.configure");
         DestroyDisplayLocked(impl, displayId);
         return false;
       }
@@ -2249,12 +2242,12 @@ bool WaylandBackend::CreateDisplay(int64_t displayId, const std::string& title, 
   }
 
   if (!ok) {
-    klogf("WaylandBackend::CreateDisplay: display %lld never configured (timeout)",
+    klogf("display %lld is still unconfigured",
           static_cast<long long>(displayId));
     DestroyDisplayLocked(impl, displayId);
     return false;
   }
-  klogf("WaylandBackend::CreateDisplay: display %lld ready, title=\"%s\"",
+  klogf("display %lld ready, title=\"%s\"",
         static_cast<long long>(displayId), title.c_str());
   return true;
 }
@@ -2290,7 +2283,7 @@ void WaylandBackend::DestroyDisplayLocked(Impl* impl, int64_t displayId) {
   delete static_cast<DisplayCtx*>(ds->toplevelCtx);
   impl->displays.erase(displayId);
   if (impl->display) wl_display_flush(impl->display);
-  klogf("WaylandBackend: display %lld destroyed", static_cast<long long>(displayId));
+  klogf("display %lld destroyed", static_cast<long long>(displayId));
 }
 
 // destroy a display under the backend lock
@@ -2307,14 +2300,14 @@ bool WaylandBackend::PresentFrameWhenSignaled(int64_t displayId, const WaylandFr
   if (!impl->Find(displayId)) return false;
   if (impl->wakeFd < 0) {
     impl->wakeFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-    if (impl->wakeFd < 0) klogf("WaylandBackend: eventfd FAILED errno=%d (%s)", errno, strerror(errno));
+    if (impl->wakeFd < 0) klogf("eventfd failed errno=%d (%s)", errno, strerror(errno));
   }
   Impl::PendingFrame pf;
   pf.frame = frame;
   pf.frame.dmabufFd = fcntl(frame.dmabufFd, F_DUPFD_CLOEXEC, 0);
   pf.frame.acquireFenceFd = frame.acquireFenceFd >= 0 ? fcntl(frame.acquireFenceFd, F_DUPFD_CLOEXEC, 0) : -1;
   if (pf.frame.dmabufFd < 0) {
-    klogf("WaylandBackend::PresentFrameWhenSignaled: dup of dmabuf fd %d FAILED errno=%d", frame.dmabufFd, errno);
+    klogf("F_DUPFD_CLOEXEC of dmabuf fd %d failed errno=%d", frame.dmabufFd, errno);
     Impl::ClosePending(pf);
     return false;
   }
@@ -2330,7 +2323,7 @@ bool WaylandBackend::PresentFrameWhenSignaled(int64_t displayId, const WaylandFr
   if (impl->wakeFd >= 0) {
     uint64_t one = 1;
     if (write(impl->wakeFd, &one, sizeof one) < 0 && errno != EAGAIN) {
-      klogf("WaylandBackend: eventfd write FAILED errno=%d", errno);
+      klogf("eventfd write failed errno=%d", errno);
     }
   }
   return true;
@@ -2344,7 +2337,7 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
   if (!impl->shm) {
     impl->lastPresentDropped = true;
     if (impl->shmRefusals++ % 300 == 0) {
-      klogf("WaylandBackend::PresentFrame: refused a memfd frame: the compositor has no wl_shm (%llu refused)",
+      klogf("refused a memfd frame with wl_shm unbound (%llu refused)",
             static_cast<unsigned long long>(impl->shmRefusals));
     }
     return nullptr;
@@ -2354,7 +2347,7 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
       st.st_size > INT32_MAX) {
     impl->lastPresentDropped = true;
     if (impl->shmRefusals++ % 300 == 0) {
-      klogf("WaylandBackend::PresentFrame: refused a shmem frame %dx%d stride %d in a %lld-byte file (%llu refused)",
+      klogf("refused a shmem frame %dx%d stride %d in a %lld-byte file (%llu refused)",
             frame.width, frame.height, frame.strideBytes, static_cast<long long>(st.st_size),
             static_cast<unsigned long long>(impl->shmRefusals));
     }
@@ -2376,13 +2369,13 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
       if (!slot.buffer) {
         if (slot.pool) wl_shm_pool_destroy(slot.pool);
         slot.pool = nullptr;
-        klogf("WaylandBackend::PresentFrame: wl_shm buffer FAILED slot=%d %dx%d format=0x%08x", frame.slot,
+        klogf("failed to create a wl_shm buffer slot=%d %dx%d format=0x%08x", frame.slot,
               frame.width, frame.height, frame.drmFormat);
         return nullptr;
       }
       slot.dev = st.st_dev;
       slot.ino = st.st_ino;
-      klogf("WaylandBackend::PresentFrame: display %lld slot %d wl_shm buffer created %dx%d format=0x%08x over the "
+      klogf("display %lld slot %d wl_shm buffer created %dx%d format=0x%08x over the "
             "frame's memfd",
             static_cast<long long>(ds.id), frame.slot, frame.width, frame.height, frame.drmFormat);
       wl_buffer_add_listener(slot.buffer, &kBufferListener, &slot);
@@ -2395,8 +2388,8 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
   if (to == 0xffffffffu) {
     impl->lastPresentDropped = true;
     if (impl->shmRefusals++ % 300 == 0) {
-      klogf("WaylandBackend::PresentFrame: refused a memfd frame of format 0x%08x: the compositor's wl_shm lacks it "
-            "and it has no copy format (%llu refused)",
+      klogf("refused a memfd frame of format 0x%08x, wl_shm advertises no matching format "
+            "and ShmCopyFormat returns none (%llu refused)",
             frame.drmFormat, static_cast<unsigned long long>(impl->shmRefusals));
     }
     return nullptr;
@@ -2404,8 +2397,8 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
   if (!ShmCopyFits(frame.width, frame.height, frame.strideBytes, st.st_size)) {
     impl->lastPresentDropped = true;
     if (impl->shmRefusals++ % 300 == 0) {
-      klogf("WaylandBackend::PresentFrame: refused to copy a shmem frame %dx%d of format 0x%08x: stride %d is under 4 "
-            "bytes a pixel or the %lld-byte file is short of its rows (%llu refused)",
+      klogf("refused to copy a shmem frame %dx%d of format 0x%08x, stride %d is under 4 "
+            "bytes a pixel or the %lld-byte file is shorter than stride * height (%llu refused)",
             frame.width, frame.height, frame.drmFormat, frame.strideBytes, static_cast<long long>(st.st_size),
             static_cast<unsigned long long>(impl->shmRefusals));
     }
@@ -2415,8 +2408,8 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
   if (!c) {
     impl->lastPresentDropped = true;
     if (impl->shmCopyDrops++ % 300 == 0) {
-      klogf("WaylandBackend::PresentFrame: display %lld slot %d dropped a frame: the compositor holds both copy "
-            "buffers (%llu dropped)",
+      klogf("display %lld slot %d dropped a frame, both copy "
+            "buffers are still unreleased (%llu dropped)",
             static_cast<long long>(ds.id), frame.slot, static_cast<unsigned long long>(impl->shmCopyDrops));
     }
     return nullptr;
@@ -2427,13 +2420,13 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
     DestroyCopyBuffer(*c);
     c->fd = CreateBufferMemfd("rhizo-shm-copy", size);
     if (c->fd < 0) {
-      klogf("WaylandBackend::PresentFrame: copy buffer memfd of %zu bytes FAILED errno=%d (%s)", size, errno,
+      klogf("copy buffer memfd of %zu bytes failed errno=%d (%s)", size, errno,
             strerror(errno));
       return nullptr;
     }
     void* map = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, c->fd, 0);
     if (map == MAP_FAILED) {
-      klogf("WaylandBackend::PresentFrame: copy buffer mmap of %zu bytes FAILED errno=%d (%s)", size, errno,
+      klogf("copy buffer mmap of %zu bytes failed errno=%d (%s)", size, errno,
             strerror(errno));
       DestroyCopyBuffer(*c);
       return nullptr;
@@ -2443,7 +2436,7 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
     c->pool = wl_shm_create_pool(impl->shm, c->fd, static_cast<int32_t>(size));
     c->buffer = c->pool ? wl_shm_pool_create_buffer(c->pool, 0, frame.width, frame.height, stride, to) : nullptr;
     if (!c->buffer) {
-      klogf("WaylandBackend::PresentFrame: copy wl_shm buffer FAILED slot=%d %dx%d wl_shm format %u", frame.slot,
+      klogf("copy wl_shm buffer failed slot=%d %dx%d wl_shm format %u", frame.slot,
             frame.width, frame.height, to);
       DestroyCopyBuffer(*c);
       return nullptr;
@@ -2451,7 +2444,7 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
     c->width = frame.width;
     c->height = frame.height;
     c->format = to;
-    klogf("WaylandBackend::PresentFrame: display %lld slot %d copy buffer %d created %dx%d wl_shm format %u for "
+    klogf("display %lld slot %d copy buffer %d created %dx%d wl_shm format %u for "
           "format=0x%08x",
           static_cast<long long>(ds.id), frame.slot, static_cast<int>(c - slot.copy), frame.width, frame.height, to,
           frame.drmFormat);
@@ -2460,7 +2453,7 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
   const size_t frameSize = static_cast<size_t>(frameBytes);
   void* src = mmap(nullptr, frameSize, PROT_READ, MAP_SHARED, frame.dmabufFd, 0);
   if (src == MAP_FAILED) {
-    klogf("WaylandBackend::PresentFrame: mmap of the memfd frame (%zu bytes) FAILED errno=%d (%s)", frameSize, errno,
+    klogf("mmap of the memfd frame (%zu bytes) failed errno=%d (%s)", frameSize, errno,
           strerror(errno));
     return nullptr;
   }
@@ -2481,7 +2474,7 @@ wl_buffer* ShmFrameBufferLocked(WaylandBackend::Impl* impl, const DisplayState& 
 
 }
 
-// present the frame on the display
+// attach, damage and commit the frame on the display's wl_surface
 bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) {
   Impl* impl = impl_.get();
   WaitFence(frame.acquireFenceFd);
@@ -2530,7 +2523,7 @@ bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) 
 
   DisplayState* dsp = impl->Find(displayId);
   if (!dsp) {
-    klogf("WaylandBackend::PresentFrame: unknown display %lld", static_cast<long long>(displayId));
+    klogf("dropped a frame for unknown display %lld", static_cast<long long>(displayId));
     return false;
   }
   DisplayState& ds = *dsp;
@@ -2540,8 +2533,7 @@ bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) 
   if (shmem && !SealsHoldSize(seals)) {
     impl->lastPresentDropped = true;
     if (impl->shmUnsealed++ % 300 == 0) {
-      klogf("WaylandBackend::PresentFrame: refused a shmem frame not sealed against shrinking: its owner could "
-            "truncate it under this composer's and the compositor's maps (%llu refused)",
+      klogf("refused a shmem frame without F_SEAL_SHRINK (%llu refused)",
             static_cast<unsigned long long>(impl->shmUnsealed));
     }
     return false;
@@ -2549,7 +2541,7 @@ bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) 
 
   struct stat st{};
   if (fstat(frame.dmabufFd, &st) != 0) {
-    klogf("WaylandBackend::PresentFrame: fstat(dmabufFd=%d) FAILED errno=%d (%s)", frame.dmabufFd,
+    klogf("fstat(dmabufFd=%d) failed errno=%d (%s)", frame.dmabufFd,
           errno, strerror(errno));
     return false;
   }
@@ -2557,7 +2549,7 @@ bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) 
   if (!shmem && !impl->dmabuf) {
     impl->lastPresentDropped = true;
     if (impl->dmabufRefusals++ % 300 == 0) {
-      klogf("WaylandBackend::PresentFrame: refused a dmabuf frame: the compositor has no zwp_linux_dmabuf_v1 "
+      klogf("refused a dmabuf frame with zwp_linux_dmabuf_v1 unbound "
             "(%llu refused)",
             static_cast<unsigned long long>(impl->dmabufRefusals));
     }
@@ -2586,7 +2578,7 @@ bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) 
       zwp_linux_buffer_params_v1_destroy(params);
       if (!buffer) {
         klogf(
-            "WaylandBackend::PresentFrame: create_immed FAILED slot=%d %dx%d format=0x%08x "
+            "create_immed failed slot=%d %dx%d format=0x%08x "
             "mod=0x%016llx",
             frame.slot, frame.width, frame.height, frame.drmFormat,
             static_cast<unsigned long long>(frame.modifier));
@@ -2595,7 +2587,7 @@ bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) 
       slot.buffer = buffer;
       slot.dev = st.st_dev;
       slot.ino = st.st_ino;
-      klogf("WaylandBackend::PresentFrame: display %lld slot %d wl_buffer created %dx%d format=0x%08x modifier=0x%llx",
+      klogf("display %lld slot %d wl_buffer created %dx%d format=0x%08x modifier=0x%llx",
            static_cast<long long>(displayId), frame.slot, frame.width, frame.height, frame.drmFormat,
            static_cast<unsigned long long>(frame.modifier));
       wl_buffer_add_listener(buffer, &kBufferListener, &slot);
@@ -2670,7 +2662,7 @@ bool WaylandBackend::PresentFrame(int64_t displayId, const WaylandFrame& frame) 
     ds.bufferCommitted = true;
     if (!ds.heldActivationToken.empty() && impl->activationManager) {
       xdg_activation_v1_activate(impl->activationManager, ds.heldActivationToken.c_str(), ds.surface);
-      klogf("WaylandBackend::PresentFrame: display %lld mapped, activated with its held token=%s",
+      klogf("display %lld mapped, xdg_activation_v1_activate token=%s",
             static_cast<long long>(displayId), ds.heldActivationToken.c_str());
       ds.heldActivationToken.clear();
     }
@@ -2702,7 +2694,6 @@ void WaylandBackend::StartEventPump(VsyncCallback vsyncCb, CloseCallback closeCb
   impl->pumpThread = std::thread([this, impl] {
     prctl(PR_SET_NAME, "rhizo-wl-pump");
     SetFifoPriority2("rhizo-wl-pump");
-    klog("WaylandBackend: event pump thread started");
     while (true) {
       {
         std::lock_guard<std::mutex> lg(impl->mutex_);
@@ -2763,7 +2754,7 @@ void WaylandBackend::StartEventPump(VsyncCallback vsyncCb, CloseCallback closeCb
         Impl::ClosePending(rp.second);
         std::lock_guard<std::mutex> lg(impl->mutex_);
         if (!presented && !impl->lastPresentDropped) {
-          klogf("WaylandBackend: deferred present FAILED for display %lld", static_cast<long long>(rp.first));
+          klogf("PresentFrame failed for display %lld", static_cast<long long>(rp.first));
         }
         impl->asyncPresented++;
         impl->asyncWaitNs += waited;
@@ -2771,7 +2762,7 @@ void WaylandBackend::StartEventPump(VsyncCallback vsyncCb, CloseCallback closeCb
         const int64_t now = MonotonicNs();
         if (impl->asyncReportNs == 0) impl->asyncReportNs = now;
         if (now - impl->asyncReportNs >= 5000000000LL) {
-          klogf("deferred present: presented=%llu queued=%llu superseded=%llu fence wait us mean/max=%.0f/%llu over %lldms",
+          klogf("deferred PresentFrame calls=%llu queued=%llu superseded=%llu fence wait us mean/max=%.0f/%llu over %lldms",
                 (unsigned long long)impl->asyncPresented, (unsigned long long)impl->asyncQueued,
                 (unsigned long long)impl->asyncSuperseded,
                 impl->asyncPresented ? impl->asyncWaitNs / 1000.0 / impl->asyncPresented : 0.0,
@@ -2805,7 +2796,7 @@ void WaylandBackend::StartEventPump(VsyncCallback vsyncCb, CloseCallback closeCb
             while (!wlLog.empty() && (wlLog.back() == '\n' || wlLog.back() == '\r')) wlLog.pop_back();
             char head[160];
             snprintf(head, sizeof(head),
-                     "WaylandBackend: wl_display_read_events FAILED errno=%d (%s) iface=%s id=%u code=%u", err,
+                     "wl_display_read_events failed errno=%d (%s) iface=%s id=%u code=%u", err,
                      strerror(err), iface ? iface->name : "(none)", objectId, code);
             klog((std::string(head) + " wl_log=\"" + wlLog + "\"").c_str());
             return;
@@ -2814,7 +2805,7 @@ void WaylandBackend::StartEventPump(VsyncCallback vsyncCb, CloseCallback closeCb
         } else {
           wl_display_cancel_read(impl->display);
           if (pr < 0 && errno != EINTR) {
-            klogf("WaylandBackend: poll FAILED errno=%d (%s)", errno, strerror(errno));
+            klogf("event pump poll failed errno=%d (%s)", errno, strerror(errno));
           }
         }
         vsyncs.swap(impl->pendingVsyncs);
@@ -2838,7 +2829,7 @@ void WaylandBackend::StartEventPump(VsyncCallback vsyncCb, CloseCallback closeCb
         if (!apply.empty()) {
           const int werr = wl_display_get_error(impl->display);
           if (werr != 0) {
-            klogf("WaylandBackend: wl_display error %d after a cursor upload -- connection lost", werr);
+            klogf("wl_display_get_error returned %d after a cursor upload", werr);
           }
         }
       }
@@ -2876,16 +2867,16 @@ bool WaylandBackend::StartDrag(int64_t displayId, const std::string& mimeType,
   Impl* impl = impl_.get();
   std::lock_guard<std::mutex> lg(impl->mutex_);
   if (!impl->connected || !impl->dataDeviceManager || !impl->dataDevice) {
-    klog("WaylandBackend::StartDrag: no data device bound, refusing");
+    klog("failed to start a drag with wl_data_device unbound");
     return false;
   }
   DisplayState* ds = impl->Find(displayId);
   if (!ds) {
-    klogf("WaylandBackend::StartDrag: unknown display %lld", static_cast<long long>(displayId));
+    klogf("failed to start a drag on unknown display %lld", static_cast<long long>(displayId));
     return false;
   }
   if (impl->dragSource) {
-    klog("WaylandBackend::StartDrag: a drag is already in flight, refusing");
+    klog("a drag is still in progress");
     return false;
   }
   wl_data_source* source = wl_data_device_manager_create_data_source(impl->dataDeviceManager);
@@ -2900,7 +2891,7 @@ bool WaylandBackend::StartDrag(int64_t displayId, const std::string& mimeType,
   wl_data_device_start_drag(impl->dataDevice, source, ds->surface,  nullptr,
                              impl->lastPointerSerial);
   wl_display_flush(impl->display);
-  klogf("WaylandBackend::StartDrag: display %lld mime=%s bytes=%zu serial=%u held=%d",
+  klogf("started a drag display=%lld mime=%s bytes=%zu serial=%u lastPointerHeld=%d",
         static_cast<long long>(displayId), mimeType.c_str(), ctx->payload->size(),
         impl->lastPointerSerial, impl->lastPointerHeld ? 1 : 0);
   return true;
@@ -2911,17 +2902,17 @@ bool WaylandBackend::SetSelection(const std::string& mimeType, std::vector<uint8
   Impl* impl = impl_.get();
   std::lock_guard<std::mutex> lg(impl->mutex_);
   if (!composerClipboardEnabled()) {
-    klog("WaylandBackend::SetSelection: desktop.clipboard is off, refusing");
+    klog("desktop.clipboard is off");
     return false;
   }
   if (!impl->connected || !impl->dataDeviceManager || !impl->dataDevice) {
-    klog("WaylandBackend::SetSelection: no data device bound, refusing");
+    klog("failed to set the selection with wl_data_device unbound");
     return false;
   }
   auto shared = std::make_shared<const std::vector<uint8_t>>(std::move(payload));
   if (impl->lastInputSerial == 0) {
     impl->parkedSelection = {true, mimeType, shared};
-    klogf("WaylandBackend::SetSelection: parked mime=%s bytes=%zu, no new serial yet",
+    klogf("parked selection mime=%s bytes=%zu lastInputSerial=0",
           mimeType.c_str(), shared->size());
     return true;
   }
@@ -2938,7 +2929,7 @@ void WaylandBackend::ClearSelection() {
   wl_data_device_set_selection(impl->dataDevice, nullptr, impl->lastInputSerial);
   wl_display_flush(impl->display);
   if (impl->clipSource) DropClipSourceLocked(impl, impl->clipSource);
-  klog("WaylandBackend::ClearSelection: selection unset");
+  klog("cleared the selection");
 }
 
 // return whether the clipboard is enabled and a data device is bound
@@ -2959,26 +2950,26 @@ bool WaylandBackend::ActivateDisplay(int64_t displayId, const std::string& token
   Impl* impl = impl_.get();
   std::unique_lock<std::mutex> lk(impl->mutex_);
   if (!impl->activationManager) {
-    klog("WaylandBackend::ActivateDisplay: xdg_activation_v1 not bound, refusing");
+    klog("xdg_activation_v1 is unbound");
     return false;
   }
   DisplayState* ds = impl->Find(displayId);
   if (!ds) {
-    klogf("WaylandBackend::ActivateDisplay: unknown display %lld", static_cast<long long>(displayId));
+    klogf("failed to activate unknown display %lld", static_cast<long long>(displayId));
     return false;
   }
   if (held) *held = false;
   if (!token.empty() && !ds->bufferCommitted) {
     ds->heldActivationToken = token;
     if (held) *held = true;
-    klogf("WaylandBackend::ActivateDisplay: display %lld not mapped yet, token=%s held until its first buffer",
+    klogf("display %lld is still unmapped, stored token=%s",
           static_cast<long long>(displayId), token.c_str());
     return true;
   }
   std::string useToken = token;
   if (useToken.empty()) {
     if (!impl->pumpRunning) {
-      klog("WaylandBackend::ActivateDisplay: no token given and the pump is not running, refusing");
+      klog("empty activation token with the event pump stopped");
       return false;
     }
     xdg_activation_token_v1* req = xdg_activation_v1_get_activation_token(impl->activationManager);
@@ -2994,19 +2985,19 @@ bool WaylandBackend::ActivateDisplay(int64_t displayId, const std::string& token
     });
     xdg_activation_token_v1_destroy(req);
     if (!ok || impl->pendingActivationTokenResult.empty()) {
-      klog("WaylandBackend::ActivateDisplay: token request timed out or was refused");
+      klog("xdg_activation_token_v1 returned no token within 5s");
       return false;
     }
     useToken = impl->pendingActivationTokenResult;
   }
   xdg_activation_v1_activate(impl->activationManager, useToken.c_str(), ds->surface);
   wl_display_flush(impl->display);
-  klogf("WaylandBackend::ActivateDisplay: display %lld token=%s", static_cast<long long>(displayId),
+  klogf("xdg_activation_v1_activate display %lld token=%s", static_cast<long long>(displayId),
         useToken.c_str());
   return true;
 }
 
-// minimize the display's window if it is mapped
+// call xdg_toplevel_set_minimized if ds->bufferCommitted is set
 bool WaylandBackend::MinimizeDisplay(int64_t displayId) {
   Impl* impl = impl_.get();
   std::lock_guard<std::mutex> lg(impl->mutex_);
@@ -3029,7 +3020,7 @@ void WaylandBackend::SetVsyncEnabled(bool enabled) {
   }
 }
 
-// kick the display's vsync
+// call KickLocked for the display
 void WaylandBackend::KickVsync(int64_t displayId) {
   Impl* impl = impl_.get();
   std::lock_guard<std::mutex> lg(impl->mutex_);
@@ -3048,7 +3039,7 @@ bool WaylandBackend::SetCursorSurface(int64_t displayId, const uint8_t* pixelsAr
   std::lock_guard<std::mutex> lg(impl->mutex_);
   DisplayState* ds = impl->Find(displayId);
   if (!ds || !pixelsArgb8888 || width <= 0 || height <= 0) return false;
-  klogf("WaylandBackend: display %lld cursor %dx%d hotspot %d,%d",
+  klogf("display %lld cursor %dx%d hotspot %d,%d",
         static_cast<long long>(displayId), width, height, hotspotX, hotspotY);
   auto& c = ds->cursor;
   c.width = width;
@@ -3067,21 +3058,21 @@ bool WaylandBackend::SetCursorSurface(int64_t displayId, const uint8_t* pixelsAr
     if (impl->wakeFd >= 0) {
       uint64_t one = 1;
       if (write(impl->wakeFd, &one, sizeof one) < 0 && errno != EAGAIN) {
-        klogf("WaylandBackend: eventfd write FAILED errno=%d", errno);
+        klogf("eventfd write failed errno=%d", errno);
       }
     }
   }
   return true;
 }
 
-// store Android's pointer type for the display and show its host cursor shape
+// store Android's pointer type for the display and queue the host cursor shape
 bool WaylandBackend::SetCursorType(int64_t displayId, int32_t pointerType) {
   Impl* impl = impl_.get();
   std::lock_guard<std::mutex> lg(impl->mutex_);
   DisplayState* ds = impl->Find(displayId);
   if (!ds) return false;
   if (ds->cursor.pointerType == pointerType) return true;
-  klogf("WaylandBackend: display %lld pointer type %d -> %d (shape %u)", static_cast<long long>(displayId),
+  klogf("display %lld pointer type %d -> %d (shape %u)", static_cast<long long>(displayId),
         ds->cursor.pointerType, pointerType, rhizo::CursorShapeForPointerType(pointerType));
   ds->cursor.pointerType = pointerType;
   if (impl->pointerFocus == displayId) {
@@ -3089,7 +3080,7 @@ bool WaylandBackend::SetCursorType(int64_t displayId, int32_t pointerType) {
     if (impl->wakeFd >= 0) {
       uint64_t one = 1;
       if (write(impl->wakeFd, &one, sizeof one) < 0 && errno != EAGAIN) {
-        klogf("WaylandBackend: eventfd write FAILED errno=%d", errno);
+        klogf("eventfd write failed errno=%d", errno);
       }
     }
   }
@@ -3102,7 +3093,7 @@ bool WaylandBackend::HasPresentation() const {
   return impl_->presentation != nullptr;
 }
 
-// name the present paths the bound globals give this connection
+// return PresentPathsName(dmabuf, shm)
 const char* WaylandBackend::PresentPaths() const {
   std::lock_guard<std::mutex> lg(impl_->mutex_);
   return PresentPathsName(impl_->dmabuf != nullptr, impl_->shm != nullptr);
@@ -3113,7 +3104,7 @@ int WaylandBackend::PresentationClockId() const {
   return impl_->presentationClockId;
 }
 
-// return whether a format and modifier pair is accepted
+// return whether the compositor advertised or imported a format and modifier pair
 bool WaylandBackend::AcceptsBuffer(uint32_t drmFormat, uint64_t modifier) const {
   std::lock_guard<std::mutex> lg(impl_->mutex_);
   if (impl_->importedPairs.count({drmFormat, modifier})) return true;
@@ -3125,7 +3116,7 @@ bool WaylandBackend::AcceptsBuffer(uint32_t drmFormat, uint64_t modifier) const 
   return false;
 }
 
-// tell whether wl_shm can present a memfd buffer format
+// return whether drmFormat has an advertised or copy wl_shm format
 bool WaylandBackend::AcceptsShmFormat(uint32_t drmFormat) const {
   std::lock_guard<std::mutex> lg(impl_->mutex_);
   return impl_->shm != nullptr && ShmPresentable(impl_->shmFormats, drmFormat);
@@ -3144,7 +3135,7 @@ int WaylandBackend::ReleaseSlot(int64_t displayId, int32_t slot) {
   const ino_t ino = it->second.ino;
   ds->bufferCache.erase(it);
   if (had && composerDebugEnabled()) {
-    klogf("WaylandBackend::ReleaseSlot: display %lld slot %d dropped wl_buffer for %u:%llu",
+    klogf("display %lld slot %d dropped wl_buffer for %u:%llu",
           static_cast<long long>(displayId), slot, static_cast<unsigned>(dev),
           static_cast<unsigned long long>(ino));
   }
@@ -3198,10 +3189,10 @@ std::vector<uint64_t> WaylandBackend::NegotiatedModifiers(uint32_t drmFormat) co
   return it->second;
 }
 
-// return whether the last present used a dmabuf
+// return whether the last frame used a dmabuf
 bool WaylandBackend::LastPresentWasDmabuf() const { return impl_->lastPresentWasDmabuf; }
 
-// set the toplevel's app id and title and store them
+// set and store the toplevel's app id and title
 bool WaylandBackend::SetToplevelIdentity(int64_t displayId, const std::string& appId,
                                           const std::string& title) {
   Impl* impl = impl_.get();
@@ -3213,7 +3204,7 @@ bool WaylandBackend::SetToplevelIdentity(int64_t displayId, const std::string& a
   ds->appId = appId;
   ds->title = title;
   wl_display_flush(impl->display);
-  klogf("WaylandBackend: display %lld identity set app_id=\"%s\" title=\"%s\"",
+  klogf("display %lld identity set app_id=\"%s\" title=\"%s\"",
         static_cast<long long>(displayId), appId.c_str(), title.c_str());
   return true;
 }

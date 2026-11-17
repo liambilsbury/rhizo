@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_FRAME_OUTPUT_H
 #define RHIZO_CAMERA_FRAME_OUTPUT_H
 
-// write a host frame into an output buffer as YUV, RGBA or JPEG
+// host frame output into a YUV, RGBA or JPEG buffer
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,7 +37,7 @@ struct JpegRequest {
   ExifInfo exif;
 };
 
-// scratch buffers a session reuses across frames
+// per-session scratch buffers reused across frames
 struct Scratch {
   std::vector<uint8_t> a;
   std::vector<uint8_t> b;

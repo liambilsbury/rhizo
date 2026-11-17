@@ -1,5 +1,5 @@
 [Unit]
-Description=Rhizo Android sandbox (androidd)
+Description=Rhizo Android sandbox
 ConditionPathExists=/root/launcher3.py
 After=systemd-modules-load.service
 After=rhizo-policy.service

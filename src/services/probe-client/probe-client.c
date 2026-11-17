@@ -23,7 +23,7 @@ static double now_s(void) {
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-// set the receive and send timeouts of a socket
+// set SO_RCVTIMEO and SO_SNDTIMEO on fd
 static void set_timeout(int fd, double secs) {
   if (secs < 0.001) secs = 0.001;
   struct timeval tv;
@@ -33,7 +33,7 @@ static void set_timeout(int fd, double secs) {
   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
-// find the last trailer in the buffer
+// return the offset of the last TRAILER in buf, or -1
 static ssize_t rfind_trailer(const char *buf, size_t len) {
   if (len < TRAILER_LEN) return -1;
   for (size_t i = len - TRAILER_LEN + 1; i-- > 0;) {
@@ -42,7 +42,7 @@ static ssize_t rfind_trailer(const char *buf, size_t len) {
   return -1;
 }
 
-// check for a complete trailer
+// return whether a NUL follows the TRAILER at buf[at]
 static int trailer_complete(const char *buf, size_t len, ssize_t at) {
   if (at < 0) return 0;
   for (size_t i = (size_t)at + TRAILER_LEN; i < len; i++) {
@@ -51,10 +51,10 @@ static int trailer_complete(const char *buf, size_t len, ssize_t at) {
   return 0;
 }
 
-// send a command to rhizo-probed
+// write argv to sock and exit with the RHIZO_PROBE_RC value
 int main(int argc, char **argv) {
   if (argc < 4) {
-    fprintf(stderr, "usage: rhizo-probe-client <sock> <timeout-s> <command...>\n");
+    fprintf(stderr, "rhizo-probe-client <sock> <timeout-s> <command...>\n");
     return RC_USAGE;
   }
   const char *sock_path = argv[1];
@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
   size_t cmd_len = 0;
   for (int i = 3; i < argc; i++) cmd_len += strlen(argv[i]) + 1;
   char *cmd = malloc(cmd_len + 1);
-  if (!cmd) { fprintf(stderr, "RHIZO_PROBE_UNREACHABLE: out of memory\n"); return RC_UNREACHABLE; }
+  if (!cmd) { fprintf(stderr, "RHIZO_PROBE_UNREACHABLE: malloc failed\n"); return RC_UNREACHABLE; }
   cmd[0] = '\0';
   for (int i = 3; i < argc; i++) {
     if (i > 3) strcat(cmd, " ");
@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
 
   size_t cap = 65536, len = 0;
   char *buf = malloc(cap);
-  if (!buf) { fprintf(stderr, "RHIZO_PROBE_UNREACHABLE: out of memory\n"); close(fd); return RC_UNREACHABLE; }
+  if (!buf) { fprintf(stderr, "RHIZO_PROBE_UNREACHABLE: malloc failed\n"); close(fd); return RC_UNREACHABLE; }
   int timed_out = 0;
   for (;;) {
     double remaining = deadline - now_s();
@@ -132,13 +132,13 @@ int main(int argc, char **argv) {
   if (timed_out && at < 0) {
     fwrite(buf, 1, len, stdout);
     fflush(stdout);
-    fprintf(stderr, "RHIZO_PROBE_TIMEOUT: no completion trailer before deadline\n");
+    fprintf(stderr, "RHIZO_PROBE_TIMEOUT: no RHIZO_PROBE_RC trailer before the deadline\n");
     return RC_NO_TRAILER;
   }
   if (at < 0) {
     fwrite(buf, 1, len, stdout);
     fflush(stdout);
-    fprintf(stderr, "RHIZO_PROBE_NO_TRAILER: connection closed without a completion marker\n");
+    fprintf(stderr, "RHIZO_PROBE_NO_TRAILER: connection closed before a RHIZO_PROBE_RC trailer\n");
     return RC_NO_TRAILER;
   }
 

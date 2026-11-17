@@ -1,5 +1,5 @@
 [Unit]
-Description=Rhizo camera host
+Description=Rhizo PipeWire camera server
 After=androidd.service
 ConditionPathExists=/run/rhizo-desktop/session.env
 PartOf=androidd.service

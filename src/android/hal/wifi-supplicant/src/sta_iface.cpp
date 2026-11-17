@@ -28,7 +28,7 @@ std::string MacText(const std::array<uint8_t, 6>& m) {
   return buf;
 }
 
-// format an SSID as text with other bytes escaped
+// format an SSID as text with non-printable bytes as \xNN
 std::string SsidText(const std::vector<uint8_t>& s) {
   std::string out;
   for (uint8_t c : s) {
@@ -168,7 +168,7 @@ void StaIface::Step(Clock::time_point now) {
   }
 }
 
-// carry out a queued command
+// run a queued command
 void StaIface::RunLocked(Cmd cmd, int32_t net, Clock::time_point now) {
   switch (cmd) {
     case Cmd::kSelect: {
@@ -236,7 +236,7 @@ void StaIface::BeginLocked(int32_t net, bool allow_scan, bool retry, Clock::time
       has_deadline_ = true;
       return;
     }
-    klogf("%s leave before a new attempt FAILED: %s", name_.c_str(), strerror(-rc));
+    klogf("failed to disconnect %s before connect (%s)", name_.c_str(), strerror(-rc));
     if (leaving_connected_) LostLocked(kReasonDeauthLeaving, true);
     leaving_connected_ = false;
   }
@@ -268,7 +268,7 @@ void StaIface::FindLocked(Clock::time_point now) {
       EmitStateLocked(StaIfaceCallbackState::SCANNING, true);
       return;
     }
-    klogf("%s scan for %s FAILED: %s", name_.c_str(), SsidText(cfg.ssid).c_str(), strerror(-rc));
+    klogf("failed to scan %s for %s (%s)", name_.c_str(), SsidText(cfg.ssid).c_str(), strerror(-rc));
   }
   NotFoundLocked(now);
 }
@@ -282,7 +282,7 @@ void StaIface::ConnectLocked(const NetworkConfig& cfg, const rhizo_wifi::Bss& bs
   EmitStateLocked(StaIfaceCallbackState::ASSOCIATING, true);
   int rc = Engine::Get().nl().Connect(ifindex_, cfg.ssid, bss.bssid, bss.freq);
   if (rc != 0) {
-    klogf("%s connect to %s FAILED: %s", name_.c_str(), MacText(bss.bssid).c_str(), strerror(-rc));
+    klogf("failed to connect %s to %s (%s)", name_.c_str(), MacText(bss.bssid).c_str(), strerror(-rc));
     RejectedLocked(kStatusUnspecified, false);
     return;
   }
@@ -293,7 +293,7 @@ void StaIface::ConnectLocked(const NetworkConfig& cfg, const rhizo_wifi::Bss& bs
         MacText(bss.bssid).c_str(), bss.freq);
 }
 
-// report the selected network missing and wait to look again
+// call onNetworkNotFound and set the retry timer
 void StaIface::NotFoundLocked(Clock::time_point now) {
   NetworkConfig cfg;
   ConfigLocked(want_, &cfg);
@@ -312,7 +312,7 @@ void StaIface::NotFoundLocked(Clock::time_point now) {
   want_ = -1;
 }
 
-// report a failed association
+// call onAssociationRejected
 void StaIface::RejectedLocked(int status, bool timed_out) {
   AssociationRejectionData d;
   d.ssid = target_.ssid;
@@ -329,7 +329,7 @@ void StaIface::RejectedLocked(int status, bool timed_out) {
   target_ = Target{};
 }
 
-// report a lost association
+// call onDisconnected
 void StaIface::LostLocked(uint16_t reason, bool locally) {
   const std::vector<uint8_t> bssid = Vec(target_.bssid);
   const auto code = StaIfaceReasonCode(reason ? reason : Bits(StaIfaceReasonCode::UNSPECIFIED));
@@ -347,7 +347,7 @@ void StaIface::AbortLocked() {
     case Phase::kConnected: {
       int rc = Engine::Get().nl().Disconnect(ifindex_, kReasonDeauthLeaving);
       if (rc != 0) {
-        klogf("%s disconnect FAILED: %s", name_.c_str(), strerror(-rc));
+        klogf("failed to disconnect %s (%s)", name_.c_str(), strerror(-rc));
         phase_ = Phase::kIdle;
         LostLocked(kReasonDeauthLeaving, true);
         return;
@@ -373,7 +373,7 @@ void StaIface::AbortLocked() {
   }
 }
 
-// continue after the previous association is gone
+// run FindLocked or EmitDisconnectedLocked after a disconnect
 void StaIface::AfterLeaveLocked(Clock::time_point now) {
   has_deadline_ = false;
   phase_ = Phase::kIdle;
@@ -391,7 +391,7 @@ bool StaIface::MatchLocked(const NetworkConfig& cfg, rhizo_wifi::Bss* out) {
   std::vector<rhizo_wifi::Bss> table;
   int rc = Engine::Get().nl().GetScan(ifindex_, &table);
   if (rc != 0) {
-    klogf("%s BSS table unreadable: %s", name_.c_str(), strerror(-rc));
+    klogf("failed to read %s BSS table (%s)", name_.c_str(), strerror(-rc));
     return false;
   }
   bool found = false;
@@ -413,7 +413,7 @@ bool StaIface::ConfigLocked(int32_t net, NetworkConfig* out) {
   return true;
 }
 
-// send a state change to the callbacks
+// call onSupplicantStateChanged with a state change
 void StaIface::EmitStateLocked(StaIfaceCallbackState s, bool network_specific) {
   SupplicantStateChangeData d;
   d.newState = s;
@@ -432,7 +432,7 @@ void StaIface::EmitStateLocked(StaIfaceCallbackState s, bool network_specific) {
   callbacks_.ForEach([&](const auto& cb) { cb->onSupplicantStateChanged(d); });
 }
 
-// send DISCONNECTED unless it was the last state sent
+// call EmitStateLocked with DISCONNECTED unless state_ is DISCONNECTED
 void StaIface::EmitDisconnectedLocked() {
   if (state_ != StaIfaceCallbackState::DISCONNECTED) EmitStateLocked(StaIfaceCallbackState::DISCONNECTED, false);
 }
@@ -449,13 +449,13 @@ bool StaIface::NextDeadline(Clock::time_point* at) {
   return true;
 }
 
-// return true once the interface is removed and wound down
+// return finished_
 bool StaIface::Finished() {
   std::lock_guard<std::mutex> lg(mu_);
   return finished_;
 }
 
-// take the interface out of service
+// invalidate the interface and queue Cmd::kRemove
 void StaIface::Remove() {
   std::map<int32_t, std::shared_ptr<StaNetwork>> nets;
   {
@@ -469,7 +469,7 @@ void StaIface::Remove() {
   Engine::Get().Wake();
 }
 
-// leave any association before the process exits
+// call Disconnect with kReasonDeauthLeaving in kConnected, kConnecting or kLeaving
 void StaIface::Shutdown() {
   std::lock_guard<std::mutex> lg(mu_);
   if (phase_ == Phase::kConnected || phase_ == Phase::kConnecting || phase_ == Phase::kLeaving)
@@ -572,7 +572,7 @@ ScopedAStatus StaIface::getMacAddress(std::vector<uint8_t>* out) {
   std::array<uint8_t, 6> mac{};
   int rc = rhizo_wifi::GetHwAddr(name_, &mac);
   if (rc != 0) {
-    klogf("%s address unreadable: %s", name_.c_str(), strerror(-rc));
+    klogf("failed to read %s address (%s)", name_.c_str(), strerror(-rc));
     return Status(SupplicantStatusCode::FAILURE_UNKNOWN);
   }
   *out = Vec(mac);
@@ -601,7 +601,7 @@ ScopedAStatus StaIface::getConnectionCapabilities(ConnectionCapabilities* out) {
   rhizo_wifi::StationInfo st;
   int rc = Engine::Get().nl().GetStation(ifindex_, target_.bssid, &st);
   if (rc != 0) {
-    klogf("%s station info unreadable: %s", name_.c_str(), strerror(-rc));
+    klogf("failed to read %s station info (%s)", name_.c_str(), strerror(-rc));
     return Status(SupplicantStatusCode::FAILURE_UNKNOWN);
   }
   out->technology = WifiTechnology(st.tx.tech);
@@ -631,7 +631,7 @@ ScopedAStatus StaIface::getSignalPollResults(std::vector<SignalPollResult>* out)
   rhizo_wifi::StationInfo st;
   int rc = Engine::Get().nl().GetStation(ifindex_, target_.bssid, &st);
   if (rc != 0 || !st.has_signal) {
-    klogf("%s signal poll FAILED: %s", name_.c_str(), rc ? strerror(-rc) : "no signal reported");
+    klogf("failed to poll %s signal (%s)", name_.c_str(), rc ? strerror(-rc) : "no NL80211_STA_INFO_SIGNAL");
     return Status(SupplicantStatusCode::FAILURE_UNKNOWN);
   }
   SignalPollResult r;
@@ -648,7 +648,7 @@ ScopedAStatus StaIface::setPowerSave(bool enable) {
   if (!valid_) return Invalid();
   int rc = Engine::Get().nl().SetPowerSave(ifindex_, enable);
   if (rc == 0) return ScopedAStatus::ok();
-  klogf("%s power save %s FAILED: %s", name_.c_str(), enable ? "on" : "off", strerror(-rc));
+  klogf("failed to set %s power save %s (%s)", name_.c_str(), enable ? "on" : "off", strerror(-rc));
   return Status(rc == -EOPNOTSUPP ? SupplicantStatusCode::FAILURE_UNSUPPORTED : SupplicantStatusCode::FAILURE_UNKNOWN);
 }
 
@@ -658,7 +658,7 @@ ScopedAStatus StaIface::setCountryCode(const std::vector<uint8_t>& code) {
   std::lock_guard<std::mutex> lg(mu_);
   if (code[0] != country_[0] || code[1] != country_[1]) {
     country_ = {code[0], code[1]};
-    klogf("%s country code recorded as %c%c, not forwarded to cfg80211", name_.c_str(), code[0], code[1]);
+    klogf("%s country_=%c%c", name_.c_str(), code[0], code[1]);
   }
   return ScopedAStatus::ok();
 }
@@ -696,7 +696,7 @@ Engine& Engine::Get() {
   return *engine;
 }
 
-// open the nl80211 sockets and start the event thread once
+// open the nl80211 sockets and start the event thread unless ready_ is set
 int Engine::Init() {
   std::lock_guard<std::mutex> lg(mu_);
   if (ready_) return 0;
@@ -706,7 +706,7 @@ int Engine::Init() {
   for (const char* g : {NL80211_MULTICAST_GROUP_MLME, NL80211_MULTICAST_GROUP_SCAN}) {
     auto it = nl_.family().groups.find(g);
     if (it == nl_.family().groups.end() || !events_.Join(it->second)) {
-      klogf("nl80211 group %s unavailable", g);
+      klogf("failed to join nl80211 group %s", g);
       return -ENOENT;
     }
   }
@@ -717,7 +717,7 @@ int Engine::Init() {
   return 0;
 }
 
-// hand an interface to the event thread
+// add an interface to the event thread
 void Engine::Add(const std::shared_ptr<StaIface>& iface) {
   {
     std::lock_guard<std::mutex> lg(mu_);
@@ -730,7 +730,7 @@ void Engine::Add(const std::shared_ptr<StaIface>& iface) {
 void Engine::Wake() {
   if (wake_ < 0) return;
   const uint64_t one = 1;
-  if (write(wake_, &one, sizeof(one)) < 0 && errno != EAGAIN) klogf("engine wake FAILED: %s", strerror(errno));
+  if (write(wake_, &one, sizeof(one)) < 0 && errno != EAGAIN) klogf("engine wake failed (%s)", strerror(errno));
 }
 
 // deliver nl80211 events, commands and timers to the interfaces
@@ -754,7 +754,7 @@ void Engine::Run() {
     }
     pollfd fds[2] = {{wake_, POLLIN, 0}, {events_.fd(), POLLIN, 0}};
     if (poll(fds, 2, timeout) < 0 && errno != EINTR) {
-      klogf("engine poll FAILED: %s", strerror(errno));
+      klogf("engine poll failed (%s)", strerror(errno));
       return;
     }
     if (fds[0].revents & POLLIN) {
@@ -765,7 +765,7 @@ void Engine::Run() {
       if (!events_.ReadEvents([&](const rhizo_wifi::Reply& r) {
             for (auto& i : snap) i->OnNlEvent(r);
           }))
-        klogf("nl80211 event read FAILED: %s", strerror(errno));
+        klogf("failed to read nl80211 events (%s)", strerror(errno));
     }
     now = Clock::now();
     for (auto& i : snap) i->Step(now);

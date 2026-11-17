@@ -1,12 +1,12 @@
 #!/bin/bash
-# enable or disable rhizo-streamd.socket to match stream.enabled
+# rhizo-streamd.socket toggle for stream.enabled
 set -euo pipefail
 
 LIB_DIR="${RHIZO_LIB_DIR:-/usr/lib/rhizo}"
 CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 
-# print enable or disable according to the stream.enabled capability
+# print enable or disable for the stream.enabled capability
 decide() {
   PYTHONPATH="$LIB_DIR" /usr/bin/python3 -c '
 import sys
@@ -22,9 +22,9 @@ if (( CHECK_ONLY )); then
 fi
 
 systemctl "$decision" --now rhizo-streamd.socket
-echo "rhizo-stream-capability-sync: rhizo-streamd.socket $decision""d (stream.enabled)"
+echo "rhizo-streamd.socket $decision""d for stream.enabled"
 again=$(decide)
 if [[ "$again" != "$decision" ]]; then
   systemctl "$again" --now rhizo-streamd.socket
-  echo "rhizo-stream-capability-sync: policy changed while syncing -- rhizo-streamd.socket $again""d (stream.enabled)"
+  echo "rhizo-streamd.socket $again""d for stream.enabled"
 fi

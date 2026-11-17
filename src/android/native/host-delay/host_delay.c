@@ -35,7 +35,7 @@ static struct hd_table g_table;
 static atomic_bool g_connected;
 static struct PerfettoDs g_ds = PERFETTO_DS_INIT();
 
-// write a line to the kernel log
+// write line to /dev/kmsg
 static void kmsg(const char* line) {
   int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
   if (fd < 0) return;
@@ -51,7 +51,7 @@ static uint64_t boottime_ns(void) {
   return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// ignore the data source setup
+// return NULL from the data source setup callback
 static void* ds_on_setup(struct PerfettoDsImpl* impl, PerfettoDsInstanceIndex inst, void* cfg,
                          size_t cfg_size, void* user_arg, struct PerfettoDsOnSetupArgs* args) {
   (void)impl; (void)inst; (void)cfg; (void)cfg_size; (void)user_arg; (void)args;
@@ -130,7 +130,7 @@ static void emit_to_instances(const struct hd_line* l) {
   }
 }
 
-// apply a host line and emit it to the trace instances
+// apply l to g_table and emit l to the trace instances
 static void on_line(const struct hd_line* l, void* arg) {
   (void)arg;
   pthread_mutex_lock(&g_lock);
@@ -139,19 +139,19 @@ static void on_line(const struct hd_line* l, void* arg) {
   pthread_mutex_unlock(&g_lock);
 }
 
-// return the service arguments as its data
+// return args as the binder object data
 static void* svc_create(void* args) { return args; }
-// ignore the service data on destroy
+// discard the binder object data
 static void svc_destroy(void* data) { (void)data; }
 
-// reject all of the transaction codes
+// return STATUS_UNKNOWN_TRANSACTION for each transaction code
 static binder_status_t svc_transact(AIBinder* binder, transaction_code_t code, const AParcel* in,
                                     AParcel* out) {
   (void)binder; (void)code; (void)in; (void)out;
   return STATUS_UNKNOWN_TRANSACTION;
 }
 
-// write all bytes to a descriptor
+// write n bytes of p to fd
 static void write_all(int fd, const char* p, size_t n) {
   while (n) {
     ssize_t w = write(fd, p, n);
@@ -187,7 +187,7 @@ static bool serve_binder(void) {
   return AServiceManager_addService(binder, SERVICE_NAME) == STATUS_OK;
 }
 
-// connect to the host socket
+// connect to SOCKET_PATH
 static int connect_host(void) {
   int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
   if (fd < 0) return -1;
@@ -213,18 +213,18 @@ static void read_host(int fd) {
     unsigned long long before = rejected_total;
     rejected_total += bad;
     if (before == 0 || __builtin_clzll(before) != __builtin_clzll(rejected_total))
-      __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "%zu protocol line(s) rejected so far",
+      __android_log_print(ANDROID_LOG_WARN, LOG_TAG, "%zu protocol lines rejected in total",
                           rejected_total);
   }
 }
 
-// serve binder and keep reconnecting to the host
+// serve binder and connect to SOCKET_PATH in a loop
 int main(void) {
   signal(SIGPIPE, SIG_IGN);
   hd_table_init(&g_table);
-  if (!trace_init()) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "data source not registered");
+  if (!trace_init()) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "PerfettoDsRegister failed");
   if (!serve_binder()) {
-    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "could not register " SERVICE_NAME);
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "failed to register " SERVICE_NAME);
     return 1;
   }
   for (;;) {

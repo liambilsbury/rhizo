@@ -23,7 +23,7 @@ using vendor::mapper::IMapperV5Impl;
 
 extern "C" int32_t ANDROID_HAL_MAPPER_VERSION = 5;
 
-// check RHIZO_MAPPER_VERBOSE for verbose logging
+// return whether RHIZO_MAPPER_VERBOSE is set and not 0
 static bool MapperVerbose() {
   static const bool on = [] {
     const char* v = getenv("RHIZO_MAPPER_VERBOSE");
@@ -34,7 +34,7 @@ static bool MapperVerbose() {
 
 namespace {
 
-// write a message to the kernel log
+// write "<5>rhizo-mapper: msg" to /dev/kmsg
 void klog(const char* msg) {
   int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
   if (fd >= 0) {
@@ -106,15 +106,15 @@ struct ImportedBuffer {
   std::optional<Cta861_3Value> cta861_3;
 };
 
-// log a failed virtgpu transfer, once per buffer
+// log a failed virtgpu transfer of ib unless ib.xferFailLogged is set
 void LogTransferFailure(ImportedBuffer& ib, const char* what) {
   if (ib.xferFailLogged) return;
   ib.xferFailLogged = true;
-  __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "%s: virtgpu transfer FAILED w=%d h=%d", what,
+  __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "virtgpu transfer failed in %s (w=%d h=%d)", what,
                       ib.decoded.width, ib.decoded.height);
 }
 
-// map the buffer's planes into a CPU view
+// mmap the plane fds of h into one CPU view
 void* MapCpuView(const native_handle_t* h, const rhizo::CpuLayout& cpu) {
   if (cpu.numMaps == 1) return mmap(nullptr, cpu.span, PROT_READ | PROT_WRITE, MAP_SHARED, h->data[0], 0);
   void* base = mmap(nullptr, cpu.span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -134,13 +134,13 @@ void* MapCpuView(const native_handle_t* h, const rhizo::CpuLayout& cpu) {
 
 constexpr uint64_t kHostWriteUsage = (1ULL << 9) | (1ULL << 12) | (1ULL << 24) | (1ULL << 32);
 
-// return true for a buffer the host's GPU can write
+// return whether d.usage includes a kHostWriteUsage bit
 bool HostMayHoldNewerData(const rhizo::DecodedHandle& d) { return (d.usage & kHostWriteUsage) != 0; }
 
-// return true for a memfd buffer with no host copy
+// return whether data[0] of h is a shmem file
 bool InGuestMemory(const native_handle_t* h) { return h && h->numFds >= 1 && rhizo::IsShmemFile(h->data[0]); }
 
-// a virtgpu transfer of a plane
+// virtgpu transfer box of a plane
 struct TransferBox {
   int fd;
   int width;
@@ -163,7 +163,7 @@ int TransferBoxes(const native_handle_t* h, const rhizo::DecodedHandle& d, Trans
   return n;
 }
 
-// map a sealed one-page SharedMetadata memfd, or return null
+// map a sealed one-page SharedMetadata memfd or return nullptr
 rhizo::SharedMetadata* MapSharedMetadata(int fd) {
   if (!rhizo::IsShmemFile(fd) || !rhizo::ShmemImportAllowed(fd, rhizo::kSharedMetadataBytes)) return nullptr;
   void* p = mmap(nullptr, rhizo::kSharedMetadataBytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -176,7 +176,6 @@ rhizo::SharedMetadata* MapSharedMetadata(int fd) {
   return m;
 }
 
-// never destroyed: a binder thread can still free a buffer while exit() runs static destructors
 std::mutex& g_mutex = *new std::mutex;
 std::unordered_map<buffer_handle_t, ImportedBuffer>& g_imported =
     *new std::unordered_map<buffer_handle_t, ImportedBuffer>;
@@ -217,7 +216,7 @@ bool BytesPerPixelForFormat(int32_t pixelFormat, int32_t* outBpp) {
   }
 }
 
-// return the format of the buffer's allocated layout
+// return ResolvePixelFormat of d.pixelFormat and d.usage
 int32_t LayoutFormat(const rhizo::DecodedHandle& d) {
   return rhizo::ResolvePixelFormat(d.pixelFormat, d.usage);
 }
@@ -283,7 +282,7 @@ bool GetPlaneComponents(int32_t pixelFormat, std::vector<ComponentSpec>* out) {
 
 class MetaWriter {
  public:
-  // write into a destination buffer of the given size
+  // construct a writer over destSize bytes at dest
   MetaWriter(void* dest, size_t destSize)
       : dest_(static_cast<uint8_t*>(dest)), remaining_(destSize) {}
 
@@ -320,7 +319,7 @@ class MetaWriter {
     str(kStandardMetadataTypeName);
     return raw<int64_t>(typeValue);
   }
-  // return the size needed for everything written
+  // return the total byte count passed to raw() and str()
   int32_t desiredSize() const { return static_cast<int32_t>(desired_); }
 
  private:
@@ -331,11 +330,11 @@ class MetaWriter {
 
 class MetaReader {
  public:
-  // read from a source buffer of the given size
+  // construct a reader over size bytes at src
   MetaReader(const void* src, size_t size)
       : src_(static_cast<const uint8_t*>(src)), remaining_(size) {}
 
-  // read a value of type T, or mark the reader as failed
+  // read a T from src_ or clear ok_
   template <typename T>
   MetaReader& raw(T* out) {
     if (ok_ && remaining_ >= sizeof(T)) {
@@ -347,7 +346,7 @@ class MetaReader {
     }
     return *this;
   }
-  // check the metadata type header
+  // parse the metadata type header and compare the type with expectedType
   bool checkHeader(int64_t expectedType) {
     int64_t nameLen = 0;
     raw(&nameLen);
@@ -370,7 +369,7 @@ class MetaReader {
     }
     return true;
   }
-  // return whether all of the reads succeeded
+  // return whether raw() and checkHeader() succeeded
   bool ok() const { return ok_; }
 
  private:
@@ -388,7 +387,7 @@ int32_t EmitMeta(int64_t type, WireT value, void* destBuffer, size_t destBufferS
 constexpr char kRhizoInoTypeName[] = "rhizo.ino";
 constexpr int64_t kRhizoInoTypeValue = 1;
 
-// write the rhizo ino metadata
+// write the rhizo.ino metadata
 int32_t EmitRhizoIno(ino_t ino, void* destBuffer, size_t destBufferSize) {
   MetaWriter w(destBuffer, destBufferSize);
   w.str(kRhizoInoTypeName);
@@ -417,19 +416,19 @@ bool DecodeMeta(int64_t type, const void* metadata, size_t metadataSize, WireT* 
 // HAL for graphics buffer mapping
 class RhizoMapperImpl final : public IMapperV5Impl {
  public:
-  // copy and record the buffer handle
+  // clone handle, dup the fds and add the clone to g_imported
   AIMapper_Error importBuffer(const native_handle_t* handle,
                                buffer_handle_t* outBufferHandle) override {
     if (!handle) return AIMAPPER_ERROR_BAD_BUFFER;
     if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper",
-                         "importBuffer: numFds=%d numInts=%d (want 1-%d/%d)", handle->numFds,
+                         "importBuffer numFds=%d numInts=%d kMaxFds=%d kNumInts=%d", handle->numFds,
                          handle->numInts, rhizo::kMaxFds, rhizo::kNumInts);
     rhizo::DecodedHandle decoded = rhizo::Decode(handle);
     if (!decoded.valid) {
       bool ints = handle->numFds >= 0 && handle->numInts >= 2;
       __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                           "importBuffer: Decode() failed, numFds=%d numInts=%d magic=0x%x version=%d "
-                           "(want 1-%d fds, %d+ ints, 0x%x/%d)",
+                           "Decode() failed (numFds=%d numInts=%d magic=0x%x version=%d "
+                           "kMaxFds=%d kNumInts=%d kHandleMagic=0x%x kHandleVersion=%d)",
                            handle->numFds, handle->numInts,
                            ints ? handle->data[handle->numFds + rhizo::kMagic] : -1,
                            ints ? handle->data[handle->numFds + rhizo::kVersion] : -1, rhizo::kMaxFds,
@@ -439,15 +438,16 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     rhizo::CpuLayout cpu;
     if (!rhizo::ComputeCpuLayout(decoded, static_cast<uint64_t>(getpagesize()), &cpu)) {
       __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                          "importBuffer: %d planes in %d fds do not fit the %llu-byte allocSize", decoded.numPlanes,
+                          "ComputeCpuLayout() failed "
+                          "(numPlanes=%d numFds=%d allocSize=%llu)", decoded.numPlanes,
                           decoded.numFds, static_cast<unsigned long long>(decoded.allocSize));
       return AIMAPPER_ERROR_BAD_BUFFER;
     }
     if (cpu.numMaps == 1) {
       if (!rhizo::ShmemImportAllowed(handle->data[0], decoded.allocSize)) {
         __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                            "importBuffer: refused a shmem fd not sealed against shrinking or shorter than its "
-                            "%llu-byte allocSize",
+                            "ShmemImportAllowed() returned false for data[0] "
+                            "(allocSize=%llu)",
                             static_cast<unsigned long long>(decoded.allocSize));
         return AIMAPPER_ERROR_BAD_BUFFER;
       }
@@ -455,13 +455,13 @@ class RhizoMapperImpl final : public IMapperV5Impl {
       for (int i = 0; i < cpu.numMaps; i++) {
         if (!rhizo::ShmemImportAllowed(handle->data[i], cpu.mapLength[i])) {
           __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                              "importBuffer: refused plane fd %d, a shmem fd shorter than the %llu bytes it maps",
+                              "ShmemImportAllowed() returned false for data[%d] (mapLength=%llu)",
                               i, static_cast<unsigned long long>(cpu.mapLength[i]));
           return AIMAPPER_ERROR_BAD_BUFFER;
         }
       }
     }
-    if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper", "importBuffer: OK w=%d h=%d fds=%d",
+    if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper", "importBuffer w=%d h=%d fds=%d",
                          decoded.width, decoded.height, handle->numFds);
 
     native_handle_t* cloned = native_handle_create(handle->numFds, handle->numInts);
@@ -483,7 +483,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
       shared = MapSharedMetadata(cloned->data[decoded.metaFdIndex]);
       if (!shared) {
         __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                            "importBuffer: fd %d is not a sealed shared-metadata page", decoded.metaFdIndex);
+                            "failed to map SharedMetadata data[%d]", decoded.metaFdIndex);
         native_handle_close(cloned);
         native_handle_delete(cloned);
         return AIMAPPER_ERROR_BAD_BUFFER;
@@ -504,7 +504,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     return AIMAPPER_ERROR_NONE;
   }
 
-  // drop an imported buffer and delete its handle
+  // unmap buffer, erase buffer from g_imported and delete the handle
   AIMapper_Error freeBuffer(buffer_handle_t buffer) override {
     native_handle_t* h = const_cast<native_handle_t*>(
         static_cast<const native_handle_t*>(buffer));
@@ -537,23 +537,23 @@ class RhizoMapperImpl final : public IMapperV5Impl {
   static constexpr uint64_t kCpuReadMask = 0xfULL;
   static constexpr uint64_t kCpuWriteMask = 0xfULL << 4;
 
-  // map the buffer for CPU access
+  // mmap buffer for CPU access
   AIMapper_Error lock(buffer_handle_t buffer, uint64_t cpuUsage, ARect accessRegion,
                        int acquireFence, void** outData) override {
     if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper",
-                         "lock: buffer=%p cpuUsage=0x%llx acquireFence=%d", buffer,
+                         "lock buffer=%p cpuUsage=0x%llx acquireFence=%d", buffer,
                          (unsigned long long)cpuUsage, acquireFence);
     if (acquireFence >= 0) {
       sync_wait_fd(acquireFence);
       close(acquireFence);
     }
     if (cpuUsage == 0) {
-      __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "lock: BAD_VALUE cpuUsage==0");
+      __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "lock() returned AIMAPPER_ERROR_BAD_VALUE for cpuUsage=0");
       return AIMAPPER_ERROR_BAD_VALUE;
     }
     const native_handle_t* h = static_cast<const native_handle_t*>(buffer);
     if (!h || h->numFds < 1) {
-      __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "lock: BAD_BUFFER h=%p", h);
+      __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "lock() returned AIMAPPER_ERROR_BAD_BUFFER for h=%p", h);
       return AIMAPPER_ERROR_BAD_BUFFER;
     }
 
@@ -561,7 +561,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     auto it = g_imported.find(buffer);
     if (it == g_imported.end()) {
       __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                           "lock: buffer %p NOT in g_imported (size=%zu)", buffer,
+                           "buffer %p is not in g_imported (size=%zu)", buffer,
                            g_imported.size());
       return AIMAPPER_ERROR_BAD_BUFFER;
     }
@@ -571,7 +571,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
         accessRegion.right > ib.decoded.width || accessRegion.bottom > ib.decoded.height ||
         accessRegion.left > accessRegion.right || accessRegion.top > accessRegion.bottom) {
       __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                           "lock: BAD_VALUE accessRegion=(%d,%d,%d,%d) vs %dx%d",
+                           "lock() returned AIMAPPER_ERROR_BAD_VALUE for accessRegion=(%d,%d,%d,%d) buffer=%dx%d",
                            accessRegion.left, accessRegion.top, accessRegion.right,
                            accessRegion.bottom, ib.decoded.width, ib.decoded.height);
       return AIMAPPER_ERROR_BAD_VALUE;
@@ -587,10 +587,10 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     size_t size = static_cast<size_t>(ib.cpu.span);
     void* addr = ib.keptData ? ib.keptData : MapCpuView(h, ib.cpu);
     if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper",
-                         "lock: w=%d h=%d stride=%d size=%zu fds=%d fd=%d -> addr=%p", ib.decoded.width,
+                         "lock w=%d h=%d stride=%d size=%zu fds=%d fd=%d -> addr=%p", ib.decoded.width,
                          ib.decoded.height, ib.decoded.stride, size, h->numFds, h->data[0], addr);
     if (addr == MAP_FAILED) {
-      __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "lock: mmap FAILED errno=%d (%s)",
+      __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper", "mmap failed errno=%d (%s)",
                            errno, strerror(errno));
       return AIMAPPER_ERROR_NO_RESOURCES;
     }
@@ -605,8 +605,8 @@ class RhizoMapperImpl final : public IMapperV5Impl {
           xferOk = false;
         }
       }
-      if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper", "lock: TransferFromHost -> %s",
-                           xferOk ? "ok" : "FAILED");
+      if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper", "VirtgpuTransferFromHost %s",
+                           xferOk ? "ok" : "failed");
       if (!xferOk) {
         LogTransferFailure(ib, "lock");
         munmap(addr, size);
@@ -626,7 +626,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     return AIMAPPER_ERROR_NONE;
   }
 
-  // unmap the buffer
+  // decrement the lock count and unmap the CPU view at lock count 0
   AIMapper_Error unlock(buffer_handle_t buffer, int* releaseFence) override {
     const native_handle_t* h = static_cast<const native_handle_t*>(buffer);
     std::lock_guard<std::mutex> lg(g_mutex);
@@ -646,8 +646,8 @@ class RhizoMapperImpl final : public IMapperV5Impl {
             xferOk = false;
           }
         }
-        if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper", "unlock: TransferToHost -> %s",
-                             xferOk ? "ok" : "FAILED");
+        if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper", "VirtgpuTransferToHost %s",
+                             xferOk ? "ok" : "failed");
         if (!xferOk) {
           LogTransferFailure(ib, "unlock");
           xferFailed = true;
@@ -663,7 +663,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     return xferFailed ? AIMAPPER_ERROR_NO_RESOURCES : AIMAPPER_ERROR_NONE;
   }
 
-  // check the locked buffer handle
+  // return AIMAPPER_ERROR_BAD_BUFFER for a buffer that is not locked
   AIMapper_Error flushLockedBuffer(buffer_handle_t buffer) override {
     std::lock_guard<std::mutex> lg(g_mutex);
     auto it = g_imported.find(buffer);
@@ -691,7 +691,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     return AIMAPPER_ERROR_NONE;
   }
 
-  // return standard metadata and reject other metadata types
+  // return standard metadata or -AIMAPPER_ERROR_UNSUPPORTED
   int32_t getMetadata(buffer_handle_t buffer, AIMapper_MetadataType metadataType,
                        void* destBuffer, size_t destBufferSize) override {
     if (strcmp(metadataType.name, kStandardMetadataTypeName) == 0) {
@@ -707,13 +707,13 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     auto it = g_imported.find(buffer);
     if (it == g_imported.end()) {
       __android_log_print(ANDROID_LOG_ERROR, "rhizo-mapper",
-                           "getStandardMetadata: buffer %p NOT in g_imported (size=%zu) type=%lld",
+                           "buffer %p is not in g_imported (size=%zu type=%lld)",
                            buffer, g_imported.size(), (long long)type);
       return -AIMAPPER_ERROR_BAD_BUFFER;
     }
     int32_t __ret = GetStandardMetadataImpl(it->second, type, destBuffer, destBufferSize);
     if (MapperVerbose()) __android_log_print(ANDROID_LOG_INFO, "rhizo-mapper",
-                         "getStandardMetadata: type=%lld destBufferSize=%zu -> ret=%d",
+                         "getStandardMetadata type=%lld destBufferSize=%zu -> ret=%d",
                          (long long)type, destBufferSize, __ret);
     return __ret;
   }
@@ -882,7 +882,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     }
   }
 
-  // set standard metadata and reject other metadata types
+  // set standard metadata or return AIMAPPER_ERROR_UNSUPPORTED
   AIMapper_Error setMetadata(buffer_handle_t buffer, AIMapper_MetadataType metadataType,
                               const void* metadata, size_t metadataSize) override {
     if (strcmp(metadataType.name, kStandardMetadataTypeName) == 0) {
@@ -989,7 +989,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
     return AIMAPPER_ERROR_NONE;
   }
 
-  // return success for a dump request
+  // return AIMAPPER_ERROR_NONE
   AIMapper_Error dumpBuffer(buffer_handle_t, AIMapper_DumpBufferCallback, void*) override {
     return AIMAPPER_ERROR_NONE;
   }
@@ -1033,7 +1033,7 @@ class RhizoMapperImpl final : public IMapperV5Impl {
   static void sync_wait_fd(int fd);
 };
 
-// poll the fence file descriptor
+// poll fd for POLLIN with a 3000 ms timeout
 void RhizoMapperImpl::sync_wait_fd(int fd) {
   struct pollfd pfd{fd, POLLIN, 0};
   poll(&pfd, 1, 3000);

@@ -59,15 +59,14 @@ CTRL_CMD_GETFAMILY = 3
 CTRL_ATTR_FAMILY_ID = 1
 CTRL_ATTR_FAMILY_NAME = 2
 
-NOT_LOADED = ("no rhizo_wlan generic netlink family: the driver is not loaded, or this is not the "
-              "initial network namespace")
+NOT_LOADED = "no rhizo_wlan generic netlink family"
 
 
 class WlanError(OSError):
-    """a refused or failed rhizo_wlan request"""
+    """OSError for a failed rhizo_wlan command"""
 
     def __init__(self, err, message):
-        """keep the errno and a message naming the request"""
+        """store err and message"""
         super().__init__(err, message)
 
 
@@ -133,7 +132,7 @@ def _mac(value, what):
 
 
 class _Socket:
-    """a single-request generic netlink socket"""
+    """generic netlink socket with extended acks"""
 
     def __init__(self):
         """open and bind the socket with extended acks"""
@@ -159,7 +158,7 @@ class _Socket:
         self.sock.close()
 
     def request(self, family, cmd, version, attrs, what):
-        """send a request and return its reply's attributes, or None"""
+        """call send() with an NLM_F_REQUEST | NLM_F_ACK message and return the reply attributes, or None"""
         self.seq += 1
         payload = struct.pack(GENL_HDR, cmd, version, 0) + b"".join(attrs)
         self.sock.send(struct.pack(NLMSG_HDR, NLMSG_HDRLEN + len(payload), family,
@@ -169,7 +168,7 @@ class _Socket:
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise WlanError(errno.ETIMEDOUT, "%s: no answer from the kernel" % what)
+                raise WlanError(errno.ETIMEDOUT, "no netlink reply to %s" % what)
             self.sock.settimeout(left)
             try:
                 data = self.sock.recv(RECV_SIZE)
@@ -196,7 +195,7 @@ class _Socket:
 
 
 def _error_message(what, err, flags, body):
-    """describe a netlink error with its extended ack message"""
+    """return what, strerror(err) and the NLMSGERR_ATTR_MSG text"""
     text = os.strerror(err)
     if flags & NLM_F_ACK_TLVS:
         echoed = NLMSG_HDRLEN
@@ -205,33 +204,33 @@ def _error_message(what, err, flags, body):
         msg = _attrs(body[4 + echoed:]).get(NLMSGERR_ATTR_MSG)
         if msg:
             text = "%s (%s)" % (text, _string(msg))
-    return "%s: %s" % (what, text)
+    return "%s failed with %s" % (what, text)
 
 
 def _family(sock, what):
-    """return the rhizo_wlan family's id"""
+    """return the rhizo_wlan family id"""
     try:
         reply = sock.request(GENL_ID_CTRL, CTRL_CMD_GETFAMILY, 1,
                              [_nla(CTRL_ATTR_FAMILY_NAME, FAMILY_NAME + b"\0")], what)
     except WlanError as e:
         if e.errno == errno.ENOENT:
-            raise WlanError(errno.ENOENT, "%s: %s" % (what, NOT_LOADED)) from None
+            raise WlanError(errno.ENOENT, "%s failed with %s" % (what, NOT_LOADED)) from None
         raise
     raw = (reply or {}).get(CTRL_ATTR_FAMILY_ID)
     if raw is None or len(raw) < 2:
-        raise WlanError(errno.EPROTO, "%s: the kernel named no rhizo_wlan family id" % what)
+        raise WlanError(errno.EPROTO, "CTRL_CMD_GETFAMILY for %s returned no CTRL_ATTR_FAMILY_ID" % what)
     return struct.unpack("=H", raw[:2])[0]
 
 
 def _call(cmd, attrs, what):
-    """send a rhizo_wlan command and return its reply's attributes"""
+    """call a rhizo_wlan command and return the reply attributes"""
     try:
         with _Socket() as sock:
             return sock.request(_family(sock, what), cmd, FAMILY_VERSION, attrs, what)
     except WlanError:
         raise
     except OSError as e:
-        raise WlanError(e.errno or errno.EIO, "%s: %s" % (what, e.strerror or e)) from None
+        raise WlanError(e.errno or errno.EIO, "%s failed with %s" % (what, e.strerror or e)) from None
 
 
 def wlan_available():
@@ -246,13 +245,13 @@ def wlan_available():
 
 def create(host_if, wlan_if, wlan_mac, netns_pid, owner_uid, host_mac=None, netns_fd=None,
            alpha2=None):
-    """make a station and host interface pair"""
+    """create a station and host interface pair"""
     attrs = [_nla(ATTR_HOST_IFNAME, _ifname(host_if, "host_if")),
              _nla(ATTR_WLAN_IFNAME, _ifname(wlan_if, "wlan_if")),
              _nla(ATTR_WLAN_MAC, _mac(wlan_mac, "wlan_mac")),
              _nla(ATTR_OWNER_UID, struct.pack("=I", owner_uid))]
     if (netns_pid is None) == (netns_fd is None):
-        raise WlanError(errno.EINVAL, "create %s: name the namespace by netns_pid or netns_fd" % host_if)
+        raise WlanError(errno.EINVAL, "create %s takes one of netns_pid and netns_fd" % host_if)
     if netns_pid is not None:
         attrs.append(_nla(ATTR_NETNS_PID, struct.pack("=I", netns_pid)))
     else:
@@ -262,7 +261,7 @@ def create(host_if, wlan_if, wlan_mac, netns_pid, owner_uid, host_mac=None, netn
     if alpha2 is not None:
         raw = alpha2.encode() if isinstance(alpha2, str) else bytes(alpha2)
         if len(raw) != 2:
-            raise WlanError(errno.EINVAL, "create %s: alpha2 %r must be 2 characters" % (host_if, alpha2))
+            raise WlanError(errno.EINVAL, "create %s with alpha2 %r, expected 2 characters" % (host_if, alpha2))
         attrs.append(_nla(ATTR_ALPHA2, raw))
     _call(CMD_CREATE, attrs, "create %s" % host_if)
 
@@ -273,27 +272,27 @@ def destroy(host_if):
 
 
 def set_state(host_if, present, ssid=b"", bssid=b"", signal_mbm=0):
-    """set the station's access point"""
+    """set the station access point"""
     what = "set_state %s" % host_if
     attrs = [_nla(ATTR_HOST_IFNAME, _ifname(host_if, "host_if")),
              _nla(ATTR_PRESENT, struct.pack("=B", 1 if present else 0))]
     if present:
         if not isinstance(ssid, (bytes, bytearray)) or not 1 <= len(ssid) <= MAX_SSID_LEN:
-            raise WlanError(errno.EINVAL, "%s: ssid must be 1-%d bytes" % (what, MAX_SSID_LEN))
+            raise WlanError(errno.EINVAL, "ssid for %s must be 1-%d bytes" % (what, MAX_SSID_LEN))
         signal = int(signal_mbm)
         if not MIN_SIGNAL_MBM <= signal <= 0:
-            raise WlanError(errno.EINVAL, "%s: signal_mbm %d is outside %d..0" % (what, signal, MIN_SIGNAL_MBM))
+            raise WlanError(errno.EINVAL, "signal_mbm for %s is %d, outside %d..0" % (what, signal, MIN_SIGNAL_MBM))
         attrs += [_nla(ATTR_SSID, bytes(ssid)), _nla(ATTR_BSSID, _mac(bssid, "bssid")),
                   _nla(ATTR_SIGNAL_MBM, struct.pack("=i", signal))]
     _call(CMD_SET_STATE, attrs, what)
 
 
 def get_state(host_if):
-    """return the pair's names, owner, access point and connection"""
+    """return the CMD_GET_STATE attributes of host_if"""
     a = _call(CMD_GET_STATE, [_nla(ATTR_HOST_IFNAME, _ifname(host_if, "host_if"))],
               "get_state %s" % host_if)
     if a is None:
-        raise WlanError(errno.EPROTO, "get_state %s: the kernel sent no state" % host_if)
+        raise WlanError(errno.EPROTO, "get_state %s returned no attributes" % host_if)
     signal = a.get(ATTR_SIGNAL_MBM)
     return {
         "host_if": _string(a.get(ATTR_HOST_IFNAME, b"")),

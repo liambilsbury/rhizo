@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-// the mirrored SSIDs kept suggested, newest first
+// mirrored SSID list in SharedPreferences, newest first
 final class Kept {
     static final int MAX = 16;
     private static final String PREFS = "mirror";

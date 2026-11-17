@@ -4,12 +4,12 @@ import android.content.Context;
 
 // compile-time stub for AudioPolicy
 public class AudioPolicy {
-    // forbid direct construction
+    // private constructor
     private AudioPolicy() {}
 
-    // report success without attaching the mixes
+    // return 0
     public int attachMixes(java.util.List<AudioMix> mixes) { return 0; }
-    // report success without detaching the mixes
+    // return 0
     public int detachMixes(java.util.List<AudioMix> mixes) { return 0; }
 
     public static class Builder {

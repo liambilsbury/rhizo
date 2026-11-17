@@ -91,12 +91,12 @@ POWER_HAL_PATH = "/vendor/bin/hw/rhizo-power-service"
 
 
 def _in_sandbox_ns(view, pid, namespaces):
-    """return true for a sandbox namespace pid"""
+    """return whether view.ns_ino(pid) is in namespaces"""
     return view.ns_ino(pid) in namespaces
 
 
 def _contain_restore_args(ct):
-    """return the restore arguments for a contained thread"""
+    """return ct.prior_policy, 0 and ct.prior_priority"""
     return ct.prior_policy, 0, ct.prior_priority
 
 
@@ -110,7 +110,7 @@ def _binder_pool_tgid(comm):
 
 
 def is_helper(comm, tgid_ns):
-    """return true for hwuiTask and binder pool comms"""
+    """return whether comm starts with hwuiTask or matches binder:<tgid_ns>_N"""
     return comm.startswith(HELPER_COMM_PREFIX) or _binder_pool_tgid(comm) == tgid_ns
 
 
@@ -197,7 +197,7 @@ def hard_grant(runtime_ns, period_ns, hard_period_ns=HARD_PERIOD_NS):
 
 
 def load_hard_period(environ=os.environ):
-    """read the hard period setting from the environment"""
+    """return the name and period for RHIZO_RTD_HARD_PERIOD, or None"""
     return {None: ("2ms", HARD_PERIOD_NS), "2ms": ("2ms", HARD_PERIOD_NS),
             "frame": ("frame", None)}.get(environ.get(HARD_PERIOD_ENV))
 
@@ -213,7 +213,7 @@ PERIOD_MAX_PATH = "/proc/sys/kernel/sched_deadline_period_max_us"
 
 
 def park_period_ns(path=PERIOD_MAX_PATH):
-    """return the longest deadline period in ns"""
+    """return sched_deadline_period_max_us x 1000"""
     with open(path, "rb", buffering=0) as f:
         return int(f.read().strip()) * 1000
 
@@ -224,11 +224,11 @@ def parked_bw_units(period_ns):
 
 
 def revoke_to_prior(tid, policy, nice, priority=0):
-    """restore a thread to its prior policy"""
+    """restore a thread to the prior policy, nice and priority"""
     try:
         period = park_period_ns()
     except (OSError, ValueError) as e:
-        log("tid=%d: cannot read %s (%s) -- refusing" % (tid, PERIOD_MAX_PATH, e))
+        log("tid=%d failed to read %s (%s)" % (tid, PERIOD_MAX_PATH, e))
         return False, getattr(e, "errno", 0) or 22
     ok, errno = sched_setattr(tid, SCHED_DEADLINE, flags=SCHED_FLAG_RESET_ON_FORK,
                               runtime=DL_RUNTIME_MIN_NS, deadline=period, period=period)
@@ -324,7 +324,7 @@ def next_held_shares(held, window_shares):
 
 
 def rate_limit_ok(last_apply_s, now_s, min_interval_s=REAPPLY_MIN_INTERVAL_S):
-    """return whether enough time has passed since the last apply"""
+    """return whether now_s - last_apply_s >= min_interval_s"""
     return (now_s - last_apply_s) >= min_interval_s
 
 
@@ -357,7 +357,7 @@ def parse_cpu_max(text):
     parts = text.split()
     if (len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) <= 0
             or not (parts[0] == "max" or parts[0].isdigit())):
-        raise ValueError("bad cpu.max line: %r" % text)
+        raise ValueError("failed to parse cpu.max line %r" % text)
     return (None if parts[0] == "max" else int(parts[0])), int(parts[1])
 
 
@@ -434,9 +434,9 @@ def contain_thread_runtime_ns(rate, period_ns, ceiling_ns, run_ns=None):
 def _nonneg_int(token, what):
     """parse a non-negative 64-bit integer"""
     if not token.isdigit():
-        raise ProtocolError("%s must be a non-negative integer, got %r" % (what, token))
+        raise ProtocolError("%s %r is not a non-negative integer" % (what, token))
     if len(token) > 19 or int(token) > INT64_MAX:
-        raise ProtocolError("%s must fit in 64 bits, got %d digits" % (what, len(token)))
+        raise ProtocolError("%s of %d digits exceeds INT64_MAX" % (what, len(token)))
     return int(token)
 
 
@@ -444,14 +444,14 @@ def _id_list(token, what):
     """parse a comma-separated list of non-negative integers"""
     pieces = token.split(",") if token else []
     if not pieces or any(p == "" for p in pieces):
-        raise ProtocolError("%s is empty or malformed: %r" % (what, token))
+        raise ProtocolError("%s %r is empty or has an empty element" % (what, token))
     return [_nonneg_int(p, what) for p in pieces]
 
 
 def _sid(token):
     """check and return a session id"""
     if not SID_RE.match(token):
-        raise ProtocolError("sid %r is empty or contains whitespace/':'" % token)
+        raise ProtocolError("sid %r does not match SID_RE" % token)
     return token
 
 
@@ -463,26 +463,26 @@ def parse_message(line):
     cmd = parts[0]
     if cmd == "open":
         if len(parts) != 6:
-            raise ProtocolError("open takes 5 arguments, got %d" % (len(parts) - 1))
+            raise ProtocolError("open has %d arguments, expected 5" % (len(parts) - 1))
         return {"cmd": "open", "sid": _sid(parts[1]), "tgid": _nonneg_int(parts[2], "tgid"),
                 "uid": _nonneg_int(parts[3], "uid"), "target_ns": _nonneg_int(parts[4], "target_ns"),
                 "tids": _id_list(parts[5], "tid list")}
     if cmd == "threads":
         if len(parts) != 3:
-            raise ProtocolError("threads takes 2 arguments, got %d" % (len(parts) - 1))
+            raise ProtocolError("threads has %d arguments, expected 2" % (len(parts) - 1))
         return {"cmd": "threads", "sid": _sid(parts[1]), "tids": _id_list(parts[2], "tid list")}
     if cmd == "target":
         if len(parts) != 3:
-            raise ProtocolError("target takes 2 arguments, got %d" % (len(parts) - 1))
+            raise ProtocolError("target has %d arguments, expected 2" % (len(parts) - 1))
         return {"cmd": "target", "sid": _sid(parts[1]), "target_ns": _nonneg_int(parts[2], "target_ns")}
     if cmd == "actual":
         if len(parts) != 3:
-            raise ProtocolError("actual takes 2 arguments, got %d" % (len(parts) - 1))
+            raise ProtocolError("actual has %d arguments, expected 2" % (len(parts) - 1))
         return {"cmd": "actual", "sid": _sid(parts[1]),
                 "durations_ns": _id_list(parts[2], "actual duration list")}
     if cmd in ("pause", "resume", "close"):
         if len(parts) != 2:
-            raise ProtocolError("%s takes 1 argument, got %d" % (cmd, len(parts) - 1))
+            raise ProtocolError("%s has %d arguments, expected 1" % (cmd, len(parts) - 1))
         return {"cmd": cmd, "sid": _sid(parts[1])}
     raise ProtocolError("unknown command %r" % cmd)
 
@@ -730,11 +730,11 @@ def translate_tid(view, ns_ino, host_tgid, tid_ns, uid):
         return None, "no host thread maps sandbox tid %d in this peer's namespace" % tid_ns
     owner_tgid = view.tgid_of(candidate)
     if owner_tgid != host_tgid:
-        return None, ("tid %d belongs to host tgid %s, not the hint session's host tgid %s"
+        return None, ("tid %d tgid=%s is not session host tgid %s"
                        % (tid_ns, owner_tgid, host_tgid))
     real_uid = view.real_uid(candidate)
     if real_uid != uid:
-        return None, "tid %d real uid=%s, session uid=%d" % (tid_ns, real_uid, uid)
+        return None, "tid %d real uid=%s is not session uid %d" % (tid_ns, real_uid, uid)
     return candidate, None
 
 
@@ -770,7 +770,7 @@ def write_cgroup_file(path, text):
 
 
 def write_status_atomic(path, status):
-    """write the status file through a temp file"""
+    """write status as JSON to path.tmp.<pid> and replace path"""
     tmp = "%s.tmp.%d" % (path, os.getpid())
     with open(tmp, "w") as f:
         json.dump(status, f)
@@ -797,12 +797,12 @@ class RefusalLog:
     """log of refusal and cap lines"""
 
     def __init__(self, maxlen=REFUSALS_MAX):
-        """keep the last lines in a bounded queue"""
+        """create a deque of at most maxlen lines"""
         self._d = collections.deque(maxlen=maxlen)
         self._last = {}
 
     def record(self, line, key=None):
-        """append a line to the refusal log"""
+        """append a line to the refusal log unless the line equals the last line for key"""
         if self._last.get(key) == line:
             return
         self._last[key] = line
@@ -841,7 +841,7 @@ class Thread:
         self.prior = prior
 
     def to_status(self, grant):
-        """return the status entry of a thread with its grant"""
+        """return the status entry of a thread and grant"""
         return {"ns_tid": self.ns_tid, "comm": self.comm,
                 "policy": "deadline" if grant else self.policy,
                 "runtime_ns": grant[0] if grant else 0, "prior": self.prior}
@@ -903,7 +903,7 @@ class Session:
         self.helpers_scanned = None
 
     def idle(self, now):
-        """return whether the session is idle"""
+        """return whether last_actual is None or older than IDLE_RELEASE_S"""
         return self.last_actual is None or now - self.last_actual > IDLE_RELEASE_S
 
     def grant_period_ns(self):
@@ -911,12 +911,12 @@ class Session:
         return frame_period_ns(self.frame_interval, self.period_ns)
 
     def forget_thread(self, tid):
-        """forget a thread's frame and schedstat samples"""
+        """delete tid from frame_cpu and report_schedstat"""
         self.frame_cpu.pop(tid, None)
         self.report_schedstat.pop(tid, None)
 
     def thread_status(self, tid, th, grants):
-        """return the status entry of a thread with its frame CPU time"""
+        """return the status entry of a thread with frame_cpu_ns"""
         out = th.to_status(grants.get(tid))
         out["frame_cpu_ns"] = frame_cpu_ns(self.frame_cpu.get(tid))
         return out
@@ -947,7 +947,7 @@ class Connection:
 
 
 class Tenant:
-    """sandbox pid namespace with its cgroup"""
+    """sandbox pid namespace and cgroup"""
     __slots__ = ("key", "ns_ino", "cgroup")
 
     def __init__(self, ns_ino, cgroup):
@@ -970,7 +970,7 @@ class CarveState:
 
 
 class CarveBook:
-    """Carve-out of tenant cpu.max quotas"""
+    """carve-out of tenant cpu.max quotas"""
 
     def __init__(self, cgroup_fs, record_path, log_fn=log):
         """set the carve book fields"""
@@ -1001,10 +1001,10 @@ class CarveBook:
         try:
             write_status_atomic(self.record_path, record)
         except OSError as exc:
-            self.log("could not write %s: %s" % (self.record_path, exc))
+            self.log("failed to write %s (%s)" % (self.record_path, exc))
 
     def set_grants(self, records):
-        """record the held grants"""
+        """set grant_records to records and call _persist when records differ"""
         if records != self.grant_records:
             self.grant_records = records
             self._persist()
@@ -1014,7 +1014,7 @@ class CarveBook:
         st = self.states.setdefault(key, CarveState())
         live, error = self._read(key)
         if error is not None and error != st.read_error:
-            self.log("carve: tenant=%s cannot read cpu.max: %s" % (key, error))
+            self.log("carve: tenant=%s failed to read cpu.max (%s)" % (key, error))
         st.read_error = error
         if live is None:
             changed = st.written is not None
@@ -1023,7 +1023,7 @@ class CarveBook:
                 self._persist()
             return st
         if st.written is not None and live != st.written:
-            self.log("carve: tenant=%s live cpu.max=%s is not what was written (%s), adopting it as configured"
+            self.log("carve: tenant=%s live=%s written=%s configured=live"
                      % (key, format_cpu_max(live), format_cpu_max(st.written)))
             st.written, st.carve_bw = None, 0.0
             self._persist()
@@ -1042,7 +1042,7 @@ class CarveBook:
         return tenant_weight(st.configured if st is not None else None, cpus)
 
     def _max_carve(self, st):
-        """return the largest bandwidth that may be carved from a cgroup"""
+        """return TENANT_JOINT_CAP x the configured weight of a cgroup"""
         return TENANT_JOINT_CAP * tenant_weight(st.configured, 0)
 
     def _write(self, key, st, target_bw, reserved_bw, now):
@@ -1052,7 +1052,7 @@ class CarveBook:
         try:
             write_cgroup_file(self._path(key), format_cpu_max(new))
         except OSError as exc:
-            self.log("carve: tenant=%s cannot write cpu.max=%s: %s" % (key, format_cpu_max(new), exc))
+            self.log("carve: tenant=%s failed to write cpu.max=%s (%s)" % (key, format_cpu_max(new), exc))
             return False
         if target_bw < st.carve_bw:
             st.last_raise = now
@@ -1097,11 +1097,11 @@ class CarveBook:
         wrote = False
         live, error = self._read(key)
         if live is None and error is None:
-            self.log("carve-restore: tenant=%s cgroup is gone" % key)
+            self.log("carve-restore: tenant=%s cpu.max not found" % key)
         elif live is None:
-            self.log("carve-restore: tenant=%s cannot read cpu.max: %s" % (key, error))
+            self.log("carve-restore: tenant=%s failed to read cpu.max (%s)" % (key, error))
         elif live != st.written:
-            self.log("carve-restore: tenant=%s left alone, live cpu.max=%s is not what was written (%s)"
+            self.log("carve-restore: tenant=%s skipped live=%s written=%s"
                      % (key, format_cpu_max(live), format_cpu_max(st.written)))
         else:
             try:
@@ -1109,19 +1109,19 @@ class CarveBook:
                 wrote = True
                 self.log("carve-restore: tenant=%s cpu.max=%s" % (key, format_cpu_max(st.configured)))
             except OSError as exc:
-                self.log("carve-restore: tenant=%s cannot write cpu.max=%s: %s"
+                self.log("carve-restore: tenant=%s failed to write cpu.max=%s (%s)"
                          % (key, format_cpu_max(st.configured), exc))
         st.written, st.carve_bw = None, 0.0
         self._persist()
         return wrote
 
     def release(self, key):
-        """restore a cgroup's cpu.max and forget its state"""
+        """restore a cgroup's cpu.max and delete the cgroup's carve state"""
         self.restore(key)
         self.states.pop(key, None)
 
     def restore_all(self):
-        """restore the cpu.max of every cgroup"""
+        """restore the cpu.max of each carved cgroup"""
         for key in list(self.states):
             self.restore(key)
 
@@ -1133,7 +1133,7 @@ class CarveBook:
         except FileNotFoundError:
             return
         except (OSError, ValueError) as exc:
-            self.log("carve: cannot read %s: %s" % (self.record_path, exc))
+            self.log("carve: failed to read %s (%s)" % (self.record_path, exc))
             return
         carve_rec, grants = (record.get("carve", {}), record.get("grants", [])) if (
             "carve" in record or "grants" in record) else (record, [])
@@ -1145,7 +1145,7 @@ class CarveBook:
             try:
                 written, configured = parse_cpu_max(rec["written"]), parse_cpu_max(rec["configured"])
             except (KeyError, TypeError, ValueError) as exc:
-                self.log("carve: record for tenant=%s is unreadable: %r (%s)" % (key, rec, exc))
+                self.log("carve: failed to parse record tenant=%s %r (%s)" % (key, rec, exc))
                 continue
             st = CarveState()
             st.configured, st.written = configured, written
@@ -1158,11 +1158,11 @@ class CarveBook:
         self.grant_records = []
         self._persist()
         if grants or carve_rec:
-            self.log("recover: revoked=%d skipped=%d restored=%d" % (revoked, skipped, restored))
+            self.log("recover revoked=%d skipped=%d restored=%d" % (revoked, skipped, restored))
 
 
 def sd_notify_ready():
-    """send READY=1 to systemd"""
+    """sendto READY=1 on NOTIFY_SOCKET"""
     path = os.environ.get("NOTIFY_SOCKET")
     if not path:
         return
@@ -1171,7 +1171,7 @@ def sd_notify_ready():
     try:
         s.sendto(b"READY=1", addr)
     except OSError as exc:
-        log("could not tell systemd it is ready: %s" % exc)
+        log("sendto NOTIFY_SOCKET failed (%s)" % exc)
     finally:
         s.close()
 
@@ -1277,7 +1277,7 @@ class Daemon:
         """return why a namespace-mode peer is not the power HAL, or None"""
         ino = self.view.ns_ino(pid)
         if ino is None:
-            return "its-pid-namespace-unreadable"
+            return "pid-namespace-unreadable"
         if ino == self.view.ns_ino(os.getpid()):
             return "not-in-a-sandbox-pid-namespace"
         init = None
@@ -1286,7 +1286,7 @@ class Daemon:
                 init = cand
                 break
         if init is None:
-            return "its-pid-namespace-has-no-sandbox-init"
+            return "pid-namespace-has-no-sandbox-init"
         if uid != AID_SYSTEM:
             return "uid-%d-not-%d" % (uid, AID_SYSTEM)
         want = self.view.root_file_id(init, POWER_HAL_PATH)
@@ -1295,18 +1295,18 @@ class Daemon:
         return None
 
     def _resolve_tenant(self, ino, pid1):
-        """find the tenant of a namespace from its pid 1 cgroup"""
+        """find the tenant of a namespace from the pid 1 cgroup"""
         if pid1 is None:
-            why = "no pid 1 found in its namespace"
+            why = "no pid 1 in the pid namespace"
         else:
             line = self.view.cgroup_path(pid1)
             cgroup = ceiling_cgroup(line) if line else None
             if cgroup is not None:
                 return Tenant(ino, cgroup)
-            why = "pid 1 (host pid %d) has cgroup %r" % (pid1, line)
+            why = "pid 1 host_pid=%d cgroup=%r" % (pid1, line)
         if ino not in self._warned_tenants:
             self._warned_tenants.add(ino)
-            log("tenant ns=%s has no ceiling cgroup (%s): no cpu.max carve-out, its weight is every cpu" % (ino, why))
+            log("tenant ns=%s has no ceiling cgroup (%s)" % (ino, why))
         return Tenant(ino, None)
 
     def refresh_tenants(self):
@@ -1362,7 +1362,7 @@ class Daemon:
         return out
 
     def _sample_demand(self, requested, slices):
-        """record each tenant's requested bandwidth sample"""
+        """append each tenant's planned bandwidth and slice to demand"""
         for key, (budgets, _contain) in slices.items():
             self.demand.setdefault(key, []).append((requested.get(key, 0.0), budgets))
 
@@ -1391,11 +1391,11 @@ class Daemon:
                     % (key, last["p50"], last["p95"], last["max"], plans[-1][1], self.demand_over[key]))
 
     def _reclaim_for(self, key):
-        """return whether a tenant has not had reclaim revoked"""
+        """return whether key is not in reclaim_revoked"""
         return key not in self.reclaim_revoked
 
     def _for_tenant(self, desired, key):
-        """return the plan adjusted for RECLAIM"""
+        """return desired, or hard_grant of each entry when key is in reclaim_revoked"""
         if self._reclaim_for(key):
             return desired
         return {tid: hard_grant(rt, period, self.hard_period_ns) for tid, (rt, period) in desired.items()}
@@ -1442,7 +1442,7 @@ class Daemon:
                 continue
             ok, errno = grant_deadline(tid, rt, period, reclaim=False)
             if not ok:
-                log("tid=%d: regrant without reclaim failed, errno=%d runtime=%d period=%d" % (tid, errno, rt, period))
+                log("tid=%d grant_deadline(reclaim=False) failed with errno=%d runtime=%d period=%d" % (tid, errno, rt, period))
                 failed.add(tid)
             elif tid in self.grants:
                 self.grants[tid] = (rt, period, self.grants[tid][2])
@@ -1451,13 +1451,13 @@ class Daemon:
         self.reclaim_retry[key] = failed
 
     def _dl_start(self, tid):
-        """store the thread's CPU time sample"""
+        """store schedstat_sum_exec(tid) in dl_sample"""
         v = self.view.schedstat_sum_exec(tid)
         if v is not None:
             self.dl_sample[tid] = v
 
     def _dl_account(self, tid):
-        """add the CPU time a thread used since its sample to its tenant"""
+        """add the schedstat growth of a thread since dl_sample to the tenant's dl_cpu_ns"""
         prev, v = self.dl_sample.get(tid), self.view.schedstat_sum_exec(tid)
         if prev is None or v is None:
             return
@@ -1466,12 +1466,12 @@ class Daemon:
         self.dl_sample[tid] = v
 
     def _dl_stop(self, tid):
-        """account a thread's CPU time and drop its sample"""
+        """call _dl_account and delete the dl_sample of a thread"""
         self._dl_account(tid)
         self.dl_sample.pop(tid, None)
 
     def _grant_records(self, ahead=()):
-        """return a record per held grant"""
+        """return a record per grant in grants and contain_grants"""
         out = []
         for tid, (_rt, _period, prior) in sorted(self.grants.items()):
             ident = self.identity.get(tid)
@@ -1486,11 +1486,11 @@ class Daemon:
         return out + list(ahead)
 
     def _sync_record(self):
-        """save the grant records into the carve book"""
+        """call carve.set_grants with _grant_records()"""
         self.carve.set_grants(self._grant_records())
 
     def _record_ahead(self, rec):
-        """record rec with the held grants"""
+        """call carve.set_grants with _grant_records() and rec"""
         self.carve.set_grants(self._grant_records([rec]))
 
     def _recover_grants(self, records):
@@ -1505,47 +1505,47 @@ class Daemon:
                 else:
                     policy, nice, priority = int(rec["policy"]), 0, int(rec["priority"])
             except (KeyError, TypeError, ValueError, AttributeError) as exc:
-                log("recover: unreadable grant record %r (%s)" % (rec, exc))
+                log("failed to parse grant record %r (%s)" % (rec, exc))
                 skipped += 1
                 continue
             have = (self.view.tgid_of(tid), self.view.real_uid(tid), self.view.start_time(tid))
             if have != ident:
-                log("recover: tid=%d is gone or reused (recorded %r, now %r), skipped" % (tid, ident, have))
+                log("recover skipped tid=%d identity=%r live=%r" % (tid, ident, have))
                 skipped += 1
                 continue
             probe = self.view.sched_probe(tid)
             if probe is None or probe[0] != SCHED_DEADLINE:
-                log("recover: tid=%d is no longer SCHED_DEADLINE (probe %r), skipped" % (tid, probe))
+                log("recover skipped tid=%d sched_probe=%r" % (tid, probe))
                 skipped += 1
                 continue
             ok, errno = revoke_to_prior(tid, policy, nice, priority)
             if not ok:
-                log("recover: tid=%d revoke failed, errno=%d" % (tid, errno))
+                log("recover tid=%d revoke_to_prior failed with errno=%d" % (tid, errno))
                 skipped += 1
                 continue
-            log("recover: revoke tid=%d -> policy %d nice %d priority %d" % (tid, policy, nice, priority))
+            log("recover revoke tid=%d -> policy %d nice %d priority %d" % (tid, policy, nice, priority))
             revoked += 1
         return revoked, skipped
 
     def _carve_ahead(self, tenant, desired, held, now):
-        """lower the tenant's quota for a grant batch"""
+        """call carve.ensure with the tenant bandwidth at the batch peak"""
         peak = sum(max(held.get(tid, 0.0), bandwidth(*d)) for tid, d in desired.items())
         others = self.reserved_bw(tenant) - sum(held.get(tid, 0.0) for tid in desired)
         self.carve.ensure(tenant, others + peak, now)
 
     def _reserve_self(self):
-        """request the SCHED_DEADLINE reservation for rhizo-rtd"""
+        """call reserve_self for the rhizo-rtd pid"""
         if not self.self_reserve:
             return
         ok, errno = reserve_self(os.getpid())
         if ok:
             self.self_reservation = {"runtime_ns": SELF_RESERVE_RUNTIME_NS,
                                       "period_ns": SELF_RESERVE_PERIOD_NS, "granted": True}
-            log("self-reserve: runtime=%d period=%d granted" % (SELF_RESERVE_RUNTIME_NS, SELF_RESERVE_PERIOD_NS))
+            log("self-reserve runtime=%d period=%d granted" % (SELF_RESERVE_RUNTIME_NS, SELF_RESERVE_PERIOD_NS))
         else:
             self.self_reservation = {"runtime_ns": SELF_RESERVE_RUNTIME_NS,
                                       "period_ns": SELF_RESERVE_PERIOD_NS, "granted": False, "errno": errno}
-            log("self-reserve FAILED: runtime=%d period=%d errno=%d (%s) -- rhizo-rtd keeps running SCHED_OTHER"
+            log("self-reserve failed runtime=%d period=%d errno=%d (%s)"
                 % (SELF_RESERVE_RUNTIME_NS, SELF_RESERVE_PERIOD_NS, errno, os.strerror(errno)))
 
     def write_status(self):
@@ -1572,7 +1572,7 @@ class Daemon:
         try:
             write_status_atomic(self.status_path, status)
         except OSError as exc:
-            log("could not write %s: %s" % (self.status_path, exc))
+            log("failed to write %s (%s)" % (self.status_path, exc))
         self._status_at, self._status_grants = self.clock(), self._grant_signature()
 
     def _grant_signature(self):
@@ -1581,22 +1581,22 @@ class Daemon:
                 sorted(self.contain_grants.items()))
 
     def _write_status_when_due(self):
-        """write the status file when due"""
+        """call write_status after a grant change or STATUS_WRITE_INTERVAL_S"""
         if (self._status_at is None or self._grant_signature() != self._status_grants
                 or self.clock() - self._status_at >= STATUS_WRITE_INTERVAL_S):
             self.write_status()
 
     def accept(self, listener):
-        """accept a connection and check its peer"""
+        """call accept and check the peer of the connection"""
         try:
             conn, _ = listener.accept()
         except OSError as exc:
-            log("accept failed: %s" % exc)
+            log("accept failed (%s)" % exc)
             return
         try:
             pid, uid, _gid = so_peercred(conn)
         except OSError as exc:
-            log("could not read SO_PEERCRED on a new connection: %s" % exc)
+            log("getsockopt SO_PEERCRED failed (%s)" % exc)
             conn.close()
             return
         ctx = read_proc_attr_current(pid)
@@ -1608,7 +1608,7 @@ class Daemon:
         try:
             ns_ino = os.stat("/proc/%d/ns/pid" % pid).st_ino
         except OSError as exc:
-            log("refused peer pid=%d: cannot stat its pid namespace: %s" % (pid, exc))
+            log("refused peer pid=%d failed to stat /proc/<pid>/ns/pid (%s)" % (pid, exc))
             conn.close()
             return
         conn_id = self._next_conn_id
@@ -1628,7 +1628,7 @@ class Daemon:
         except BlockingIOError:
             return False
         except OSError as exc:
-            log("conn=%d: read error, closing: %s" % (c.conn_id, exc))
+            log("conn=%d recv failed (%s)" % (c.conn_id, exc))
             self.drop_connection(c)
             return False
         if not data:
@@ -1636,24 +1636,24 @@ class Daemon:
             self.drop_connection(c)
             return False
         if len(data) > MAX_PACKET:
-            log("conn=%d: oversized message (%d bytes), closing" % (c.conn_id, len(data)))
+            log("conn=%d message of %d bytes exceeds MAX_PACKET" % (c.conn_id, len(data)))
             self.drop_connection(c)
             return False
         try:
             line = data.decode("ascii")
         except UnicodeDecodeError as exc:
-            log("conn=%d: message is not ASCII, dropped: %s" % (c.conn_id, exc))
+            log("conn=%d failed to decode the message as ASCII (%s)" % (c.conn_id, exc))
             return True
         try:
             msg = parse_message(line)
         except ProtocolError as exc:
-            log("conn=%d: %s" % (c.conn_id, exc))
+            log("conn=%d %s" % (c.conn_id, exc))
             return True
         self.dispatch(c, msg)
         return True
 
     def drop_connection(self, c):
-        """drop a connection and its sessions"""
+        """drop a connection and the connection's sessions"""
         c.sessions.clear()
         try:
             self.sel.unregister(c.sock)
@@ -1706,7 +1706,7 @@ class Daemon:
             probe = self.view.sched_probe(host_tid)
             if probe is None:
                 refuse_tid(self.refusals, tid_ns, self._status_key(c, s.sid),
-                           "cannot read its current scheduling policy")
+                           "sched_getattr failed")
                 continue
             policy, nice, _priority = probe
             if not thread_is_eligible(policy):
@@ -1718,12 +1718,12 @@ class Daemon:
         """open a session for a connection"""
         sid = msg["sid"]
         if sid in c.sessions:
-            log("conn=%d: open re-uses sid=%s, replacing the old session" % (c.conn_id, sid))
+            log("conn=%d open re-uses sid=%s" % (c.conn_id, sid))
             del c.sessions[sid]
         host_tgid = translate_tgid(self.view, c.ns_ino, msg["tgid"])
         if host_tgid is None:
             refuse_tid(self.refusals, msg["tgid"], self._status_key(c, sid),
-                       "sandbox tgid not found in this peer's pid namespace")
+                       "translate_tgid returned None")
             self.tick()
             return
         leader_uid = self.view.real_uid(host_tgid)
@@ -1762,7 +1762,7 @@ class Daemon:
         self.tick()
 
     def handle_actual(self, c, msg):
-        """record a session's reported frame durations"""
+        """record the frame durations of an actual message"""
         s = c.sessions.get(msg["sid"])
         if s is None:
             return
@@ -1836,7 +1836,7 @@ class Daemon:
         return None, None
 
     def _same_thread(self, host_tid):
-        """compare the tid's identity with its record"""
+        """compare the live identity of a tid with identity[tid]"""
         want = self.identity.get(host_tid)
         have = (self.view.tgid_of(host_tid), self.view.real_uid(host_tid), self.view.start_time(host_tid))
         return want is not None and have == want
@@ -1872,7 +1872,7 @@ class Daemon:
         held = bandwidth(*self.grants[host_tid][:2]) if host_tid in self.grants else 0.0
         need = self.reserved_bw(tenant) - held + bandwidth(runtime_ns, period_ns)
         if not self.carve.ensure(tenant, need, self.clock()):
-            refuse_tid(self.refusals, who, "-", "cpu.max carve-out for tenant %s failed, runtime=%r period=%r not granted"
+            refuse_tid(self.refusals, who, "-", "carve.ensure failed for tenant %s runtime=%r period=%r"
                        % (tenant, runtime_ns, period_ns))
             return
         if host_tid not in self.grants:
@@ -1881,7 +1881,7 @@ class Daemon:
         ok, errno = grant_deadline(host_tid, runtime_ns, period_ns, reclaim=self._reclaim_for(tenant))
         if not ok:
             refuse_tid(self.refusals, who, "-",
-                       "sched_setattr grant failed, errno=%d runtime=%r period=%r"
+                       "grant_deadline failed with errno=%d runtime=%r period=%r"
                        % (errno, runtime_ns, period_ns))
             return
         log("%s tid=%d runtime=%d period=%d"
@@ -1900,7 +1900,7 @@ class Daemon:
         name, nice = prior.split(":")
         ok, errno = revoke_to_prior(host_tid, _POLICY_FOR_NAME.get(name, SCHED_OTHER), int(nice))
         if not ok:
-            log("tid=%d: revoke failed, errno=%d" % (host_tid, errno))
+            log("tid=%d revoke_to_prior failed with errno=%d" % (host_tid, errno))
             return
         self._dl_stop(host_tid)
         del self.grants[host_tid]
@@ -1977,7 +1977,7 @@ class Daemon:
             if got is None:
                 if not ct.unreadable:
                     ct.unreadable = True
-                    log("contain tid=%d: /proc/%d/schedstat is unreadable, the thread is left as it is" % (tid, tid))
+                    log("contain tid=%d failed to read /proc/%d/schedstat" % (tid, tid))
                 continue
             ct.unreadable = False
             v, pc = got
@@ -2031,8 +2031,7 @@ class Daemon:
         held = bandwidth(*self.contain_grants[host_tid]) if host_tid in self.contain_grants else 0.0
         need = self.reserved_bw(tenant) - held + bandwidth(runtime_ns, period_ns)
         if not self.carve.ensure(tenant, need, self.clock()):
-            refuse_tid(self.refusals, host_tid, "contain", "cpu.max carve-out for tenant %s failed, runtime=%r period=%r "
-                       "not granted" % (tenant, runtime_ns, period_ns))
+            refuse_tid(self.refusals, host_tid, "contain", "carve.ensure failed for tenant %s runtime=%r period=%r" % (tenant, runtime_ns, period_ns))
             return
         ct = self.contained.get(host_tid)
         if host_tid not in self.contain_grants and ct is not None:
@@ -2041,7 +2040,7 @@ class Daemon:
         ok, errno = grant_deadline(host_tid, runtime_ns, period_ns, reclaim=self._reclaim_for(tenant))
         if not ok:
             refuse_tid(self.refusals, host_tid, "contain",
-                       "sched_setattr grant failed, errno=%d runtime=%r period=%r"
+                       "grant_deadline failed with errno=%d runtime=%r period=%r"
                        % (errno, runtime_ns, period_ns))
             return
         if host_tid not in self.contain_grants:
@@ -2061,7 +2060,7 @@ class Daemon:
         policy, nice, priority = _contain_restore_args(ct)
         ok, errno = revoke_to_prior(host_tid, policy, nice, priority)
         if not ok:
-            log("contain tid=%d: revoke failed, errno=%d" % (host_tid, errno))
+            log("contain tid=%d revoke_to_prior failed with errno=%d" % (host_tid, errno))
             return
         self._dl_stop(host_tid)
         del self.contain_grants[host_tid]
@@ -2088,7 +2087,7 @@ class Daemon:
             self._grant_contain(tid, *todo[tid])
 
     def _update_window(self, s, now):
-        """update the session's held thread shares"""
+        """update s.held from the session's thread shares"""
         if s.window_start is not None and now - s.window_start < SHARE_WINDOW_S:
             return
         vals = {}
@@ -2108,7 +2107,7 @@ class Daemon:
             s.window_start, s.prev_schedstat = now, vals
 
     def _held_render_threads(self, s):
-        """return the held threads of a session named RenderThread"""
+        """return the threads in s.held whose comm is RenderThread"""
         return frozenset(tid for tid in s.held if tid in s.threads and s.threads[tid].comm == "RenderThread")
 
     def _refresh_helpers(self, s, now):
@@ -2221,7 +2220,7 @@ class Daemon:
             for tid in list(pool):
                 probe = self.view.sched_probe(tid)
                 if probe is not None and probe[0] != SCHED_DEADLINE:
-                    log("tid(host)=%d left SCHED_DEADLINE outside the daemon (policy %d now)"
+                    log("tid(host)=%d sched_policy=%d is not SCHED_DEADLINE"
                         % (tid, probe[0]))
                     del pool[tid]
         for c in list(self.connections.values()):
@@ -2242,7 +2241,7 @@ class Daemon:
                         self.grants.pop(tid, None)
                 if exited and not s.threads:
                     del c.sessions[sid]
-                    log("session %s:%s dropped: every thread exited" % (c.conn_id, sid))
+                    log("session %s:%s dropped with no live thread" % (c.conn_id, sid))
         if self.contain_enabled or self.connections:
             self.refresh_tenants()
         self._check_overruns(now)
@@ -2293,13 +2292,13 @@ class Daemon:
         listener.listen(16)
         listener.setblocking(False)
         self.sel.register(listener, selectors.EVENT_READ, None)
-        log("listening on %s (cap=%d%% of %d cpus -> %.3f)"
+        log("listening on %s cap_percent=%d cpus=%d cap_bw=%.3f"
             % (self.socket_path, self.cap_percent, self.cpus, self.cap_bw))
         period = park_period_ns()
         units = parked_bw_units(period)
-        log("revoke parks at runtime=%d period=%d: %d bandwidth units per revoke%s"
+        log("revoke_to_prior parks at runtime=%d period=%d parked_bw_units=%d%s"
             % (DL_RUNTIME_MIN_NS, period, units,
-               "" if units == 0 else " -- sched_deadline_period_max_us is too short"))
+               "" if units == 0 else " sched_deadline_period_max_us<=1073741"))
         self._reserve_self()
         self.write_status()
         sd_notify_ready()
@@ -2310,10 +2309,10 @@ class Daemon:
             self._sync_record()
             self.carve.restore_all()
             self.write_status()
-            log("stopped: every grant revoked")
+            log("stopped")
 
     def revoke_everything(self):
-        """revoke all grants"""
+        """revoke grants and contain_grants and restore the contained threads"""
         for tid in list(self.grants):
             self._revoke(tid)
         done = set()
@@ -2337,14 +2336,14 @@ class Daemon:
             return
         ok, errno = set_rt_policy(tid, ct.prior_policy, ct.prior_priority)
         if not ok:
-            log("contain tid=%d: restoring %s:%d failed, errno=%d"
+            log("contain tid=%d set_rt_policy %s:%d failed with errno=%d"
                 % (tid, _RT_POLICY_NAME.get(ct.prior_policy, "?"), ct.prior_priority, errno))
             return
-        log("contain-restore tid=%d -> %s:%d (never granted)"
+        log("contain-restore tid=%d -> %s:%d"
             % (tid, _RT_POLICY_NAME.get(ct.prior_policy, "?"), ct.prior_priority))
 
     def _wake(self, listener, events):
-        """handle a select's events"""
+        """call accept, on_readable, sweep and tick for selector events"""
         self._tick_needed = True
         swept = False
         ready = []
@@ -2396,7 +2395,7 @@ def load_cap_percent(log_fn=log):
     policy = rc.policy_or_deny(log=log_fn)
     percent = policy.scope("rt.budget_percent")
     if not isinstance(percent, int) or not 1 <= percent <= 90:
-        log_fn("rt.budget_percent=%r is outside 1..90 -- refusing to start" % (percent,))
+        log_fn("rt.budget_percent=%r is outside 1..90" % (percent,))
         sys.exit(1)
     return percent
 
@@ -2418,19 +2417,19 @@ def load_contain_config(log_fn=log):
     runtime_us = policy.scope("rt.contain_runtime_us")
     period_us = policy.scope("rt.contain_period_us")
     if not isinstance(percent, int) or not 1 <= percent <= 50:
-        log_fn("rt.contain_percent=%r is outside 1..50 -- refusing to start" % (percent,))
+        log_fn("rt.contain_percent=%r is outside 1..50" % (percent,))
         sys.exit(1)
     if not isinstance(runtime_us, int) or not 100 <= runtime_us <= 10000:
-        log_fn("rt.contain_runtime_us=%r is outside 100..10000 -- refusing to start" % (runtime_us,))
+        log_fn("rt.contain_runtime_us=%r is outside 100..10000" % (runtime_us,))
         sys.exit(1)
     if not isinstance(period_us, int) or not 1000 <= period_us <= 1000000:
-        log_fn("rt.contain_period_us=%r is outside 1000..1000000 -- refusing to start" % (period_us,))
+        log_fn("rt.contain_period_us=%r is outside 1000..1000000" % (period_us,))
         sys.exit(1)
     return True, percent, runtime_us * 1000, period_us * 1000
 
 
 def _case(cases, name, ok, detail=""):
-    """append a named selftest result"""
+    """append a selftest result tuple"""
     cases.append((name, ok, detail))
 
 
@@ -2443,44 +2442,44 @@ def _selftest_cap_math(cases):
     """test the cap bandwidth math"""
     _case(cases, "cap_bandwidth(25, 8) == 2.0", cap_bandwidth(25, 8) == 2.0)
     _case(cases, "bandwidth(500000, 1000000) == 0.5", bandwidth(500_000, 1_000_000) == 0.5)
-    _case(cases, "bandwidth(x, 0) == 0.0 (no period)", bandwidth(1, 0) == 0.0)
+    _case(cases, "bandwidth(1, 0) == 0.0", bandwidth(1, 0) == 0.0)
 
     granted, req, grant, capped = plan_grants([(1_000_000, {1: 1_000_000})], 2.0)
-    _case(cases, "a request well under the cap is granted unscaled, not flagged capped",
+    _case(cases, "plan_grants([(1ms, {1: 1ms})], 2.0) == ({1: (1ms, 1ms)}, 1.0, 1.0, False)",
           granted == {1: (1_000_000, 1_000_000)} and req == 1.0 and grant == 1.0 and capped is False,
           "got %r %r %r %r" % (granted, req, grant, capped))
 
     granted, req, grant, capped = plan_grants([(1_000_000, {1: 1_000_000, 2: 1_000_000})], 1.0)
-    _case(cases, "an over-cap request is scaled down to fit, and flagged capped",
+    _case(cases, "plan_grants([(1ms, {1: 1ms, 2: 1ms})], 1.0) == {1: (0.5ms, 1ms), 2: (0.5ms, 1ms)} and capped is True",
           granted == {1: (500_000, 1_000_000), 2: (500_000, 1_000_000)} and capped is True,
           "got %r capped=%r" % (granted, capped))
 
     granted, req, grant, capped = plan_grants([(1_000_000, {1: 1_000_000})], 0.1)
-    _case(cases, "a thread scaled under 200us by the cap is dropped",
+    _case(cases, "plan_grants([(1ms, {1: 1ms})], 0.1) == {} and capped is True",
           granted == {} and grant == 0.0 and capped is True, "got %r" % (granted,))
 
     granted, req, grant, capped = plan_grants([(1_000_000, {1: 1_000_000})], 0.2)
-    _case(cases, "a scale that lands exactly on the 200us floor is kept",
+    _case(cases, "plan_grants([(1ms, {1: 1ms})], 0.2) == {1: (200us, 1ms)}",
           granted == {1: (200_000, 1_000_000)}, "got %r" % (granted,))
 
     granted, req, grant, capped = plan_grants([(10_000_000, {1: 1_000_000}), (10_000_000, {1: 3_000_000})], 4.0)
-    _case(cases, "a thread two sessions name takes the larger request, counted once",
+    _case(cases, "plan_grants([(10ms, {1: 1ms}), (10ms, {1: 3ms})], 4.0) == {1: (3ms, 10ms)} and requested_bw == 0.3",
           granted == {1: (3_000_000, 10_000_000)} and abs(req - 0.3) < 1e-9, "got %r req=%r" % (granted, req))
 
     light = {tid: 2_000_000 for tid in range(1, 20)}
     granted, req, grant, capped = plan_grants([(16_667_000, light), (16_667_000, {100: 15_000_000, 101: 15_000_000})], 0.4)
-    _case(cases, "heavy requests cannot push every light one under the 200us floor at once",
+    _case(cases, "plan_grants(19 x 2ms and 2 x 15ms at 16.667ms, 0.4) grants all 21 tids at >= MIN_THREAD_RUNTIME_NS within 0.4",
           set(granted) == set(light) | {100, 101} and capped is True and grant <= 0.4 + 1e-9
           and all(granted[t][0] >= MIN_THREAD_RUNTIME_NS for t in granted),
           "got %r grant=%r" % (sorted(granted.items()), grant))
 
     granted, req, grant, capped = plan_grants([(1_000_000, {1: 1_000_000, 2: 300_000})], 0.6)
-    _case(cases, "over the cap, each thread keeps the floor and the rest is split by what it asked above it",
+    _case(cases, "plan_grants([(1ms, {1: 1ms, 2: 300us})], 0.6) == {1: (377777, 1ms), 2: (222222, 1ms)}",
           granted == {1: (377_777, 1_000_000), 2: (222_222, 1_000_000)} and grant <= 0.6 + 1e-9,
           "got %r grant=%r" % (granted, grant))
 
     granted, req, grant, capped = plan_grants([(1_000_000, {1: 1_000_000, 2: 1_000_000, 3: 1_000_000})], 0.5)
-    _case(cases, "when the floors alone pass the cap, as many floors as fit are kept",
+    _case(cases, "plan_grants([(1ms, {1: 1ms, 2: 1ms, 3: 1ms})], 0.5) == {1: (200us, 1ms), 2: (200us, 1ms)}",
           granted == {1: (200_000, 1_000_000), 2: (200_000, 1_000_000)} and capped is True,
           "got %r" % (granted,))
 
@@ -2488,40 +2487,40 @@ def _selftest_cap_math(cases):
 def _selftest_runtime_rule(cases):
     """check the runtime sizing rule"""
     P = 16_666_667
-    _case(cases, "no samples yet -> no runtime to grant", frame_cpu_runtime_ns(None, P) is None
+    _case(cases, "frame_cpu_runtime_ns(None, P) is None and frame_cpu_runtime_ns([], P) is None", frame_cpu_runtime_ns(None, P) is None
           and frame_cpu_runtime_ns([], P) is None)
     rt = frame_cpu_runtime_ns([2_000_000] * 10, P)
-    _case(cases, "a flat 2ms of CPU per frame is granted 2.5ms", rt == 2_500_000, "got %r" % rt)
+    _case(cases, "frame_cpu_runtime_ns([2ms] * 10, P) == 2.5ms", rt == 2_500_000, "got %r" % rt)
     rt = frame_cpu_runtime_ns([1_000], P)
-    _case(cases, "a near-zero CPU per frame clamps to the 200us floor", rt == MIN_THREAD_RUNTIME_NS, "got %r" % rt)
+    _case(cases, "frame_cpu_runtime_ns([1us], P) == MIN_THREAD_RUNTIME_NS", rt == MIN_THREAD_RUNTIME_NS, "got %r" % rt)
     rt = frame_cpu_runtime_ns([100_000_000], P)
-    _case(cases, "an oversized CPU per frame clamps to 0.9 x period", rt == int(0.9 * P), "got %r" % rt)
-    _case(cases, "a period whose 0.9x is under the 200us floor refuses rather than guesses",
+    _case(cases, "frame_cpu_runtime_ns([100ms], P) == int(0.9 * P)", rt == int(0.9 * P), "got %r" % rt)
+    _case(cases, "frame_cpu_runtime_ns([100us], 200us) is None",
           frame_cpu_runtime_ns([100_000], 200_000) is None)
     tail = [100_000] * 15 + [20_000_000]
     rt = frame_cpu_runtime_ns(tail, 100_000_000)
     mean = sum(tail) / len(tail)
-    _case(cases, "a heavy-tailed history is granted 1.25 x its mean, not its p90",
+    _case(cases, "frame_cpu_runtime_ns([100us] * 15 + [20ms], 100ms) == int(1.25 * mean) and p90 == 100us",
           p90(tail) == 100_000 and rt == int(1.25 * mean), "got %r mean %r" % (rt, mean))
-    _case(cases, "frame_cpu_ns is None with no samples and max(p90, mean) otherwise",
+    _case(cases, "frame_cpu_ns([]) is None and frame_cpu_ns(samples) == max(p90, mean)",
           frame_cpu_ns([]) is None and frame_cpu_ns(tail) == mean and frame_cpu_ns([5, 5, 5]) == 5)
 
-    _case(cases, "a new thread under 0.15 is not held", next_held_shares({}, {1: 0.10}) == {})
-    _case(cases, "a new thread at 0.15 is held", next_held_shares({}, {1: 0.15}) == {1: 0.15})
-    _case(cases, "a held thread at 0.10 stays held", next_held_shares({1: 0.5}, {1: 0.10}) == {1: 0.10})
-    _case(cases, "a held thread under 0.08 is dropped", next_held_shares({1: 0.5}, {1: 0.05}) == {})
+    _case(cases, "next_held_shares({}, {1: 0.10}) == {}", next_held_shares({}, {1: 0.10}) == {})
+    _case(cases, "next_held_shares({}, {1: 0.15}) == {1: 0.15}", next_held_shares({}, {1: 0.15}) == {1: 0.15})
+    _case(cases, "next_held_shares({1: 0.5}, {1: 0.10}) == {1: 0.10}", next_held_shares({1: 0.5}, {1: 0.10}) == {1: 0.10})
+    _case(cases, "next_held_shares({1: 0.5}, {1: 0.05}) == {}", next_held_shares({1: 0.5}, {1: 0.05}) == {})
 
-    _case(cases, "rate_limit_ok: under 100ms since the last apply is not ok",
+    _case(cases, "rate_limit_ok(0.0, 0.050) is False",
           rate_limit_ok(0.0, 0.050) is False)
-    _case(cases, "rate_limit_ok: 100ms or more since the last apply is ok",
+    _case(cases, "rate_limit_ok(0.0, 0.100) is True",
           rate_limit_ok(0.0, 0.100) is True)
 
-    _case(cases, "thread_is_eligible: SCHED_OTHER is touched", thread_is_eligible(SCHED_OTHER) is True)
-    _case(cases, "thread_is_eligible: SCHED_BATCH is touched", thread_is_eligible(SCHED_BATCH) is True)
-    _case(cases, "thread_is_eligible: SCHED_FIFO is left alone", thread_is_eligible(SCHED_FIFO) is False)
-    _case(cases, "thread_is_eligible: SCHED_RR is left alone", thread_is_eligible(SCHED_RR) is False)
-    _case(cases, "thread_is_eligible: SCHED_IDLE is left alone", thread_is_eligible(SCHED_IDLE) is False)
-    _case(cases, "thread_is_eligible: an already-SCHED_DEADLINE thread is left alone",
+    _case(cases, "thread_is_eligible(SCHED_OTHER) is True", thread_is_eligible(SCHED_OTHER) is True)
+    _case(cases, "thread_is_eligible(SCHED_BATCH) is True", thread_is_eligible(SCHED_BATCH) is True)
+    _case(cases, "thread_is_eligible(SCHED_FIFO) is False", thread_is_eligible(SCHED_FIFO) is False)
+    _case(cases, "thread_is_eligible(SCHED_RR) is False", thread_is_eligible(SCHED_RR) is False)
+    _case(cases, "thread_is_eligible(SCHED_IDLE) is False", thread_is_eligible(SCHED_IDLE) is False)
+    _case(cases, "thread_is_eligible(SCHED_DEADLINE) is False",
           thread_is_eligible(SCHED_DEADLINE) is False)
 
 
@@ -2542,9 +2541,9 @@ def _selftest_protocol(cases):
     for line, want in good:
         try:
             got = parse_message(line)
-            _case(cases, "parses %r" % line, got == want, "got %r want %r" % (got, want))
+            _case(cases, "parse_message(%r) == want" % line, got == want, "got %r expected %r" % (got, want))
         except ProtocolError as exc:
-            _case(cases, "parses %r" % line, False, "raised %s" % exc)
+            _case(cases, "parse_message(%r) == want" % line, False, "raised %s" % exc)
 
     bad = [
         "", "bogus", "open 1 100 1000", "open 1 100 1000 16666667 ",
@@ -2555,9 +2554,9 @@ def _selftest_protocol(cases):
     for line in bad:
         try:
             parse_message(line)
-            _case(cases, "refuses %r" % line[:60], False, "parsed instead of raising")
+            _case(cases, "parse_message(%r) raises ProtocolError" % line[:60], False, "parse_message returned without ProtocolError")
         except ProtocolError:
-            _case(cases, "refuses %r" % line[:60], True)
+            _case(cases, "parse_message(%r) raises ProtocolError" % line[:60], True)
 
 
 def _fake_tree():
@@ -2582,28 +2581,28 @@ def _selftest_translation(cases):
     """test sandbox tid translation"""
     view = _fake_tree()
     host_tgid = translate_tgid(view, 777, 10)
-    _case(cases, "translate_tgid resolves the sandbox tgid to its host tgid", host_tgid == 100,
+    _case(cases, "translate_tgid(view, 777, 10) == 100", host_tgid == 100,
           "got %r" % host_tgid)
-    _case(cases, "translate_tgid never matches a tid outside the peer's own namespace",
+    _case(cases, "translate_tgid(view, 777, 999999) is None",
           translate_tgid(view, 777, 999999) is None)
 
     host_tid, reason = translate_tid(view, 777, 100, 20, 1000)
-    _case(cases, "translate_tid resolves an owned sandbox tid", host_tid == 200, "reason=%r" % reason)
+    _case(cases, "translate_tid(view, 777, 100, 20, 1000) == 200", host_tid == 200, "reason=%r" % reason)
 
     host_tid, reason = translate_tid(view, 777, 100, 999, 1000)
-    _case(cases, "translate_tid refuses a sandbox tid that does not exist",
+    _case(cases, "translate_tid(view, 777, 100, 999, 1000) is None and 'no host thread' in reason",
           host_tid is None and "no host thread" in reason, "got %r %r" % (host_tid, reason))
 
     host_tid, reason = translate_tid(view, 555, 999, 20, 7777)
-    _case(cases, "translate_tid in a different namespace resolves its OWN tid, not the peer's",
+    _case(cases, "translate_tid(view, 555, 999, 20, 7777) == 999",
           host_tid == 999, "got %r %r" % (host_tid, reason))
 
     host_tid, reason = translate_tid(view, 777, 999999, 20, 1000)
-    _case(cases, "translate_tid refuses a tid whose owning tgid does not match the session's",
-          host_tid is None and "belongs to host tgid" in reason, "got %r %r" % (host_tid, reason))
+    _case(cases, "translate_tid(view, 777, 999999, 20, 1000) is None and 'is not session host tgid' in reason",
+          host_tid is None and "is not session host tgid" in reason, "got %r %r" % (host_tid, reason))
 
     host_tid, reason = translate_tid(view, 777, 100, 20, 1)
-    _case(cases, "translate_tid refuses a uid that does not match the real owner",
+    _case(cases, "translate_tid(view, 777, 100, 20, 1) is None and 'real uid' in reason",
           host_tid is None and "real uid" in reason, "got %r %r" % (host_tid, reason))
 
 
@@ -2613,36 +2612,36 @@ def _selftest_status_json(cases):
     refusals = RefusalLog(maxlen=3)
     for i in range(5):
         refusals.record("refused peer pid=%d ctx=None" % i)
-    _case(cases, "RefusalLog keeps only the last N lines",
+    _case(cases, "RefusalLog(maxlen=3).snapshot() == the last 3 of 5 lines",
           refusals.snapshot() == ["refused peer pid=2 ctx=None", "refused peer pid=3 ctx=None",
                                     "refused peer pid=4 ctx=None"],
           "got %r" % refusals.snapshot())
     repeated = RefusalLog(maxlen=8)
     for line in ("cap: requested=1.0 granted=0.5 cap=0.5",) * 3 + ("cap: requested=0.9 granted=0.5 cap=0.5",):
         repeated.record(line)
-    _case(cases, "RefusalLog keeps a decision repeated tick after tick once",
+    _case(cases, "RefusalLog().snapshot() == [line, line2] after record(line) x 3 and record(line2)",
           repeated.snapshot() == ["cap: requested=1.0 granted=0.5 cap=0.5",
                                   "cap: requested=0.9 granted=0.5 cap=0.5"],
           "got %r" % repeated.snapshot())
 
     status = build_status(8, 25, 2.0, 0.5, {"1:1": {"state": "active"}}, refusals.snapshot())
     for key in ("cpus", "cap_percent", "cap_bw", "granted_bw", "sessions", "refusals"):
-        _case(cases, "status has key %r" % key, key in status)
+        _case(cases, "%r in build_status(...)" % key, key in status)
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "status.json")
         write_status_atomic(path, status)
         with open(path) as f:
             back = json.load(f)
-        _case(cases, "a written status.json round-trips byte-for-value", back == status,
+        _case(cases, "json.load(status.json) == status after write_status_atomic", back == status,
               "got %r" % back)
-        _case(cases, "no .tmp file is left behind after an atomic write",
+        _case(cases, "no .tmp.<pid> file in tmp after write_status_atomic",
               not any(n.endswith(".tmp.%d" % os.getpid()) for n in os.listdir(tmp)))
 
     for line, prefix in (("refused peer pid=1 ctx='u:r:other:s0'", "refused peer pid="),
-                         ("refused tid=5 session=1:1: no host thread maps it", "refused tid="),
+                         ("refused tid=5 session=1:1: translate_tgid returned None", "refused tid="),
                          ("cap: requested=1.000000 granted=0.500000 cap=0.500000", "cap: requested=")):
-        _case(cases, "refusal line %r carries its contract prefix" % line, line.startswith(prefix))
+        _case(cases, "%r.startswith(prefix)" % line, line.startswith(prefix))
 
 
 def _selftest_switched_away(cases):
@@ -2656,12 +2655,12 @@ def _selftest_switched_away(cases):
         d.grants = {101: (1_000_000, 16_666_667, "other:0"), 102: (1_000_000, 16_666_667, "other:0")}
         d.identity = {101: (100, 10050, 600), 102: (100, 10050, 601)}
         d.sweep()
-        _case(cases, "a grant switched off SCHED_DEADLINE outside the daemon is dropped, one still held stays",
+        _case(cases, "101 not in grants and 102 in grants after sweep() with 101 at SCHED_OTHER and 102 at SCHED_DEADLINE",
               101 not in d.grants and 102 in d.grants, "grants %r" % sorted(d.grants))
 
 
 def _selftest_selinux_mode(cases):
-    """test the mode reader on each record kind"""
+    """test read_selinux_mode on each mode file"""
     import contextlib, io, tempfile
     with tempfile.TemporaryDirectory() as tmp:
         mode, garbled, empty = os.path.join(tmp, "mode"), os.path.join(tmp, "garbled"), os.path.join(tmp, "empty")
@@ -2671,17 +2670,17 @@ def _selftest_selinux_mode(cases):
         open(trailing, "w").write("namespace junk\n")
         open(spaced, "w").write(" host\n")
         open(empty, "w").close()
-        for label, path, want, noisy in (("a recorded mode is read", mode, "namespace", False),
-                                         ("an absent file is a logged failure", mode + ".none", None, True),
-                                         ("an unreadable file is a logged failure", tmp, None, True),
-                                         ("a file holding neither mode is a logged failure", garbled, None, True),
-                                         ("a mode with trailing text is a logged failure", trailing, None, True),
-                                         ("a mode with leading space is a logged failure", spaced, None, True),
-                                         ("an empty file is a logged failure", empty, None, True)):
+        for label, path, want, noisy in (("('namespace\\n') == 'namespace' and stderr == ''", mode, "namespace", False),
+                                         ("(absent file) is None and stderr != ''", mode + ".none", None, True),
+                                         ("(directory) is None and stderr != ''", tmp, None, True),
+                                         ("('namespaces\\n') is None and stderr != ''", garbled, None, True),
+                                         ("('namespace junk\\n') is None and stderr != ''", trailing, None, True),
+                                         ("(' host\\n') is None and stderr != ''", spaced, None, True),
+                                         ("(empty file) is None and stderr != ''", empty, None, True)):
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 got = read_selinux_mode(path)
-            _case(cases, "read_selinux_mode: " + label, got == want and bool(err.getvalue()) == noisy,
+            _case(cases, "read_selinux_mode" + label, got == want and bool(err.getvalue()) == noisy,
                   "got %r, stderr %r" % (got, err.getvalue()))
 
 
@@ -2702,12 +2701,12 @@ def _selftest_sweep(cases):
         d.identity[gone] = (live, os.getuid(), 1)
         d.identity[live] = (d.view.tgid_of(live), d.view.real_uid(live), d.view.start_time(live))
         d.sweep()
-        _case(cases, "the sweep drops a session once every thread it named has exited",
+        _case(cases, "1 not in c.sessions after sweep() with session 1 threads == [gone]",
               1 not in c.sessions, "sessions %r" % sorted(c.sessions))
-        _case(cases, "the sweep keeps a session with a live thread, minus the exited one",
+        _case(cases, "list(c.sessions[2].threads) == [live] after sweep()",
               2 in c.sessions and list(c.sessions[2].threads) == [live],
-              "session 2: %r" % (list(c.sessions[2].threads) if 2 in c.sessions else None))
-        _case(cases, "the sweep forgets the exited thread's identity and keeps the live one's",
+              "session 2 threads %r" % (list(c.sessions[2].threads) if 2 in c.sessions else None))
+        _case(cases, "gone not in identity and live in identity after sweep()",
               gone not in d.identity and live in d.identity, "identity %r" % sorted(d.identity))
 
 
@@ -2733,28 +2732,28 @@ def _selftest_identity(cases):
             c.sessions["1"] = s
             d.identity[101] = (100, 10050, 600)
             d._grant(101, 2_000_000, 16_666_667)
-            _case(cases, "the registered thread is granted", calls == [("grant", 101)] and 101 in d.grants,
+            _case(cases, "_grant(101) calls grant_deadline(101) and 101 in grants", calls == [("grant", 101)] and 101 in d.grants,
                   "calls %r grants %r" % (calls, d.grants))
             del calls[:]
             d._revoke(101)
-            _case(cases, "a revoke the kernel refused keeps the grant counted for the cap",
+            _case(cases, "101 in grants after _revoke(101) with revoke_to_prior failing",
                   calls == [("revoke", 101)] and 101 in d.grants, "calls %r grants %r" % (calls, d.grants))
             revoke_ok[0] = True
             del calls[:]
             d._revoke(101)
-            _case(cases, "a revoke the kernel took drops the grant", calls == [("revoke", 101)] and 101 not in d.grants,
+            _case(cases, "101 not in grants after _revoke(101) with revoke_to_prior succeeding", calls == [("revoke", 101)] and 101 not in d.grants,
                   "calls %r grants %r" % (calls, d.grants))
             d._grant(101, 2_000_000, 16_666_667)
             procs[101] = {"tgid": 4242, "uid": 0, "start": 900}
             del calls[:]
             d._revoke(101)
-            _case(cases, "a reused tid is never revoked: the record goes, no syscall touches the new thread",
+            _case(cases, "_revoke(reused tid 101) calls nothing and deletes grants[101] and s.threads[101]",
                   calls == [] and 101 not in d.grants and 101 not in s.threads,
                   "calls %r grants %r threads %r" % (calls, d.grants, list(s.threads)))
             s.threads[101] = Thread(11, "RenderThread", "other", "other:-4")
             d.identity[101] = (100, 10050, 600)
             d._grant(101, 2_000_000, 16_666_667)
-            _case(cases, "a reused tid is never granted", calls == [] and 101 not in d.grants,
+            _case(cases, "_grant(reused tid 101) calls nothing and 101 not in grants", calls == [] and 101 not in d.grants,
                   "calls %r grants %r" % (calls, d.grants))
     finally:
         grant_deadline, revoke_to_prior = real_grant, real_revoke
@@ -2782,7 +2781,7 @@ def _selftest_apply(cases):
             c.sessions["1"] = s
 
             def held(cap, last_apply, b=190_000):
-                """set up the granted threads for a cap check"""
+                """reset calls, cap_bw, _last_apply and grants"""
                 del calls[:]
                 d.cap_bw, d._last_apply = cap, {None: last_apply}
                 d.grants = {101: (210_000, p, "other:0"), 102: (b, p, "other:0")}
@@ -2793,20 +2792,20 @@ def _selftest_apply(cases):
             plan = {101: (195_000, p), 102: (205_000, p)}
             held(0.04, 0.0, b=180_000)
             d._apply(plan, 10.0)
-            _case(cases, "a decrease the hysteresis would keep is applied when the kept set would pass the cap",
+            _case(cases, "_apply(decrease inside REAPPLY_RUNTIME_DELTA, cap 0.04) grants (101, 195000) and (102, 205000) within 0.04",
                   sorted(calls) == [(101, 195_000), (102, 205_000)] and total() <= 0.04 + 1e-12,
                   "calls %r total %.4f" % (calls, total()))
             held(1.0, 0.0)
             d._apply(plan, 10.0)
-            _case(cases, "a decrease inside the hysteresis is kept while the set fits the cap",
+            _case(cases, "_apply(decrease inside REAPPLY_RUNTIME_DELTA, cap 1.0) calls nothing",
                   calls == [] and d.grants[101][0] == 210_000, "calls %r grants %r" % (calls, d.grants))
             held(1.0, 10.0)
             d._apply({101: (150_000, p), 102: (300_000, p)}, 10.05)
-            _case(cases, "a large decrease applies at once, and an increase waits for the rate limit",
+            _case(cases, "_apply at 10.05 s grants (101, 150000) and grants[102][0] == 190000",
                   calls == [(101, 150_000)] and d.grants[102][0] == 190_000, "calls %r" % (calls,))
             del calls[:]
             d._apply({101: (150_000, p), 102: (300_000, p)}, 10.2)
-            _case(cases, "the increase applies once the rate limit allows", calls == [(102, 300_000)],
+            _case(cases, "_apply at 10.2 s grants (102, 300000)", calls == [(102, 300_000)],
                   "calls %r" % (calls,))
     finally:
         grant_deadline = real_grant
@@ -2882,17 +2881,17 @@ def _selftest_helpers(cases):
 
             d.tick()
             granted = {t: rt for kind, t, rt, *_ in [(x[0], x[1], x[2]) for x in calls] if kind == "grant"}
-            _case(cases, "a held RenderThread's hwuiTask helpers are granted, each at the floor while it has no samples",
+            _case(cases, "tick() grants hwuiTask helpers 203 and 204 of a held RenderThread at MIN_THREAD_RUNTIME_NS",
                   granted.get(203) == MIN_THREAD_RUNTIME_NS and granted.get(204) == MIN_THREAD_RUNTIME_NS
                   and 201 in granted, "calls %r" % (calls,))
-            _case(cases, "a SCHED_FIFO thread named like a helper is never granted as one",
+            _case(cases, "206 (hwuiTask9 at SCHED_FIFO) not in granted",
                   206 not in granted, "calls %r" % (calls,))
-            _case(cases, "a held RenderThread's binder pool threads are granted, each at the 200us floor",
+            _case(cases, "tick() grants binder pool helpers 207 and 208 of a held RenderThread at BINDER_HELPER_RUNTIME_NS",
                   granted.get(207) == BINDER_HELPER_RUNTIME_NS and granted.get(208) == BINDER_HELPER_RUNTIME_NS,
                   "calls %r" % (calls,))
-            _case(cases, "a binder thread whose comm names another pid is never granted as a helper",
+            _case(cases, "209 (binder:99_1) not in granted",
                   209 not in granted, "calls %r" % (calls,))
-            _case(cases, "a process whose RenderThread is not held gets no helper grant",
+            _case(cases, "301, 302 and 303 not in granted with 301 not in s2.held",
                   302 not in granted and 301 not in granted and 303 not in granted, "calls %r" % (calls,))
 
             view.procs[205] = {"tgid": 100, "uid": 10050, "start": 10, "comm": "hwuiTask2", "nspid_last": 25,
@@ -2906,7 +2905,7 @@ def _selftest_helpers(cases):
             now[0] += SHARE_WINDOW_S
             s.last_actual = now[0]
             d.tick()
-            _case(cases, "a later-born helper joins within one share window",
+            _case(cases, "205 not granted before SHARE_WINDOW_S and granted after",
                   not early and 205 in {x[1] for x in calls if x[0] == "grant"}, "calls %r" % (calls,))
 
             del calls[:]
@@ -2915,7 +2914,7 @@ def _selftest_helpers(cases):
             s.last_actual = now[0]
             d.tick()
             revoked = {x[1]: (x[2], x[3]) for x in calls if x[0] == "revoke"}
-            _case(cases, "when the RenderThread is no longer held, its helpers are restored to their exact prior",
+            _case(cases, "s.held == {} revokes 203, 204 and 205 to (SCHED_OTHER, -2) and 207 and 208 to (SCHED_OTHER, 0)",
                   all(revoked.get(t) == (SCHED_OTHER, -2) for t in (203, 204, 205))
                   and all(revoked.get(t) == (SCHED_OTHER, 0) for t in (207, 208)) and not s.helpers,
                   "calls %r" % (calls,))
@@ -2932,9 +2931,9 @@ def _selftest_helpers(cases):
             lines = [r for r in d.refusals.snapshot() if r.startswith("cap: requested=")]
             got = float(lines[-1].split()[1].split("=")[1]) if lines else None
             held_bw = sum(bandwidth(rt, per) for rt, per, _prior in d.grants.values())
-            _case(cases, "helpers count against rt.budgets' own cap: the plan asks for them and stays inside it",
+            _case(cases, "requested= of the cap line == RenderThread + 3 hwuiTask + 2 binder bandwidths and granted bandwidth <= 0.35",
                   got is not None and abs(got - want) < 1e-5 and held_bw <= 0.35 + 1e-9,
-                  "requested %r want %.6f held %.6f lines %r" % (got, want, held_bw, lines))
+                  "requested %r expected %.6f held %.6f lines %r" % (got, want, held_bw, lines))
 
             view.procs.update({
                 400: {"tgid": 400, "uid": 10070, "start": 11, "comm": "named.app", "nspid_last": 40},
@@ -2961,38 +2960,37 @@ def _selftest_helpers(cases):
             for se in (s, s3):
                 se.last_actual = now[0]
             d.tick()
-            _case(cases, "a helper the session itself names, under the held share, is still granted as a helper",
+            _case(cases, "402 in s3.threads and not in s3.held is granted and in s3.helpers",
                   402 in {x[1] for x in calls if x[0] == "grant"} and 402 in s3.helpers,
                   "calls %r helpers %r" % (calls, sorted(s3.helpers)))
             sized = {x[1]: x[2] for x in calls if x[0] == "grant"}
-            _case(cases, "a hwuiTask helper the session names is sized from its own samples, not a fixed 2ms",
+            _case(cases, "grant runtime of 402 == 1.25 x 3ms",
                   sized.get(402) == 3_750_000, "calls %r" % (calls,))
     finally:
         grant_deadline, revoke_to_prior = real_grant, real_revoke
 
 
 def _selftest_helpers_red_check(cases):
-    """run the grant cases with unmatched thread names"""
+    """run the helper cases with HELPER_COMM_PREFIX and BINDER_POOL_RE matching nothing"""
     global HELPER_COMM_PREFIX
     original = HELPER_COMM_PREFIX
     HELPER_COMM_PREFIX = "no-such-thread-name"
     broken = []
     _selftest_helpers(broken)
     HELPER_COMM_PREFIX = original
-    caught = any(name.startswith("a held RenderThread's hwuiTask helpers are granted") and not ok
+    caught = any(name.startswith("tick() grants hwuiTask helpers 203 and 204") and not ok
                  for name, ok, _ in broken)
-    _case(cases, "red-check: a helper finder that matches nothing makes the helper grant case fail "
-                 "(not silently pass)", caught, "broken-run cases: %r" % (broken,))
+    _case(cases, "red-check HELPER_COMM_PREFIX matching nothing fails the hwuiTask helper case", caught, "broken cases %r" % (broken,))
     global BINDER_POOL_RE
     original_re = BINDER_POOL_RE
     BINDER_POOL_RE = re.compile(r"^no-such-thread-name$")
     broken = []
     _selftest_helpers(broken)
     BINDER_POOL_RE = original_re
-    caught = any(name.startswith("a held RenderThread's binder pool threads are granted") and not ok
+    caught = any(name.startswith("tick() grants binder pool helpers 207 and 208") and not ok
                  for name, ok, _ in broken)
-    _case(cases, "red-check: a binder pool match that matches nothing makes the binder helper case fail",
-          caught, "broken-run cases: %r" % (broken,))
+    _case(cases, "red-check BINDER_POOL_RE matching nothing fails the binder pool helper case",
+          caught, "broken cases %r" % (broken,))
 
 
 def _contain_fake_tree():
@@ -3014,7 +3012,7 @@ def _contain_fake_tree():
 
 
 def _contain_sweeps(d, now):
-    """run two sweeps a window apart"""
+    """call sweep(), add SHARE_WINDOW_S to now and call sweep()"""
     d.sweep()
     now[0] += SHARE_WINDOW_S
     d.sweep()
@@ -3029,13 +3027,13 @@ def _selftest_contain_scan(cases):
                    contain_runtime_ns=2_000_000, contain_period_ns=16_666_667)
         d.sandbox_ns_ino = 777
         d.contain_scan()
-        _case(cases, "the scan contains every FIFO/RR thread inside the sandbox's own namespace",
+        _case(cases, "contain_scan() contained == {100, 101, 102}",
               set(d.contained) == {100, 101, 102}, "got %r" % sorted(d.contained))
-        _case(cases, "a SCHED_OTHER thread inside the sandbox is never contained", 103 not in d.contained)
-        _case(cases, "a FIFO thread outside the sandbox's own pid namespace is never touched",
+        _case(cases, "103 (SCHED_OTHER) not in contained", 103 not in d.contained)
+        _case(cases, "900 (SCHED_FIFO outside ns 777) not in contained",
               900 not in d.contained)
         ct100, ct102 = d.contained.get(100), d.contained.get(102)
-        _case(cases, "a contained thread's prior policy and priority are recorded exactly",
+        _case(cases, "contained[100] prior == (SCHED_FIFO, 2) and contained[102] prior == (SCHED_RR, 5)",
               ct100 is not None and ct100.prior_policy == SCHED_FIFO and ct100.prior_priority == 2
               and ct102 is not None and ct102.prior_policy == SCHED_RR and ct102.prior_priority == 5,
               "got %r" % {tid: (ct.prior_policy, ct.prior_priority) for tid, ct in d.contained.items()})
@@ -3059,12 +3057,12 @@ def _selftest_contain_discovery(cases):
         d = Daemon(os.path.join(tmp, "rtd"), os.path.join(tmp, "status.json"), 25,
                    view=view, contain_enabled=True, contain_cap_percent=10,
                    contain_runtime_ns=2_000_000, contain_period_ns=16_666_667)
-        _case(cases, "a sandbox is found by its Android init with no power HAL connected",
+        _case(cases, "sandbox_namespaces() == {888} with no connection",
               d.sandbox_namespaces() == {888}, "got %r" % d.sandbox_namespaces())
         d.contain_scan()
-        _case(cases, "the scan contains the FIFO thread of a sandbox found by its init alone",
+        _case(cases, "contain_scan() contained == {310}",
               set(d.contained) == {310}, "got %r" % sorted(d.contained))
-        _case(cases, "a namespace whose pid 1 is not Android's init is never touched",
+        _case(cases, "410 (pid 1 context rhizo_host) not in contained",
               410 not in d.contained)
 
 
@@ -3076,14 +3074,14 @@ def _selftest_contain_disabled(cases):
                    view=_contain_fake_tree())
         d.sandbox_ns_ino = 777
         d.contain_scan()
-        _case(cases, "rt.contain off: the scan contains nothing, whatever /proc shows",
+        _case(cases, "contained == {} after contain_scan() with contain_enabled False",
               d.contained == {}, "got %r" % d.contained)
         d.sweep()
-        _case(cases, "rt.contain off: a sweep still contains nothing", d.contained == {},
+        _case(cases, "contained == {} after sweep() with contain_enabled False", d.contained == {},
               "got %r" % d.contained)
         with open(d.status_path) as f:
             status = json.load(f)
-        _case(cases, "rt.contain off: status.json carries no contain key at all",
+        _case(cases, "status.json with contain_enabled False has no contain_percent or contained key",
               "contain_percent" not in status and "contained" not in status, "got keys %r" % sorted(status))
 
 
@@ -3107,14 +3105,14 @@ def _selftest_contain_sizing(cases):
         s.held = {101: 0.6}
         c.sessions["1"] = s
         reqs = d._contain_requests()
-        _case(cases, "a thread an active ADPF session holds is sized by the per-frame CPU rule from its own samples",
+        _case(cases, "_contain_requests()[101] == (3ms, P) for 101 in s.held",
               reqs.get(101) == (3_000_000, 16_666_667), "got %r" % (reqs.get(101),))
-        _case(cases, "a thread no session names has no size before its first window is measured",
+        _case(cases, "100 and 102 not in _contain_requests() before _contain_measure",
               100 not in reqs and 102 not in reqs, "got 100=%r 102=%r" % (reqs.get(100), reqs.get(102)))
         d._contain_measure(100.0)
         d._contain_measure(101.0)
         reqs = d._contain_requests()
-        _case(cases, "a thread no session names, idle over its first window, is sized at the 200us floor",
+        _case(cases, "_contain_requests()[100] == _contain_requests()[102] == (MIN_THREAD_RUNTIME_NS, P) after one idle window",
               reqs.get(100) == (MIN_THREAD_RUNTIME_NS, 16_666_667)
               and reqs.get(102) == (MIN_THREAD_RUNTIME_NS, 16_666_667),
               "got 100=%r 102=%r" % (reqs.get(100), reqs.get(102)))
@@ -3137,15 +3135,15 @@ def _selftest_contain_apply(cases):
                        contain_runtime_ns=2_000_000, contain_period_ns=16_666_667)
             d.sandbox_ns_ino = 777
             _contain_sweeps(d, now)
-            _case(cases, "a sweep with rt.contain on grants every contained thread SCHED_DEADLINE",
+            _case(cases, "two sweeps with contain_enabled grant 100, 101 and 102",
                   {c[1] for c in calls if c[0] == "grant"} == {100, 101, 102}, "calls %r" % (calls,))
             del calls[:]
             d._apply_contain({}, 0.0, "ns-777")
-            _case(cases, "revoking every contained thread restores its own exact prior policy and priority",
+            _case(cases, "_apply_contain({}) revokes 100 and 101 to (SCHED_FIFO, 2) and 102 to (SCHED_RR, 5)",
                   sorted(calls) == sorted([("revoke", 100, SCHED_FIFO, 2), ("revoke", 101, SCHED_FIFO, 2),
                                             ("revoke", 102, SCHED_RR, 5)]),
                   "calls %r" % (calls,))
-            _case(cases, "after the revoke, rt.contain's own grant pool is empty",
+            _case(cases, "contain_grants == {} after _apply_contain({})",
                   d.contain_grants == {}, "got %r" % d.contain_grants)
     finally:
         grant_deadline, revoke_to_prior = real_grant, real_revoke
@@ -3168,23 +3166,23 @@ def _selftest_contain_identity(cases):
             d.contained[101] = ContainedThread(11, "RenderEngine", SCHED_FIFO, 2)
             d.identity[101] = (100, 10050, 600)
             d._grant_contain(101, 2_000_000, 16_666_667)
-            _case(cases, "the registered contained thread is granted",
+            _case(cases, "_grant_contain(101) calls grant_deadline(101) and 101 in contain_grants",
                   calls == [("grant", 101)] and 101 in d.contain_grants, "calls %r" % (calls,))
             del calls[:]
             d._revoke_contain(101)
-            _case(cases, "revoking it restores its own prior policy/priority",
+            _case(cases, "_revoke_contain(101) calls revoke_to_prior(101) and 101 not in contain_grants",
                   calls == [("revoke", 101)] and 101 not in d.contain_grants, "calls %r" % (calls,))
             d._grant_contain(101, 2_000_000, 16_666_667)
             view.procs[101] = {"tgid": 4242, "uid": 0, "start": 900}
             del calls[:]
             d._revoke_contain(101)
-            _case(cases, "a reused tid is never revoked by rt.contain: no syscall touches the new thread",
+            _case(cases, "_revoke_contain(reused tid 101) calls nothing and deletes contain_grants[101] and contained[101]",
                   calls == [] and 101 not in d.contain_grants and 101 not in d.contained,
                   "calls %r grants %r contained %r" % (calls, d.contain_grants, list(d.contained)))
             d.contained[101] = ContainedThread(11, "RenderEngine", SCHED_FIFO, 2)
             d.identity[101] = (100, 10050, 600)
             d._grant_contain(101, 2_000_000, 16_666_667)
-            _case(cases, "a reused tid is never granted by rt.contain", calls == [] and 101 not in d.contain_grants,
+            _case(cases, "_grant_contain(reused tid 101) calls nothing and 101 not in contain_grants", calls == [] and 101 not in d.contain_grants,
                   "calls %r" % (calls,))
     finally:
         grant_deadline, revoke_to_prior = real_grant, real_revoke
@@ -3196,12 +3194,12 @@ def _selftest_contain_cap(cases):
     with tempfile.TemporaryDirectory() as tmp:
         d = Daemon(os.path.join(tmp, "rtd"), os.path.join(tmp, "status.json"), 25, contain_enabled=True,
                    contain_cap_percent=10)
-        _case(cases, "contain_cap_bw is contain_cap_percent/100 x online cpus, distinct from rt.budgets' cap_bw",
+        _case(cases, "contain_cap_bw == 0.10 * cpus and contain_cap_bw != cap_bw",
               abs(d.contain_cap_bw - 0.10 * d.cpus) < 1e-9 and d.contain_cap_bw != d.cap_bw,
               "contain_cap_bw=%r cap_bw=%r cpus=%r" % (d.contain_cap_bw, d.cap_bw, d.cpus))
         desired, req_bw, grant_bw, capped = plan_grants(
             [(16_666_667, {1: 4_000_000, 2: 4_000_000})], 0.1)
-        _case(cases, "two contained threads whose combined request exceeds rt.contain's own cap are scaled down",
+        _case(cases, "plan_grants([(P, {1: 4ms, 2: 4ms})], 0.1) is capped and granted bandwidth <= 0.1",
               capped is True and grant_bw <= 0.1 + 1e-9,
               "got %r capped=%r" % (desired, capped))
 
@@ -3238,18 +3236,17 @@ def _selftest_contain_pool_siblings(cases):
                    contain_runtime_ns=2_000_000, contain_period_ns=16_666_667)
         d.sandbox_ns_ino = 777
         d.contain_scan()
-        _case(cases, "a pool's already-FIFO thread is contained the ordinary way",
+        _case(cases, "101 (binder:11_1 at SCHED_FIFO) in contained",
               101 in d.contained, "got %r" % sorted(d.contained))
         ct103 = d.contained.get(103)
-        _case(cases, "a later-born SCHED_OTHER sibling of a contained pool thread is contained too",
+        _case(cases, "103 (binder:11_3 at SCHED_OTHER) in contained",
               ct103 is not None, "got %r" % sorted(d.contained))
-        _case(cases, "the sibling's recorded prior is its contained pool-mate's, not a guess",
+        _case(cases, "contained[103] prior == (SCHED_FIFO, 2)",
               ct103 is not None and ct103.prior_policy == SCHED_FIFO and ct103.prior_priority == 2,
               "got %r" % (ct103,))
-        _case(cases, "a SCHED_OTHER thread of the same process that is not pool-named is never swept in",
+        _case(cases, "104 (TimerDispatch at SCHED_OTHER) not in contained",
               104 not in d.contained)
-        _case(cases, "a process whose own pool threads are all SCHED_OTHER (no contained sibling "
-                     "to copy a prior from) gets nothing",
+        _case(cases, "201 and 202 (binder pool at SCHED_OTHER with no SCHED_FIFO sibling) not in contained",
               201 not in d.contained and 202 not in d.contained)
 
         global grant_deadline, revoke_to_prior
@@ -3262,7 +3259,7 @@ def _selftest_contain_pool_siblings(cases):
             _contain_sweeps(d, now)
             del calls[:]
             d._apply_contain({}, 0.0, "ns-777")
-            _case(cases, "revoking the sibling restores it to its pool-mate's own policy and priority",
+            _case(cases, "_apply_contain({}) revokes 103 to (SCHED_FIFO, 2)",
                   ("revoke", 103, SCHED_FIFO, 2) in calls, "calls %r" % (calls,))
 
             global set_rt_policy
@@ -3280,8 +3277,7 @@ def _selftest_contain_pool_siblings(cases):
                 del calls[:]
                 d2.revoke_everything()
                 sets = [c for c in calls if c[0] == "set"]
-                _case(cases, "the stop puts a never-granted pool sibling, and one born after the last scan, on its "
-                             "pool-mates' FIFO/RR prior, and touches no other thread",
+                _case(cases, "revoke_everything() calls set_rt_policy for 103 and 105 at (SCHED_FIFO, 2) and no other tid",
                       sorted(sets) == [("set", 103, SCHED_FIFO, 2), ("set", 105, SCHED_FIFO, 2)],
                       "calls %r contained %r" % (calls, sorted(d2.contained)))
 
@@ -3292,7 +3288,7 @@ def _selftest_contain_pool_siblings(cases):
                 _contain_sweeps(d3, now)
 
                 def revoke_and_spawn(tid, policy, nice, priority=0):
-                    """revoke, then spawn a SCHED_OTHER pool thread"""
+                    """add fake tid 106 at SCHED_OTHER and record the revoke"""
                     if 106 not in d3.view.procs:
                         d3.view.procs[106] = {"ns_ino": 777, "tgid": 100, "uid": 1000, "comm": "binder:11_6",
                                               "sched": (SCHED_OTHER, 0, 0), "start": 9, "schedstat": 0}
@@ -3303,8 +3299,7 @@ def _selftest_contain_pool_siblings(cases):
                 revoke_to_prior = revoke_and_spawn
                 del calls[:]
                 d3.revoke_everything()
-                _case(cases, "the stop puts a pool thread spawned while its pool was SCHED_DEADLINE "
-                             "on the pool's FIFO/RR prior",
+                _case(cases, "revoke_everything() calls set_rt_policy(106, SCHED_FIFO, 2) for tid 106 added during revoke_to_prior",
                       ("set", 106, SCHED_FIFO, 2) in calls,
                       "calls %r contained %r" % (calls, sorted(d3.contained)))
             finally:
@@ -3321,10 +3316,9 @@ def _selftest_contain_red_check(cases):
     broken_cases = []
     _selftest_contain_scan(broken_cases)
     is_fifo_rr = original_eligible
-    caught = any(name.startswith("the scan contains every FIFO/RR thread") and not ok
+    caught = any(name.startswith("contain_scan() contained == {100, 101, 102}") and not ok
                  for name, ok, _ in broken_cases)
-    _case(cases, "red-check: an is_fifo_rr that never matches makes the scan's own "
-                 "assertion fail (not silently pass)", caught, "broken-run cases: %r" % (broken_cases,))
+    _case(cases, "red-check is_fifo_rr returning False fails the contain_scan case", caught, "broken cases %r" % (broken_cases,))
 
     global _in_sandbox_ns
     original_in_ns = _in_sandbox_ns
@@ -3332,10 +3326,9 @@ def _selftest_contain_red_check(cases):
     broken_cases2 = []
     _selftest_contain_scan(broken_cases2)
     _in_sandbox_ns = original_in_ns
-    caught2 = any("outside the sandbox's own pid namespace is never touched" in name and not ok
+    caught2 = any("900 (SCHED_FIFO outside ns 777)" in name and not ok
                   for name, ok, _ in broken_cases2)
-    _case(cases, "red-check: an _in_sandbox_ns that always agrees makes the outside-namespace "
-                 "assertion fail (not silently pass)", caught2, "broken-run cases: %r" % (broken_cases2,))
+    _case(cases, "red-check _in_sandbox_ns returning True fails the outside-namespace case", caught2, "broken cases %r" % (broken_cases2,))
 
     global _contain_restore_args
     original_restore = _contain_restore_args
@@ -3343,20 +3336,18 @@ def _selftest_contain_red_check(cases):
     broken_cases3 = []
     _selftest_contain_apply(broken_cases3)
     _contain_restore_args = original_restore
-    caught3 = any("restores its own exact prior policy and priority" in name and not ok
+    caught3 = any("_apply_contain({}) revokes 100 and 101 to (SCHED_FIFO, 2)" in name and not ok
                   for name, ok, _ in broken_cases3)
-    _case(cases, "red-check: dropping the restored priority makes the exact-restore assertion "
-                 "fail (not silently pass)", caught3, "broken-run cases: %r" % (broken_cases3,))
+    _case(cases, "red-check _contain_restore_args with priority 0 fails the _apply_contain revoke case", caught3, "broken cases %r" % (broken_cases3,))
 
     original_same_thread = Daemon._same_thread
     Daemon._same_thread = lambda self, tid: True
     broken_cases4 = []
     _selftest_contain_identity(broken_cases4)
     Daemon._same_thread = original_same_thread
-    caught4 = any(name.startswith("a reused tid is never revoked by rt.contain") and not ok
+    caught4 = any(name.startswith("_revoke_contain(reused tid 101)") and not ok
                   for name, ok, _ in broken_cases4)
-    _case(cases, "red-check: a _same_thread that always agrees makes the reused-tid assertion "
-                 "fail (not silently pass)", caught4, "broken-run cases: %r" % (broken_cases4,))
+    _case(cases, "red-check _same_thread returning True fails the reused-tid case", caught4, "broken cases %r" % (broken_cases4,))
 
     global _binder_pool_tgid
     original_pool_tgid = _binder_pool_tgid
@@ -3364,14 +3355,13 @@ def _selftest_contain_red_check(cases):
     broken_cases5 = []
     _selftest_contain_pool_siblings(broken_cases5)
     _binder_pool_tgid = original_pool_tgid
-    caught5 = any(name.startswith("a later-born SCHED_OTHER sibling") and not ok
+    caught5 = any(name.startswith("103 (binder:11_3 at SCHED_OTHER) in contained") and not ok
                   for name, ok, _ in broken_cases5)
-    _case(cases, "red-check: a _binder_pool_tgid that never matches makes the pool-sibling "
-                 "assertion fail (not silently pass)", caught5, "broken-run cases: %r" % (broken_cases5,))
+    _case(cases, "red-check _binder_pool_tgid returning None fails the pool sibling case", caught5, "broken cases %r" % (broken_cases5,))
 
 
 def _selftest_peer_check(cases):
-    """test the peer context check on accept"""
+    """test the peer context check in Daemon.accept"""
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         d = Daemon(os.path.join(tmp, "rtd"), os.path.join(tmp, "status.json"), 25)
@@ -3389,7 +3379,7 @@ def _selftest_peer_check(cases):
         client.close()
         listener.close()
         own = "refused peer pid=%d " % os.getpid()
-        _case(cases, "a peer whose context is not %s is refused and its connection closed" % REQUIRED_PEER_CTX,
+        _case(cases, "accept() of a peer whose context is not %s closes the connection and records refused peer" % REQUIRED_PEER_CTX,
               not d.connections and closed and any(r.startswith(own) for r in d.refusals.snapshot()),
               "connections=%r closed=%r refusals=%r" % (d.connections, closed, d.refusals.snapshot()))
         n = Daemon(os.path.join(tmp, "rtd-ns"), os.path.join(tmp, "status-ns.json"), 25, selinux_mode="namespace")
@@ -3406,7 +3396,7 @@ def _selftest_peer_check(cases):
             closed = True
         client.close()
         listener.close()
-        _case(cases, "namespace mode: a host peer is refused at accept and its connection closed",
+        _case(cases, "namespace-mode accept() of a host peer closes the connection with why=not-in-a-sandbox-pid-namespace",
               not n.connections and closed
               and any(r.startswith(own) and r.endswith("why=not-in-a-sandbox-pid-namespace") for r in n.refusals.snapshot()),
               "connections=%r closed=%r refusals=%r" % (n.connections, closed, n.refusals.snapshot()))
@@ -3440,22 +3430,21 @@ def _selftest_namespace_peer(cases):
                    selinux_mode="namespace")
         h = Daemon(os.path.join(tmp, "rtd2"), os.path.join(tmp, "status2.json"), 25, view=view)
     got = {pid: d.namespace_peer_refusal(pid, procs[pid]["uid"]) for pid in (20, 30, 31, 40, 50, 61, 71)}
-    _case(cases, "namespace mode: the sandbox's power HAL (uid system, the sandbox's %s) is accepted"
+    _case(cases, "namespace_peer_refusal(uid system running the sandbox %s) is None"
           % POWER_HAL_PATH, got[20] is None, "got %r" % got)
-    _case(cases, "namespace mode: a sandbox peer of another uid is refused, even running the power HAL's binary",
+    _case(cases, "namespace_peer_refusal(uid 2000) starts with uid-2000",
           (got[30] or "").startswith("uid-2000") and (got[31] or "").startswith("uid-2000"), "got %r" % got)
-    _case(cases, "namespace mode: a uid-system sandbox peer running another executable is refused",
+    _case(cases, "namespace_peer_refusal(uid system running another executable) starts with executable-not",
           (got[40] or "").startswith("executable-not"), "got %r" % got)
-    _case(cases, "namespace mode: a host peer outside all of the sandbox pid namespaces is refused",
+    _case(cases, "namespace_peer_refusal(host peer) == not-in-a-sandbox-pid-namespace",
           got[50] == "not-in-a-sandbox-pid-namespace", "got %r" % got)
-    _case(cases, "namespace mode: a peer whose pid namespace's init is not a sandbox init is refused "
-                 "(another container; an init argv outside a Rhizo cgroup stack)",
-          got[61] == got[71] == "its-pid-namespace-has-no-sandbox-init", "got %r" % got)
+    _case(cases, "namespace_peer_refusal(peer under /sbin/init or outside RHIZO_STACK_RE) == pid-namespace-has-no-sandbox-init",
+          got[61] == got[71] == "pid-namespace-has-no-sandbox-init", "got %r" % got)
     inits = d.sandbox_init_pids()
-    _case(cases, "namespace mode: the sandbox inits are found by argv and Rhizo cgroup stack, not by context",
+    _case(cases, "namespace-mode sandbox_init_pids() == {701: 10, 902: 80}",
           inits == {701: 10, 902: 80}, "got %r" % inits)
     hinits = h.sandbox_init_pids()
-    _case(cases, "host mode: a sandbox init is found by its context alone (none reads %s here)"
+    _case(cases, "host-mode sandbox_init_pids() == {} with no pid 1 at %s"
           % ANDROID_INIT_CTX, hinits == {}, "got %r" % hinits)
 
 
@@ -3478,15 +3467,14 @@ def _selftest_red_check(cases):
     _selftest_cap_math(broken_cases)
     plan_grants = original
     broke_the_right_ones = (
-        any(name.startswith("an over-cap request") and not ok for name, ok, _ in broken_cases)
-        and any(name.startswith("a thread scaled under 200us") and not ok
+        any(name.startswith("plan_grants([(1ms, {1: 1ms, 2: 1ms})], 1.0)") and not ok for name, ok, _ in broken_cases)
+        and any(name.startswith("plan_grants([(1ms, {1: 1ms})], 0.1)") and not ok
                 for name, ok, _ in broken_cases))
-    _case(cases, "red-check: a cap function that never scales down makes the cap "
-                 "assertions fail (not silently pass)", broke_the_right_ones,
-          "broken-run cases: %r" % (broken_cases,))
+    _case(cases, "red-check plan_grants without the cap fails the over-cap and 200us floor cases", broke_the_right_ones,
+          "broken cases %r" % (broken_cases,))
 
     def broken_translate_tid(view, ns_ino, host_tgid, tid_ns, uid):
-        """find a thread by namespace thread id only"""
+        """return the first tid with nspid_last(tid) == tid_ns"""
         for pid in view.pids():
             for tid in view.tids_of(pid):
                 if view.nspid_last(tid) == tid_ns:
@@ -3499,16 +3487,15 @@ def _selftest_red_check(cases):
     broken_cases2 = []
     _selftest_translation(broken_cases2)
     translate_tid = original_tt
-    caught = any("refuses a tid whose owning tgid" in name and not ok for name, ok, _ in broken_cases2)
-    _case(cases, "red-check: a translate_tid with no ownership check makes the forged-tid "
-                 "assertion fail (not silently pass)", caught, "broken-run cases: %r" % (broken_cases2,))
+    caught = any("translate_tid(view, 777, 999999, 20, 1000)" in name and not ok for name, ok, _ in broken_cases2)
+    _case(cases, "red-check translate_tid without the tgid check fails the tgid mismatch case", caught, "broken cases %r" % (broken_cases2,))
 
 
 def _selftest_parked_bw(cases):
     """check the bandwidth parked by a revoke"""
-    _case(cases, "the default 4.19s period parks a revoke at zero bandwidth",
+    _case(cases, "parked_bw_units(4194304 us) == 0",
           parked_bw_units(4194304 * 1000) == 0)
-    _case(cases, "a 1s period max leaves one unit per revoke, which startup reports",
+    _case(cases, "parked_bw_units(1 s) == 1",
           parked_bw_units(1000 * 1000 * 1000) == 1)
 
 
@@ -3516,13 +3503,13 @@ def _selftest_self_reserve(cases):
     """test the SCHED_DEADLINE reservation for rhizo-rtd"""
     global sched_setattr, reserve_self
     bw = bandwidth(SELF_RESERVE_RUNTIME_NS, SELF_RESERVE_PERIOD_NS)
-    _case(cases, "the self-reservation is a small share of one CPU", 0 < bw <= 0.05, "got %.4f" % bw)
+    _case(cases, "0 < bandwidth(SELF_RESERVE_RUNTIME_NS, SELF_RESERVE_PERIOD_NS) <= 0.05", 0 < bw <= 0.05, "got %.4f" % bw)
 
     real_setattr = sched_setattr
     captured = []
 
     def fake_setattr(tid, policy, flags=0, nice=0, priority=0, runtime=0, deadline=0, period=0):
-        """record the scheduler call and report success"""
+        """record the scheduler call and return (True, 0)"""
         captured.append((tid, policy, flags, runtime, deadline, period))
         return True, 0
 
@@ -3531,7 +3518,7 @@ def _selftest_self_reserve(cases):
         ok, errno = reserve_self(4242, 2_000_000, 16_666_667)
     finally:
         sched_setattr = real_setattr
-    _case(cases, "reserve_self grants SCHED_DEADLINE with RECLAIM set and RESET_ON_FORK clear",
+    _case(cases, "reserve_self(4242, 2ms, P) calls sched_setattr(4242, SCHED_DEADLINE, SCHED_FLAG_RECLAIM, 2ms, P, P)",
           ok and errno == 0
           and captured == [(4242, SCHED_DEADLINE, SCHED_FLAG_RECLAIM, 2_000_000, 16_666_667, 16_666_667)],
           "captured %r" % (captured,))
@@ -3545,13 +3532,13 @@ def _selftest_self_reserve(cases):
         with tempfile.TemporaryDirectory() as tmp:
             d = Daemon(os.path.join(tmp, "rtd"), os.path.join(tmp, "status.json"), 25, self_reserve=True)
             d._reserve_self()
-            _case(cases, "self_reserve on: reserve_self is called once for this process' own pid",
+            _case(cases, "_reserve_self() with self_reserve calls reserve_self(os.getpid())",
                   calls == [(os.getpid(), SELF_RESERVE_RUNTIME_NS, SELF_RESERVE_PERIOD_NS)],
                   "calls %r" % (calls,))
             d.write_status()
             with open(d.status_path) as f:
                 status = json.load(f)
-            _case(cases, "a granted self-reservation is reported in status.json",
+            _case(cases, "status.json self_reservation == {runtime_ns, period_ns, granted: True}",
                   status.get("self_reservation") == {"runtime_ns": SELF_RESERVE_RUNTIME_NS,
                                                       "period_ns": SELF_RESERVE_PERIOD_NS, "granted": True},
                   "got %r" % status.get("self_reservation"))
@@ -3568,7 +3555,7 @@ def _selftest_self_reserve(cases):
             with open(d.status_path) as f:
                 status = json.load(f)
             sr = status.get("self_reservation")
-            _case(cases, "a refused self-reservation is reported, errno and all, and the daemon keeps running",
+            _case(cases, "status.json self_reservation == {runtime_ns, period_ns, granted: False, errno: 11}",
                   sr == {"runtime_ns": SELF_RESERVE_RUNTIME_NS, "period_ns": SELF_RESERVE_PERIOD_NS,
                          "granted": False, "errno": 11},
                   "got %r" % sr)
@@ -3581,25 +3568,25 @@ def _selftest_self_reserve(cases):
         d.write_status()
         with open(d.status_path) as f:
             status = json.load(f)
-        _case(cases, "self_reserve off: status.json carries no self_reservation key at all",
+        _case(cases, "status.json with self_reserve False has no self_reservation key",
               "self_reservation" not in status, "got keys %r" % sorted(status))
 
 
 def _selftest_slices(cases):
-    """check how pool caps are sliced between tenants"""
+    """test plan_slices, tenant_weight and parse_cpu_max"""
     two = plan_slices({"A": (1.0, True), "B": (1.0, True)}, 1.0, 0.4)
-    _case(cases, "slice: equal weights split each pool's cap equally",
+    _case(cases, "plan_slices({A: (1.0, True), B: (1.0, True)}, 1.0, 0.4) == {A: (0.5, 0.2), B: (0.5, 0.2)}",
           two == {"A": (0.5, 0.2), "B": (0.5, 0.2)}, "got %r" % (two,))
     prop = plan_slices({"A": (1.0, False), "B": (3.0, False)}, 1.0, 0.4)
-    _case(cases, "slice: each pool's cap is split in proportion to the tenants' configured cpu.max",
+    _case(cases, "plan_slices({A: (1.0, False), B: (3.0, False)}, 1.0, 0.4) == {A: (0.25, 0.1), B: (0.75, 0.3)}",
           abs(prop["A"][0] - 0.25) < 1e-12 and abs(prop["B"][0] - 0.75) < 1e-12
           and abs(prop["A"][1] - 0.1) < 1e-12 and abs(prop["B"][1] - 0.3) < 1e-12, "got %r" % (prop,))
-    _case(cases, "slice: the slices of uncapped tenants sum to the host cap",
+    _case(cases, "sum of uncapped budgets slices == 1.0",
           abs(sum(v[0] for v in prop.values()) - 1.0) < 1e-12)
-    _case(cases, "slice: max and no cpu.max weigh as the online cpu count, a quota as quota over period",
+    _case(cases, "tenant_weight((None, 100000), 8) == tenant_weight(None, 8) == 8.0 and tenant_weight((150000, 100000), 8) == 1.5",
           tenant_weight((None, 100000), 8) == 8.0 and tenant_weight(None, 8) == 8.0
           and tenant_weight((150000, 100000), 8) == 1.5, "got %r" % (tenant_weight((150000, 100000), 8),))
-    _case(cases, "slice: a cpu.max line parses to (quota, period) and max to a None quota",
+    _case(cases, "parse_cpu_max('100000 100000') == (100000, 100000) and parse_cpu_max('max 100000') == (None, 100000)",
           parse_cpu_max("100000 100000\n") == (100000, 100000) and parse_cpu_max("max 100000") == (None, 100000)
           and format_cpu_max((None, 100000)) == "max 100000", "got %r" % (parse_cpu_max("max 100000"),))
     bad = []
@@ -3609,14 +3596,14 @@ def _selftest_slices(cases):
             bad.append(line)
         except ValueError:
             pass
-    _case(cases, "slice: a malformed cpu.max line is refused", not bad, "parsed %r" % (bad,))
+    _case(cases, "parse_cpu_max raises ValueError for '', 'max', '1 0', 'x 100' and '1 2 3'", not bad, "parsed %r" % (bad,))
     capped = plan_slices({"A": (1.0, True), "B": (4.0, False)}, 4.0, 2.0)
-    _case(cases, "slice: a capped tenant's two slices are scaled together to 0.9 of its weight, an uncapped one's are not",
+    _case(cases, "plan_slices({A: (1.0, True), B: (4.0, False)}, 4.0, 2.0) sums A to 0.9 at ratio 2.0 and B == (3.2, 1.6)",
           abs(sum(capped["A"]) - 0.9) < 1e-12 and abs(capped["A"][0] / capped["A"][1] - 2.0) < 1e-9
           and capped["B"] == (3.2, 1.6), "got %r" % (capped,))
     one = plan_slices({"A": (8.0, False)}, 2.0, 0.8)
-    _case(cases, "slice: one uncapped tenant gets the whole of each pool", one == {"A": (2.0, 0.8)}, "got %r" % (one,))
-    _case(cases, "slice: a tenant's pool with the capability off has a zero slice",
+    _case(cases, "plan_slices({A: (8.0, False)}, 2.0, 0.8) == {A: (2.0, 0.8)}", one == {"A": (2.0, 0.8)}, "got %r" % (one,))
+    _case(cases, "plan_slices({A: (1.0, True)}, 0.5, 0.0) == {A: (0.5, 0.0)}",
           plan_slices({"A": (1.0, True)}, 0.5, 0.0) == {"A": (0.5, 0.0)})
 
 
@@ -3624,7 +3611,7 @@ class _SchedLog:
     """log of sched_setattr and revoke calls"""
 
     def __init__(self, probe=lambda: None):
-        """start with no recorded calls and the given probe"""
+        """set calls to [] and store probe"""
         self.calls = []
         self.probe = probe
 
@@ -3675,7 +3662,7 @@ def _two_tenant_tree(a_app_tids=(101, 102), a_fifo=(111, 112, 113), b_fifo=(211,
 
 
 def _two_tenant_daemon(tmp, view, now, cpu_a="max 100000", cpu_b="max 100000", cap_bw=1.0, contain_cap_bw=0.0):
-    """build rhizo-rtd over the two tenant tree"""
+    """return a Daemon over view with cpu.max files for /rhizo and androidd@1.service"""
     for rel, text in (("rhizo", cpu_a), ("system.slice/androidd@1.service", cpu_b)):
         os.makedirs(os.path.join(tmp, "cg", rel))
         with open(os.path.join(tmp, "cg", rel, "cpu.max"), "w") as f:
@@ -3708,11 +3695,11 @@ def _add_session(d, conn_id, tgid, uid, tids, history_ns, share, now, period=10_
 
 
 def _selftest_tenant_isolation(cases):
-    """check that tenants do not affect each other's grants"""
+    """test tenant B grants at two tenant A loads"""
     import tempfile
 
     def run(a_hist_ns, a_tids):
-        """run two tenants and return what was granted"""
+        """return B grants, A granted bandwidth and refusal lines after tick()"""
         with tempfile.TemporaryDirectory() as tmp, _SchedLog():
             now = [100.0]
             d = _two_tenant_daemon(tmp, _two_tenant_tree(a_app_tids=a_tids), now)
@@ -3724,14 +3711,14 @@ def _selftest_tenant_isolation(cases):
             return b, a_bw, list(d.refusals.snapshot())
     quiet_b, quiet_a, _ = run(2_000_000, (101, 102))
     greedy_b, greedy_a, lines = run(30_000_000, (101, 102, 103, 104, 105, 106))
-    _case(cases, "tenants: tenant A asking 10x more and adding threads leaves tenant B's planned grants identical",
+    _case(cases, "B grants with A at 2ms x 2 threads == B grants with A at 30ms x 6 threads",
           quiet_b == greedy_b and len(quiet_b) == 2, "quiet %r greedy %r" % (quiet_b, greedy_b))
-    _case(cases, "tenants: tenant A's own grants are held to its slice of the cap, not to the whole cap",
+    _case(cases, "A granted bandwidth < 0.5 at 2ms x 2 threads and in [0.49, 0.5] at 30ms x 6 threads",
           quiet_a < 0.5 and 0.49 <= greedy_a <= 0.5 + 1e-6, "quiet %.4f greedy %.4f" % (quiet_a, greedy_a))
-    _case(cases, "tenants: the cap line for the squeezed tenant names its pool and tenant after the old fields",
+    _case(cases, "cap line for A matches cap: requested= granted= cap=0.500000 pool=budgets tenant=/rhizo",
           any(l.startswith("cap: requested=") and " granted=" in l and " cap=0.500000 pool=budgets tenant=/rhizo" in l
               for l in lines), "lines %r" % (lines,))
-    _case(cases, "tenants: the cap line formatter appends pool and tenant without moving the old fields",
+    _case(cases, "record_cap_decision(1.0, 0.5, 0.5, contain, /x) == cap: requested=1.000000 granted=0.500000 cap=0.500000 pool=contain tenant=/x",
           "cap: requested=1.000000 granted=0.500000 cap=0.500000 pool=contain tenant=/x"
           == (lambda r: (record_cap_decision(r, 1.0, 0.5, 0.5, "contain", "/x"), r.snapshot()[0])[1])(RefusalLog()))
 
@@ -3755,55 +3742,54 @@ def _selftest_tenant_hysteresis(cases):
         d.view = FakeProcView(procs, {100: [101, 102]})
 
         def held():
-            """set up the first tenant's granted threads"""
+            """reset sl.calls, grants and grant_tenant for tenant A"""
             del sl.calls[:]
             d.grants = {101: (210_000, p, "other:0"), 102: (190_000, p, "other:0")}
             d.grant_tenant = {101: "A", 102: "A"}
         plan = {101: (195_000, p), 102: (190_000, p)}
         held()
         d._apply(plan, 10.0, 0.5, "A")
-        _case(cases, "tenant hysteresis: a 7% decrease is kept while the tenant's set fits its slice",
+        _case(cases, "_apply(7% decrease, slice 0.5, A) calls nothing",
               sl.calls == [], "calls %r" % (sl.calls,))
         held()
         d._apply(plan, 10.0, 0.039, "A")
-        _case(cases, "tenant hysteresis: the same decrease is applied when the set passes the tenant's slice, "
-                     "though the host cap is not passed",
+        _case(cases, "_apply(7% decrease, slice 0.039, A) grants {101: 195000}",
               sl.grants() == {101: 195_000}, "calls %r" % (sl.calls,))
         held()
         d.grants[103] = (1_000_000, p, "other:0")
         d.grant_tenant[103] = "B"
         d._apply({}, 10.0, 0.5, "A")
-        _case(cases, "tenant hysteresis: planning one tenant never revokes another's grants",
+        _case(cases, "_apply({}, A) revokes 101 and 102 and leaves 103 of tenant B in grants",
               sorted(sl.grants("revoke")) == [101, 102] and 103 in d.grants, "calls %r" % (sl.calls,))
 
 
 def _selftest_carve_math(cases):
     """check the carve math"""
     s = CARVE_STEP_BW
-    _case(cases, "carve: reservations are quantized up to a whole step",
+    _case(cases, "quantize_carve(0, 0.012, 0.25, 0.2501) == (0, 0.05, 0.25, 0.30)",
           quantize_carve(0.0) == 0.0 and abs(quantize_carve(0.012) - s) < 1e-12
           and abs(quantize_carve(0.25) - 0.25) < 1e-12 and abs(quantize_carve(0.2501) - 0.30) < 1e-12,
           "got %r %r %r" % (quantize_carve(0.012), quantize_carve(0.25), quantize_carve(0.2501)))
     first = next_carve(0.0, 0.25, -math.inf, 100.0, 0.9)
-    _case(cases, "carve: reservations past the carve lower the quota at once, with one step of headroom",
+    _case(cases, "next_carve(0.0, 0.25, -inf, 100, 0.9) == 0.30",
           abs(first - 0.30) < 1e-12, "got %r" % first)
-    _case(cases, "carve: reservations inside the carve write nothing",
+    _case(cases, "next_carve(0.30, 0.28, ...) is None and next_carve(0.30, 0.25, ...) is None",
           next_carve(0.30, 0.28, -math.inf, 100.0, 0.9) is None and next_carve(0.30, 0.25, -math.inf, 100.0, 0.9) is None)
-    _case(cases, "carve: a fall of one step does not raise the quota, a fall of two does",
+    _case(cases, "next_carve(0.30, 0.25, ...) is None and next_carve(0.30, 0.20, ...) == 0.25",
           next_carve(0.30, 0.25, -math.inf, 100.0, 0.9) is None
           and abs(next_carve(0.30, 0.20, -math.inf, 100.0, 0.9) - 0.25) < 1e-12,
           "got %r %r" % (next_carve(0.30, 0.25, -math.inf, 100.0, 0.9), next_carve(0.30, 0.20, -math.inf, 100.0, 0.9)))
-    _case(cases, "carve: a raise within 10 s of the last one waits, one after it goes",
+    _case(cases, "next_carve(0.30, 0.0, 95.0, 100.0, 0.9) is None and next_carve(0.30, 0.0, 85.0, 100.0, 0.9) == 0.0",
           next_carve(0.30, 0.0, 95.0, 100.0, 0.9) is None and next_carve(0.30, 0.0, 85.0, 100.0, 0.9) == 0.0)
-    _case(cases, "carve: the carve never passes 0.9 of the limit unless the reservations themselves do",
+    _case(cases, "next_carve(0.0, 0.88, -inf, 0.0, 0.9) == 0.9 and next_carve(0.0, 0.95, -inf, 0.0, 0.9) == 0.95",
           next_carve(0.0, 0.88, -math.inf, 0.0, 0.9) == 0.9 and next_carve(0.0, 0.95, -math.inf, 0.0, 0.9) == 0.95,
           "got %r %r" % (next_carve(0.0, 0.88, -math.inf, 0.0, 0.9), next_carve(0.0, 0.95, -math.inf, 0.0, 0.9)))
-    _case(cases, "carve: the quota written is the configured one less the carve, in whole microseconds",
+    _case(cases, "carve_quota_us((100000, 100000), 0.30) == 70000 and carve_quota_us((50000, 100000), 0.125) == 37500",
           carve_quota_us((100000, 100000), 0.30) == 70000 and carve_quota_us((50000, 100000), 0.125) == 37500)
-    _case(cases, "carve: the quota is never written under the kernel's 1000us minimum or above the configured one",
+    _case(cases, "carve_quota_us((20000, 100000), 0.9) == CPU_MAX_MIN_QUOTA_US and carve_quota_us((500, 100000), 0.3) == 500",
           carve_quota_us((20000, 100000), 0.9) == CPU_MAX_MIN_QUOTA_US and carve_quota_us((500, 100000), 0.3) == 500,
           "got %r %r" % (carve_quota_us((20000, 100000), 0.9), carve_quota_us((500, 100000), 0.3)))
-    _case(cases, "tenant cgroup: a unit's android/init, a bare init leaf and a bare android child all name the ceiling",
+    _case(cases, "ceiling_cgroup('/rhizo/init') == '/rhizo', ceiling_cgroup('/u/androidd@2.service/android') == '/u/androidd@2.service' and ceiling_cgroup('/init') is None",
           ceiling_cgroup("/system.slice/androidd@1.service/android/init") == "/system.slice/androidd@1.service"
           and ceiling_cgroup("/rhizo/init") == "/rhizo" and ceiling_cgroup("/rhizo") == "/rhizo"
           and ceiling_cgroup("/u/androidd@2.service/android") == "/u/androidd@2.service"
@@ -3830,20 +3816,20 @@ def _selftest_carve_daemon(cases):
             _add_session(d, 2, 200, 10060, [201], 2_000_000, 0.5, now)
             d.tick()
             at_grant = {c[1]: c[4] for c in sl.calls if c[0] == "grant"}
-            _case(cases, "carve: the quota is lowered by the reservation, one step of headroom included, before the first grant",
+            _case(cases, "cpu.max == '70000 100000' at the sched_setattr of 101 and 102",
                   at_grant.get(101) == "70000 100000" and at_grant.get(102) == "70000 100000"
                   and _read_file(cpu_a) == "70000 100000", "at grant %r file %r" % (at_grant, _read_file(cpu_a)))
             writes = [m for m in d.carve_lines if m.startswith("carve: tenant=/rhizo ")]
-            _case(cases, "carve: a batch of grants costs one cpu.max write, and the log line names reserved, quota and configured",
+            _case(cases, "one carve: tenant=/rhizo line == carve: tenant=/rhizo reserved=0.250000 cpu.max=70000 100000 configured=100000 100000",
                   len(writes) == 1 and writes[0].startswith("carve: tenant=/rhizo reserved=0.250000 cpu.max=70000 100000 "
                                                             "configured=100000 100000"), "lines %r" % (d.carve_lines,))
-            _case(cases, "carve: the carve covers every reservation the kernel holds for the tenant",
+            _case(cases, "100000 - cpu.max quota >= reserved_bw('/rhizo') * 100000 > 0",
                   100000 - int(_read_file(cpu_a).split()[0]) >= d.reserved_bw("/rhizo") * 100000 > 0,
                   "reserved %r file %r" % (d.reserved_bw("/rhizo"), _read_file(cpu_a)))
             other = _read_file(os.path.join(tmp, "cg", "system.slice", "androidd@1.service", "cpu.max"))
-            _case(cases, "carve: another tenant's quota moves only for its own reservations",
+            _case(cases, "androidd@1.service cpu.max == '180000 100000'",
                   other == "180000 100000", "got %r" % other)
-            _case(cases, "carve: a persistent record names the cgroup, its configured value and what was written",
+            _case(cases, "carve.json carve['/rhizo'] == {configured: '100000 100000', written: '70000 100000'}",
                   json.load(open(os.path.join(tmp, "carve.json")))["carve"].get("/rhizo") ==
                   {"configured": "100000 100000", "written": "70000 100000"},
                   "got %r" % (_read_file(os.path.join(tmp, "carve.json")),))
@@ -3855,7 +3841,7 @@ def _selftest_carve_daemon(cases):
                 d.connections[2].sessions["2"].last_actual = now[0]
             d.tick()
             at_revoke = [c[4] for c in sl.calls if c[0] == "revoke"]
-            _case(cases, "carve: the quota goes up only after the revoke has landed, and keeps a step of headroom",
+            _case(cases, "cpu.max == '70000 100000' at the revoke and '80000 100000' after",
                   at_revoke == ["70000 100000"] and _read_file(cpu_a) == "80000 100000",
                   "at revoke %r file %r" % (at_revoke, _read_file(cpu_a)))
             now[0] += 5.0
@@ -3868,7 +3854,7 @@ def _selftest_carve_daemon(cases):
             s.last_actual = now[0]
             d.connections[2].sessions["2"].last_actual = now[0]
             d.tick()
-            _case(cases, "carve: a raise within 10 s of the last one waits, and the configured quota is restored once the reservations end",
+            _case(cases, "cpu.max == '80000 100000' at 5 s and '100000 100000' at 11 s with a carve-restore line",
                   held_back == "80000 100000" and _read_file(cpu_a) == "100000 100000"
                   and any(m == "carve-restore: tenant=/rhizo cpu.max=100000 100000" for m in d.carve_lines),
                   "waiting %r then %r lines %r" % (held_back, _read_file(cpu_a), d.carve_lines))
@@ -3879,10 +3865,10 @@ def _selftest_carve_daemon(cases):
             lowered = _read_file(cpu_a)
             d.revoke_everything()
             d.carve.restore_all()
-            _case(cases, "carve: the daemon's exit restores every configured quota after its grants are revoked",
+            _case(cases, "revoke_everything() and restore_all() write each configured cpu.max and leave grants == {}",
                   lowered == "70000 100000" and _read_file(cpu_a) == "100000 100000"
                   and _read_file(os.path.join(tmp, "cg", "system.slice", "androidd@1.service", "cpu.max")) == "200000 100000"
-                  and not d.grants, "lowered %r now %r" % (lowered, _read_file(cpu_a)))
+                  and not d.grants, "lowered %r after %r" % (lowered, _read_file(cpu_a)))
             now[0] += 1.0
             for ss in (s, d.connections[2].sessions["2"]):
                 ss.last_actual = now[0]
@@ -3892,16 +3878,16 @@ def _selftest_carve_daemon(cases):
             now[0] += 1.0
             d.refresh_tenants()
             st = d.carve.states["/rhizo"]
-            _case(cases, "carve: a live cpu.max that is not what was written is adopted as the configured value",
+            _case(cases, "a live cpu.max != written sets configured to (50000, 100000) and written to None",
                   st.configured == (50000, 100000) and st.written is None
                   and d.carve.configured_weight("/rhizo", 4) == 0.5
-                  and any("adopting it as configured" in m for m in d.carve_lines),
+                  and any("configured=live" in m for m in d.carve_lines),
                   "configured %r written %r lines %r" % (st.configured, st.written, d.carve_lines[-2:]))
             now[0] += 1.0
             for ss in (s, d.connections[2].sessions["2"]):
                 ss.last_actual = now[0]
             d.tick()
-            _case(cases, "carve: reservations held across an adoption lower the adopted quota again",
+            _case(cases, "cpu.max == '20000 100000' after tick() with configured (50000, 100000)",
                   _read_file(cpu_a) == "20000 100000",
                   "file %r" % _read_file(cpu_a))
             d.revoke_everything()
@@ -3913,13 +3899,13 @@ def _selftest_carve_daemon(cases):
             import shutil
             shutil.rmtree(os.path.join(tmp, "cg", "rhizo"))
             d.refresh_tenants()
-            _case(cases, "carve: a tenant whose namespace and cgroup are gone is released without an error",
-                  "/rhizo" not in d.carve.states and not any("cannot" in m for m in d.carve_lines),
+            _case(cases, "refresh_tenants() with /rhizo gone deletes carve.states['/rhizo'] and no carve line contains failed",
+                  "/rhizo" not in d.carve.states and not any("failed" in m for m in d.carve_lines),
                   "states %r lines %r" % (sorted(d.carve.states), d.carve_lines[-2:]))
 
 
 def _selftest_carve_recover(cases):
-    """check recovery of the carve record"""
+    """test CarveBook.recover on carve.json"""
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         for name in ("a", "b"):
@@ -3934,13 +3920,13 @@ def _selftest_carve_recover(cases):
         lines = []
         book = CarveBook(os.path.join(tmp, "cg"), record, log_fn=lines.append)
         book.recover()
-        _case(cases, "carve: a restart restores a recorded quota whose live value is still the one written",
+        _case(cases, "recover() writes configured '100000 100000' to /a with live == written",
               _read_file(os.path.join(tmp, "cg", "a", "cpu.max")) == "100000 100000", "lines %r" % (lines,))
-        _case(cases, "carve: a restart leaves a quota someone else rewrote since, and a cgroup that is gone, alone",
+        _case(cases, "recover() leaves /b at '30000 100000' with live != written and logs cpu.max not found for /gone",
               _read_file(os.path.join(tmp, "cg", "b", "cpu.max")) == "30000 100000"
-              and any("left alone" in m for m in lines) and any("cgroup is gone" in m for m in lines),
+              and any("skipped live=" in m for m in lines) and any("cpu.max not found" in m for m in lines),
               "lines %r" % (lines,))
-        _case(cases, "carve: the record is empty once recovery is done", json.load(open(record)) == {"carve": {}, "grants": []})
+        _case(cases, "carve.json == {carve: {}, grants: []} after recover()", json.load(open(record)) == {"carve": {}, "grants": []})
 
 
 def _selftest_no_reclaim(cases):
@@ -3953,14 +3939,14 @@ def _selftest_no_reclaim(cases):
         _add_session(d, 2, 200, 10060, [201], 2_000_000, 0.5, now)
         d.tick()
         flags = {c[1]: c[3] for c in sl.calls if c[0] == "grant"}
-        _case(cases, "reclaim: a capped tenant's threads are granted with RESET_ON_FORK | RECLAIM until it overruns",
+        _case(cases, "capped tenant grant flags == SCHED_FLAG_RESET_ON_FORK | SCHED_FLAG_RECLAIM",
               flags.get(101) == SCHED_FLAG_RESET_ON_FORK | SCHED_FLAG_RECLAIM, "flags %r" % (flags,))
-        _case(cases, "reclaim: an uncapped tenant's threads keep RESET_ON_FORK | RECLAIM",
+        _case(cases, "uncapped tenant grant flags == SCHED_FLAG_RESET_ON_FORK | SCHED_FLAG_RECLAIM",
               flags.get(201) == SCHED_FLAG_RESET_ON_FORK | SCHED_FLAG_RECLAIM, "flags %r" % (flags,))
         d.write_status()
         status = json.load(open(d.status_path))
         a, b = status["tenants"]["/rhizo"], status["tenants"]["/system.slice/androidd@1.service"]
-        _case(cases, "status: tenants map each cgroup to its namespace, weight, slices, reservation, cpu.max and reclaim",
+        _case(cases, "status.json tenants['/rhizo'] keys == tenants_status() keys with ns_ino 701, weight 1.0 and cpu_max_written '80000 100000'",
               set(a) == {"ns_ino", "weight", "slice_budgets", "slice_contain", "reserved_bw", "cpu_max_configured",
                          "cpu_max_written", "reclaim", "reclaim_revoked_at", "dl_cpu_ns", "request_p50",
                          "request_p95", "request_max", "request_samples", "request_window_s", "request_windows",
@@ -3970,25 +3956,25 @@ def _selftest_no_reclaim(cases):
               and a["reclaim_revoked_at"] is None and b["reclaim_revoked_at"] is None
               and b["weight"] == 4.0 and b["cpu_max_written"] is None and b["reclaim"] is True
               and abs(a["slice_budgets"] - 0.4) < 1e-9, "a %r b %r" % (a, b))
-        _case(cases, "status: every existing key is still there",
+        _case(cases, "status.json has cpus, cap_percent, cap_bw, granted_bw, grants, sessions and refusals",
               all(k in status for k in ("cpus", "cap_percent", "cap_bw", "granted_bw", "grants", "sessions", "refusals")),
               "keys %r" % sorted(status))
         d.view.procs[101]["schedstat"] += 7_000
         d.view.procs[201]["schedstat"] += 3_000
         d.sweep()
-        _case(cases, "status: dl_cpu_ns sums a tenant's schedstat growth while its threads held a grant",
+        _case(cases, "dl_cpu_ns == {/rhizo: 7000, androidd@1.service: 3000} after sweep()",
               d.dl_cpu_ns.get("/rhizo") == 7_000 and d.dl_cpu_ns.get("/system.slice/androidd@1.service") == 3_000,
               "got %r" % (d.dl_cpu_ns,))
 
 
 def _mark_deadline(d):
-    """mark the granted threads SCHED_DEADLINE"""
+    """set sched to SCHED_DEADLINE for each tid in grants and contain_grants"""
     for tid in list(d.grants) + list(d.contain_grants):
         d.view.procs[tid]["sched"] = (SCHED_DEADLINE, 0, 0)
 
 
 def _selftest_demand(cases):
-    """test each tenant's planned budgets against its slice"""
+    """test each tenant's planned budgets against the tenant slice"""
     import tempfile
     global log
     real_log, lines = log, []
@@ -4002,7 +3988,7 @@ def _selftest_demand(cases):
             sb = _add_session(d, 2, 200, 10060, [201], 16_000_000, 0.5, now)
 
             def window(pause_tick=None):
-                """plan four times and close the sweep window"""
+                """call tick() 4 times and sweep(), and return tenants_status() and demand-over-slice lines"""
                 mark = len(lines)
                 for i in range(4):
                     now[0] += 0.25
@@ -4016,40 +4002,40 @@ def _selftest_demand(cases):
             d.sweep()
             st, over = window()
             a, b = st[a_key], st[b_key]
-            _case(cases, "demand: status carries each tenant's planned budgets request over the last window beside its slice",
+            _case(cases, "tenants_status() request_* fields == four plans of 0.25 for A and request_p95 0.9 for B",
                   a["request_samples"] == 4 and abs(a["request_window_s"] - 1.0) < 1e-9 and a["request_windows"] == 2
                   and abs(a["request_p50"] - 0.25) < 1e-9 and abs(a["request_p95"] - 0.25) < 1e-9
                   and abs(a["request_max"] - 0.25) < 1e-9 and abs(a["slice_budgets"] - 0.2) < 1e-9
                   and abs(b["request_p95"] - 0.9) < 1e-9 and abs(b["slice_budgets"] - 0.8) < 1e-9, "a %r b %r" % (a, b))
-            _case(cases, "demand: a capped tenant whose every plan in a window asked past its slice is counted and logged",
+            _case(cases, "A windows_over_slice == 1 and one demand-over-slice line",
                   a["windows_over_slice"] == 1
                   and over == ["demand-over-slice: tenant=/rhizo p50=0.250 p95=0.250 max=0.250 slice=0.200 windows=1"],
                   "a %r lines %r" % (a, over))
-            _case(cases, "demand: an uncapped tenant asking past its slice is never counted or logged",
+            _case(cases, "B windows_over_slice == 0 and no demand-over-slice line for B",
                   b["windows_over_slice"] == 0
                   and not any(m.startswith("demand-over-slice: tenant=" + b_key) for m in lines), "b %r" % (b,))
             st, over = window(pause_tick=2)
-            _case(cases, "demand: one plan inside the slice in a window keeps that window from counting",
+            _case(cases, "A windows_over_slice == 1 after a window with one paused plan",
                   st[a_key]["windows_over_slice"] == 1 and not over and st[a_key]["request_p50"] == 0.25
                   and st[a_key]["request_samples"] == 4, "a %r lines %r" % (st[a_key], over))
             logged = []
             for _ in range(10):
                 st, over = window()
                 logged.append(over)
-            _case(cases, "demand: the line is rate-limited to one per 10 s per tenant while every window is counted",
+            _case(cases, "windows_over_slice == 11 and one demand-over-slice line per DEMAND_LOG_MIN_S over 10 windows",
                   st[a_key]["windows_over_slice"] == 11 and not any(logged[:8]) and not logged[9]
                   and logged[8] == ["demand-over-slice: tenant=/rhizo p50=0.250 p95=0.250 max=0.250 slice=0.200 windows=10"],
                   "a %r lines %r" % (st[a_key], logged))
             del d.connections[1].sessions["1"]
             st, over = window()
-            _case(cases, "demand: a tenant with nothing to plan reports a zero request for the window, not its last busy one",
+            _case(cases, "A request_max == 0.0 and request_samples == 4 with no session",
                   st[a_key]["request_max"] == 0.0 and st[a_key]["request_samples"] == 4 and not over,
                   "a %r" % (st[a_key],))
             for i in range(1, 21):
                 d._sample_demand({a_key: i / 100}, {a_key: (0.2, 0.0)})
             d._close_demand_window(now[0])
             last = d.demand_last[a_key]
-            _case(cases, "demand: p50 and p95 are nearest-rank over the window's plans",
+            _case(cases, "demand_last p50, p95, max, samples == (0.10, 0.19, 0.20, 20)",
                   (last["p50"], last["p95"], last["max"], last["samples"]) == (0.10, 0.19, 0.20, 20), "got %r" % (last,))
     finally:
         log = real_log
@@ -4058,11 +4044,11 @@ def _selftest_demand(cases):
 def _selftest_hard_grants(cases):
     """test HARD_PERIOD_NS grants for non-RECLAIM tenants"""
     import tempfile
-    _case(cases, "hard grant: a long period becomes HARD_PERIOD_NS at the same bandwidth, rounded down",
+    _case(cases, "hard_grant(2.5ms, 10ms) == (500us, HARD_PERIOD_NS) and hard_grant(3333334, 16666667) == (3333334 * HARD_PERIOD_NS // 16666667, HARD_PERIOD_NS)",
           hard_grant(2_500_000, 10_000_000) == (500_000, HARD_PERIOD_NS)
           and hard_grant(3_333_334, 16_666_667) == (3_333_334 * HARD_PERIOD_NS // 16_666_667, HARD_PERIOD_NS),
           "got %r %r" % (hard_grant(2_500_000, 10_000_000), hard_grant(3_333_334, 16_666_667)))
-    _case(cases, "hard grant: a period at or under HARD_PERIOD_NS is kept, and a runtime never drops under the kernel's minimum",
+    _case(cases, "hard_grant(rt, period <= HARD_PERIOD_NS) == (rt, period) and hard_grant(2us, 1 s) == (DL_RUNTIME_MIN_NS, HARD_PERIOD_NS)",
           hard_grant(300_000, HARD_PERIOD_NS) == (300_000, HARD_PERIOD_NS) and hard_grant(900_000, 1_000_000) == (900_000, 1_000_000)
           and hard_grant(2_000, 1_000_000_000) == (DL_RUNTIME_MIN_NS, HARD_PERIOD_NS),
           "got %r" % (hard_grant(2_000, 1_000_000_000),))
@@ -4080,10 +4066,10 @@ def _selftest_hard_grants(cases):
             d.tick()
             got = {c[1]: (c[2], c[5], c[3]) for c in sl.calls if c[0] == "grant"}
             want_a = hard_grant(1_250_000, 10_000_000)
-            _case(cases, "hard grant: a tenant without RECLAIM is planned at HARD_PERIOD_NS with its thread's bandwidth",
+            _case(cases, "grant of 101 in a reclaim-revoked tenant == hard_grant(1.25ms, 10ms) with SCHED_FLAG_RESET_ON_FORK",
                   got.get(101) == want_a + (SCHED_FLAG_RESET_ON_FORK,) and d.grants[101][:2] == want_a,
                   "got %r" % (got,))
-            _case(cases, "hard grant: a tenant keeping RECLAIM keeps its frame-sized period",
+            _case(cases, "grant of 201 == (1.25ms, 10ms, SCHED_FLAG_RESET_ON_FORK | SCHED_FLAG_RECLAIM)",
                   got.get(201) == (1_250_000, 10_000_000, SCHED_FLAG_RESET_ON_FORK | SCHED_FLAG_RECLAIM),
                   "got %r" % (got,))
             mark = len(sl.calls)
@@ -4091,7 +4077,7 @@ def _selftest_hard_grants(cases):
                 now[0] += 0.2
                 sa.last_actual = sb.last_actual = now[0]
                 d.tick()
-            _case(cases, "hard grant: an unchanged plan at the hard period makes no further kernel call",
+            _case(cases, "sl.calls[mark:] == [] after three tick() calls",
                   sl.calls[mark:] == [], "calls %r" % (sl.calls[mark:],))
     finally:
         log = real_log
@@ -4122,7 +4108,7 @@ def _selftest_reclaim_revoke(cases):
             _mark_deadline(d)
             flags = {c[1]: c[3] for c in sl.calls if c[0] == "grant"}
             keep = SCHED_FLAG_RESET_ON_FORK | SCHED_FLAG_RECLAIM
-            _case(cases, "reclaim: a capped honest tenant keeps RECLAIM on both pools",
+            _case(cases, "_reclaim_for('/rhizo') and grant flags == RESET_ON_FORK | RECLAIM for 101, 111, 112 and 113",
                   d._reclaim_for(a_key) and not d.reclaim_revoked
                   and flags.get(101) == keep and set(d.contain_grants) >= {111, 112, 113}
                   and all(flags.get(t) == keep for t in (111, 112, 113)),
@@ -4138,7 +4124,7 @@ def _selftest_reclaim_revoke(cases):
             d.sweep()
             _mark_deadline(d)
             off = [m for m in lines[mark_log:] if m.startswith("reclaim-off: tenant=/rhizo used=")]
-            _case(cases, "reclaim: a window over reservation plus margin revokes a capped tenant's RECLAIM and logs reclaim-off",
+            _case(cases, "used > reserved + RECLAIM_OVERRUN_MARGIN sets reclaim_revoked['/rhizo'] and logs one reclaim-off line",
                   not d._reclaim_for(a_key) and d.reclaim_revoked.get(a_key) == now[0] and len(off) == 1
                   and " reserved=" in off[0], "revoked %r log %r" % (d.reclaim_revoked, off))
             after = [c for c in sl.calls[mark:] if c[0] == "grant"]
@@ -4147,29 +4133,28 @@ def _selftest_reclaim_revoke(cases):
                 if c[1] in held:
                     regrants.setdefault(c[1], (c[2], c[5], c[3]))
             no_reclaim = all(c[3] == SCHED_FLAG_RESET_ON_FORK for c in after if c[1] in held)
-            _case(cases, "reclaim: a revoked tenant's held grants in both pools are regranted at the same bandwidth in "
-                         "HARD_PERIOD_NS periods without RECLAIM",
+            _case(cases, "regrants of 101, 111, 112 and 113 == hard_grant(grant) with SCHED_FLAG_RESET_ON_FORK",
                   {101, 111, 112, 113} <= set(regrants)
                   and all(regrants[t] == hard_grant(*held[t]) + (SCHED_FLAG_RESET_ON_FORK,) for t in {101, 111, 112, 113})
                   and no_reclaim
                   and all(d.grants[t][1] == HARD_PERIOD_NS for t in held if t in d.grants)
                   and all(d.contain_grants[t][1] == HARD_PERIOD_NS for t in held if t in d.contain_grants),
                   "held %r regrants %r" % (held, regrants))
-            _case(cases, "reclaim: another tenant's RECLAIM and grants are untouched by one tenant's overrun",
+            _case(cases, "B grants and reclaim after the A overrun == B grants and reclaim before",
                   d._reclaim_for(b_key) and b_key not in d.reclaim_revoked
                   and not [c for c in after if c[1] in (201, 211) and c[3] != keep]
                   and {t: v for t, v in d.grants.items() if d.grant_tenant.get(t) == b_key} == b_before
                   and d.tenants_status()[b_key]["reclaim"] is True,
                   "calls %r" % (after,))
             st = d.tenants_status()[a_key]
-            _case(cases, "status: a revoked tenant reports reclaim False and the time it lost it",
+            _case(cases, "tenants_status()['/rhizo'] reclaim is False and reclaim_revoked_at == now",
                   st["reclaim"] is False and st["reclaim_revoked_at"] == now[0], "status %r" % (st,))
             when = d.reclaim_revoked[a_key]
             for _ in range(3):
                 now[0] += 1.0
                 d.sweep()
                 _mark_deadline(d)
-            _case(cases, "reclaim: revocation is sticky, quiet windows after an overrun do not restore RECLAIM",
+            _case(cases, "reclaim_revoked['/rhizo'] == when after three sweeps under the reservation and no grant with SCHED_FLAG_RECLAIM",
                   d.reclaim_revoked.get(a_key) == when and not d._reclaim_for(a_key)
                   and not [c for c in sl.calls[mark:] if c[0] == "grant" and c[1] in held and c[3] & SCHED_FLAG_RECLAIM],
                   "revoked %r" % (d.reclaim_revoked,))
@@ -4178,7 +4163,7 @@ def _selftest_reclaim_revoke(cases):
             view.procs.pop(10)
             d.refresh_tenants()
             d.sweep()
-            _case(cases, "reclaim: revocation is cleared once the tenant's key is gone",
+            _case(cases, "'/rhizo' not in reclaim_revoked or reclaim_check after the tenant exits",
                   a_key not in d.reclaim_revoked and a_key not in d.reclaim_check, "revoked %r" % (d.reclaim_revoked,))
         with tempfile.TemporaryDirectory() as tmp, _SchedLog() as sl:
             now = [100.0]
@@ -4191,7 +4176,7 @@ def _selftest_reclaim_revoke(cases):
             now[0] += 1.0
             view.procs[101]["schedstat"] += 3_000_000_000
             d.sweep()
-            _case(cases, "reclaim: an uncapped tenant is never revoked however much its grants use",
+            _case(cases, "reclaim_revoked == {} for an uncapped tenant at 3 s of dl_cpu_ns in 1 s",
                   not d.reclaim_revoked and d.dl_cpu_ns.get("/rhizo") == 3_000_000_000
                   and d.tenants_status()["/rhizo"]["reclaim"] is True,
                   "revoked %r used %r" % (d.reclaim_revoked, d.dl_cpu_ns))
@@ -4231,15 +4216,15 @@ def _selftest_record_ahead(cases):
                 if kind == "grant" and tid not in first:
                     first[tid] = seen
             late = sorted(tid for tid, seen in first.items() if tid not in seen)
-            _case(cases, "record: a new grant is in the record on disk before its sched_setattr runs, in both pools",
+            _case(cases, "tid in carve.json grants before sched_setattr(tid) for 101, 111 and each other granted tid",
                   bool(first) and not late and {101, 111} <= set(first),
-                  "first grants %r, recorded only after the grant: %r" % (sorted(first), late))
+                  "granted %r late %r" % (sorted(first), late))
     finally:
         log = real_log
 
 
 def _selftest_crash_recovery(cases):
-    """test restoring grants from the crash record"""
+    """test CarveBook.recover with _recover_grants on carve.json"""
     import tempfile
     global log, revoke_to_prior
     real = log, revoke_to_prior
@@ -4263,7 +4248,7 @@ def _selftest_crash_recovery(cases):
             d.sweep()
             _mark_deadline(d)
             rec = {r["tid"]: r for r in json.load(open(record_path))["grants"]}
-            _case(cases, "record: it holds identity, prior and tenant for every grant in both pools",
+            _case(cases, "carve.json grants[101] and grants[111] == identity, prior and tenant records",
                   rec.get(101) == {"tid": 101, "pool": "budgets", "identity": [100, 10050, 101],
                                    "prior": "other:-4", "tenant": "/rhizo"}
                   and rec.get(111) == {"tid": 111, "pool": "contain", "identity": [110, 1000, 111],
@@ -4274,7 +4259,7 @@ def _selftest_crash_recovery(cases):
             plain_set = d.carve.set_grants
 
             def counting_set(records):
-                """set the grants and note whether the record was replaced"""
+                """call plain_set and append whether carve.grant_records is a new object"""
                 before = d.carve.grant_records
                 plain_set(records)
                 wrote.append(d.carve.grant_records is not before)
@@ -4289,7 +4274,7 @@ def _selftest_crash_recovery(cases):
             d._sync_record()
             d.carve.set_grants = plain_set
             gone = {r["tid"] for r in json.load(open(record_path))["grants"]}
-            _case(cases, "record: the granted set is rewritten when its tids change and only then",
+            _case(cases, "set_grants writes carve.json at the _sync_record after _revoke(102) and at no other call",
                   quiet and not any(quiet) and wrote[len(quiet):] == [True, False] and 102 not in gone and 101 in gone,
                   "quiet %r then %r gone %r" % (quiet, wrote[len(quiet):], sorted(gone)))
             d.grants[102] = (1_000_000, 10_000_000, "other:0")
@@ -4300,7 +4285,7 @@ def _selftest_crash_recovery(cases):
             lowered = _read_file(cpu_a)
 
             def stub_revoke(tid, policy, nice, priority=0):
-                """record a revoke and report success"""
+                """record a revoke and return (True, 0)"""
                 revokes.append((tid, policy, nice, priority, _read_file(cpu_a)))
                 return True, 0
             revoke_to_prior = stub_revoke
@@ -4309,28 +4294,28 @@ def _selftest_crash_recovery(cases):
             d2.carve.log = lines.append
             d2.carve.recover(d2._recover_grants)
             got = {r[0]: r[1:4] for r in revokes}
-            _case(cases, "recover: a recorded live DEADLINE thread goes back to its exact prior in both pools",
+            _case(cases, "recover() revokes 101 to (SCHED_OTHER, -4, 0), 111 to (SCHED_FIFO, 0, 2) and 113 to (SCHED_FIFO, 0, 7)",
                   got.get(101) == (SCHED_OTHER, -4, 0) and got.get(111) == (SCHED_FIFO, 0, 2)
                   and got.get(113) == (SCHED_FIFO, 0, 7), "revokes %r" % (revokes,))
-            _case(cases, "recover: a reused tid and a thread no longer SCHED_DEADLINE are skipped, not revoked",
+            _case(cases, "recover() skips reused tid 102 and tid 112 at SCHED_FIFO",
                   102 not in got and 112 not in got
-                  and any("tid=102 is gone or reused" in m for m in lines)
-                  and any("tid=112 is no longer SCHED_DEADLINE" in m for m in lines),
+                  and any("skipped tid=102 identity=" in m for m in lines)
+                  and any("skipped tid=112 sched_probe=" in m for m in lines),
                   "revokes %r lines %r" % (revokes, [m for m in lines if m.startswith("recover")]))
-            _case(cases, "recover: cpu.max is restored only after every revoke",
+            _case(cases, "cpu.max == lowered at each revoke and '100000 100000' after recover()",
                   revokes and all(r[4] == lowered for r in revokes) and lowered != "100000 100000"
                   and _read_file(cpu_a) == "100000 100000", "at revokes %r then %r (lowered %r)"
                   % ([r[4] for r in revokes], _read_file(cpu_a), lowered))
-            summary = [m for m in lines if m.startswith("recover: revoked=")]
+            summary = [m for m in lines if m.startswith("recover revoked=")]
             with open(record_path, "w") as f:
                 json.dump({"carve": {}, "grants": [rec[101]]}, f)
             d3 = Daemon(os.path.join(tmp, "rtd"), os.path.join(tmp, "status.json"), 25, view=view,
                         clock=lambda: now[0], cgroup_fs=os.path.join(tmp, "cg"))
             d3.carve.log = lines.append
             d3.carve.recover(d3._recover_grants)
-            _case(cases, "recover: the record is left empty and one summary line counts revoked, skipped and restored",
+            _case(cases, "carve.json is empty and one recover revoked=N skipped=2 restored= line",
                   json.load(open(record_path)) == {"carve": {}, "grants": []}
-                  and len(summary) == 1 and summary[0].startswith("recover: revoked=%d skipped=2 restored=" % len(got)),
+                  and len(summary) == 1 and summary[0].startswith("recover revoked=%d skipped=2 restored=" % len(got)),
                   "record %r summary %r" % (_read_file(record_path), summary))
     finally:
         log, revoke_to_prior = real
@@ -4346,7 +4331,7 @@ def _frame_rig(tmp, period=10_000_000, cpu_a="max 100000"):
     s.history.clear()
 
     def report(dt, cpu_ns, n=1):
-        """advance the clock, add CPU time and report frames"""
+        """advance the clock, add CPU time and call handle_actual"""
         now[0] += dt
         view.procs[101]["schedstat"] += cpu_ns
         d.handle_actual(d.connections[1], {"sid": "1", "durations_ns": [5_000_000] * n})
@@ -4357,10 +4342,10 @@ def _selftest_frame_cpu(cases):
     """test grants against the CPU used per frame"""
     import tempfile
     P = 10_000_000
-    _case(cases, "an hwuiTask helper holds its own per-frame CPU, the floor with no samples",
+    _case(cases, "helper_runtime_ns(hwuiTask0, [3ms] * 10, P) == 3.75ms and helper_runtime_ns(hwuiTask0, None, P) == MIN_THREAD_RUNTIME_NS",
           helper_runtime_ns("hwuiTask0", [3_000_000] * 10, P) == 3_750_000
           and helper_runtime_ns("hwuiTask0", None, P) == MIN_THREAD_RUNTIME_NS)
-    _case(cases, "a binder pool helper holds the floor whatever CPU it was sampled at",
+    _case(cases, "helper_runtime_ns(binder:10_1, [3ms] * 10, P) == BINDER_HELPER_RUNTIME_NS == 200us",
           helper_runtime_ns("binder:10_1", [3_000_000] * 10, P) == BINDER_HELPER_RUNTIME_NS == 200_000)
 
     with tempfile.TemporaryDirectory() as tmp, _SchedLog():
@@ -4378,11 +4363,11 @@ def _selftest_frame_cpu(cases):
         now[0] += REAPPLY_MIN_INTERVAL_S
         d.tick()
         want = int(FRAME_CPU_HEADROOM * 6_000_000)
-        _case(cases, "a thread granted below its need grows past the undersized grant from its next heavy reports to at least its CPU in each granted period, and to its heavy frame's runtime once the interval history holds only its slower frames",
+        _case(cases, "grant of 101 == 1ms after 0.8ms frames, > 1ms and >= 0.3 x period after 2 x 6ms frames, and >= (1 - REAPPLY_RUNTIME_DELTA) x 1.25 x 6ms after FRAME_INTERVAL_HISTORY more frames",
               small is not None and small[0] == 1_000_000 and early[0] > small[0] and early[0] >= 0.3 * early[1]
               and frame_cpu_runtime_ns(s.frame_cpu[101], s.period_ns) == want
               and d.grants[101][0] >= (1 - REAPPLY_RUNTIME_DELTA) * want,
-              "first %r after 2 heavy reports %r now %r want %d" % (small, early, d.grants.get(101), want))
+              "first %r after 2 heavy frames %r last %r expected %d" % (small, early, d.grants.get(101), want))
 
     with tempfile.TemporaryDirectory() as tmp, _SchedLog():
         P = 16_666_667
@@ -4393,7 +4378,7 @@ def _selftest_frame_cpu(cases):
         now[0] += REAPPLY_MIN_INTERVAL_S
         d.tick()
         avg_grant = FRAME_CPU_HEADROOM * sum(trace) / len(trace)
-        _case(cases, "a thread idling at 0.1ms then drawing 6ms frames is sized to the heavy frame within 2 reports",
+        _case(cases, "grant of 101 >= 1.25 x 6ms after 58 x 0.1ms and 2 x 6ms frames",
               avg_grant < 2_000_000 and d.grants[101][0] >= int(FRAME_CPU_HEADROOM * 6_000_000)
               and d.grants[101][0] > avg_grant,
               "grant %r per-second average x1.25 %.0f" % (d.grants.get(101), avg_grant))
@@ -4405,7 +4390,7 @@ def _selftest_frame_cpu(cases):
         report(5.0, 900_000_000)
         gap_samples, gap_base = list(s.frame_cpu[101]), s.report_schedstat[101]
         report(0.01, 1_000_000)
-        _case(cases, "a report after a gap longer than IDLE_RELEASE_S rebases: the CPU used in the gap is no sample",
+        _case(cases, "an actual message after IDLE_RELEASE_S adds no frame_cpu sample and sets report_schedstat to schedstat",
               gap_samples == [1_000_000] and gap_base == view.procs[101]["schedstat"] - 1_000_000
               and list(s.frame_cpu[101]) == [1_000_000, 1_000_000], "samples %r" % (list(s.frame_cpu[101]),))
 
@@ -4413,7 +4398,7 @@ def _selftest_frame_cpu(cases):
         d, view, now, s, report = _frame_rig(tmp)
         report(0.01, 1_000_000)
         report(0.04, 8_000_000, n=4)
-        _case(cases, "a batched report of n durations records the CPU delta divided by n",
+        _case(cases, "frame_cpu == [CPU delta / 4] after an actual message of 4 durations",
               list(s.frame_cpu[101]) == [2_000_000], "samples %r" % (list(s.frame_cpu[101]),))
 
     import contextlib
@@ -4425,7 +4410,7 @@ def _selftest_frame_cpu(cases):
             if i % 100 == 99:
                 d.sweep()
                 _mark_deadline(d)
-        _case(cases, "an honest heavy-tail capped tenant (15 x 0.1ms + 1 x 20ms frames) keeps RECLAIM",
+        _case(cases, "reclaim_revoked == {} for a capped tenant at 15 x 0.1ms + 1 x 20ms frames",
               101 in d.grants and d.dl_cpu_ns.get("/rhizo", 0) > 0 and not d.reclaim_revoked,
               "revoked %r grants %r used %r" % (d.reclaim_revoked, d.grants, d.dl_cpu_ns))
 
@@ -4441,13 +4426,13 @@ def _selftest_frame_cpu(cases):
         left = 101 in s.frame_cpu or 101 in s.report_schedstat
         view.procs[102]["start"] = 8888
         d._forget(102)
-        _case(cases, "a dropped or reused tid's samples are discarded by the sweep and by _forget",
+        _case(cases, "sweep() and _forget() delete frame_cpu and report_schedstat of reused tids 101 and 102",
               not left and 102 not in s.frame_cpu and 102 not in s.report_schedstat,
-              "frame_cpu %r report %r" % (sorted(s.frame_cpu), sorted(s.report_schedstat)))
+              "frame_cpu %r report_schedstat %r" % (sorted(s.frame_cpu), sorted(s.report_schedstat)))
 
 
 def _frame_cpu_of(cycle, cycles=20):
-    """return a thread's frame_cpu_ns after a repeated report cycle"""
+    """return frame_cpu_ns after repeating a cycle of actual messages"""
     import tempfile
     with tempfile.TemporaryDirectory() as tmp, _SchedLog():
         d, view, now, s, report = _frame_rig(tmp)
@@ -4458,25 +4443,25 @@ def _frame_cpu_of(cycle, cycles=20):
 
 
 def _selftest_frame_arrival(cases):
-    """test the CPU per frame of late and bunched reports"""
+    """test the CPU per frame of late and bunched actual messages"""
     rate = 300_000 / 0.010
     vm = _frame_cpu_of([(gap, int(rate * gap), 2) for gap in (0.0466, 0.0002, 0.0132, 0.020, 0.020)])
-    _case(cases, "a steady 0.3 ms per 10 ms frame thread reported in pairs at 46.6, 0.2, 13.2, 20, 20 ms gaps reads 0.3 ms per frame within 5%",
+    _case(cases, "frame_cpu_ns(0.3 ms per 10 ms frame in pairs at 46.6, 0.2, 13.2, 20, 20 ms gaps) within 5% of 0.3 ms",
           vm is not None and abs(vm - 300_000) <= 15_000, "frame_cpu_ns %r" % (vm,))
     pc_rate = 12 * 300_000 / 0.100
     pc = _frame_cpu_of([(gap, int(pc_rate * gap), 2) for gap in (0.049, 0.00025, 0.0005, 0.01025, 0.020, 0.020)])
-    _case(cases, "a steady 0.3 ms per frame thread reported in pairs at 49, 0.25, 0.5, 10.25, 20, 20 ms gaps reads 0.3 ms per frame within 5%",
+    _case(cases, "frame_cpu_ns(0.3 ms per frame in pairs at 49, 0.25, 0.5, 10.25, 20, 20 ms gaps) within 5% of 0.3 ms",
           pc is not None and abs(pc - 300_000) <= 15_000, "frame_cpu_ns %r" % (pc,))
     steady = _frame_cpu_of([(0.020, 600_000, 2)])
-    _case(cases, "a steady thread reported in pairs every 20 ms reads the 0.3 ms per frame the count split read, within 1%",
+    _case(cases, "frame_cpu_ns(0.3 ms per frame in pairs every 20 ms) within 1% of 0.3 ms",
           steady is not None and abs(steady - 300_000) <= 3_000, "frame_cpu_ns %r" % (steady,))
     burst = _frame_cpu_of([(0.0988, 300_000, 1)] + [(0.0003, 300_000, 1)] * 4)
-    _case(cases, "an app drawing 5 back-to-back 0.3 ms frames every 100 ms reads 0.3 ms per frame within 10%",
+    _case(cases, "frame_cpu_ns(5 back-to-back 0.3 ms frames every 100 ms) within 10% of 0.3 ms",
           burst is not None and abs(burst - 300_000) <= 30_000, "frame_cpu_ns %r" % (burst,))
     spread = {spacing: _frame_cpu_of([(0.100 - 4 * spacing, 300_000, 1)] + [(spacing, 300_000, 1)] * 4)
               for spacing in (0.002, 0.010)}
     long_burst = _frame_cpu_of([(0.5, 300_000, 1)] + [(0.0003, 300_000, 1)] * 39, cycles=6)
-    _case(cases, "an app drawing 5 0.3 ms frames 2 or 10 ms apart every 100 ms, or 40 back to back every 0.5 s, reads 0.3 ms per frame within 10%, not its CPU rate inside the burst",
+    _case(cases, "frame_cpu_ns(5 x 0.3 ms frames 2 or 10 ms apart every 100 ms, 40 back to back every 0.5 s) within 10% of 0.3 ms",
           all(v is not None and abs(v - 300_000) <= 30_000 for v in list(spread.values()) + [long_burst]),
           "frame_cpu_ns %r, 40 frames %r" % (spread, long_burst))
 
@@ -4484,7 +4469,7 @@ def _selftest_frame_arrival(cases):
 def _selftest_contain_measured(cases):
     """test sizing of contained threads from CPU use"""
     import tempfile
-    _case(cases, "contain sizing: measured use x 1.25 sets the runtime, the floor and the ceiling bound it",
+    _case(cases, "contain_thread_runtime_ns(0.3, 10ms, 10ms) == 3.75ms, (0.0, 10ms, 10ms) == MIN_THREAD_RUNTIME_NS and (0.9, 10ms, 5ms) == 5ms",
           contain_thread_runtime_ns(0.3, 10_000_000, 10_000_000) == 3_750_000
           and contain_thread_runtime_ns(0.0, 10_000_000, 10_000_000) == MIN_THREAD_RUNTIME_NS
           and contain_thread_runtime_ns(0.9, 10_000_000, 5_000_000) == 5_000_000,
@@ -4496,7 +4481,7 @@ def _selftest_contain_measured(cases):
         view = _two_tenant_tree()
         d = _two_tenant_daemon(tmp, view, now, contain_cap_bw=0.5)
         d.sweep()
-        _case(cases, "contain sizing: a thread the scan found is not granted before its first window is measured",
+        _case(cases, "contain_grants == {} after one sweep() with 111, 112, 113 and 211 in contained",
               d.contain_grants == {} and {111, 112, 113, 211} <= set(d.contained),
               "grants %r contained %r" % (d.contain_grants, sorted(d.contained)))
         now[0] += 1.0
@@ -4506,13 +4491,13 @@ def _selftest_contain_measured(cases):
         view.procs[10]["schedstat"] = 0
         d.sweep()
         g = d.contain_grants
-        _case(cases, "contain sizing: after one window each thread is granted from its own measured use",
+        _case(cases, "contain_grants[211] == (1.5ms, 10ms) and contained[211].rate == 0.12 after one window",
               g.get(211) == (1_500_000, 10_000_000) and set(g) >= {111, 112, 113}
               and d.contained[211].rate == 0.12, "grants %r" % (g,))
-        _case(cases, "contain sizing: an idle contained thread holds the floor, not the declared runtime",
+        _case(cases, "contain_thread_runtime_ns(0.0, 10ms, contain_runtime_ns) == MIN_THREAD_RUNTIME_NS",
               all(d.contained[t].rate is not None for t in d.contained)
               and contain_thread_runtime_ns(0.0, 10_000_000, d.contain_runtime_ns) == MIN_THREAD_RUNTIME_NS)
-        _case(cases, "contain tenants: tenant A's busy threads are held to A's slice and tenant B's grant is untouched",
+        _case(cases, "A contain grant bandwidth <= 0.25 and contain_grants[211] == (1.5ms, 10ms)",
               sum(bandwidth(*g[t]) for t in (111, 112, 113)) <= 0.25 + 1e-6 and g[211] == (1_500_000, 10_000_000),
               "grants %r" % (g,))
         before = dict(g)
@@ -4523,7 +4508,7 @@ def _selftest_contain_measured(cases):
             view.procs[tid]["schedstat"] += 1_000_000_000
         view.procs[211]["schedstat"] += 125_000_000
         d.sweep()
-        _case(cases, "contain sizing: a change under 10% is not regranted, a steady thread keeps its grant",
+        _case(cases, "contain_grants == before and one grant call for 211 after a change under REAPPLY_RUNTIME_DELTA",
               d.contain_grants == before and not [c for c in sl.calls if c[0] == "grant" and c[1] == 211][1:],
               "grants %r" % (d.contain_grants,))
         c = d.connections[1]
@@ -4534,7 +4519,7 @@ def _selftest_contain_measured(cases):
         _seed_frames(s, 111, 2_400_000)
         s.held = {111: 0.6}
         c.sessions["1"] = s
-        _case(cases, "contain sizing: a thread an active ADPF session holds keeps the per-frame size over a measured one",
+        _case(cases, "_contain_requests()[111] == (3ms, P) for 111 in s.held",
               d._contain_requests().get(111) == (3_000_000, 16_666_667), "got %r" % (d._contain_requests().get(111),))
         s2 = Session("2", 1, 1, 100, 110, 1000, 16_666_667)
         s2.threads[112] = Thread(12, "surfaceflinger", "skipped", prior=None)
@@ -4544,7 +4529,7 @@ def _selftest_contain_measured(cases):
             view.procs[112]["schedstat"] += 400_000
             d.handle_actual(c, {"sid": "2", "durations_ns": [3_000_000]})
         got = d._contain_requests().get(112)
-        _case(cases, "contain sizing: a FIFO thread its own session names, registered skipped, is sized from its CPU per frame",
+        _case(cases, "_contain_requests()[112] == (500us, P) and sized_by == 'session' for skipped 112 in s2.threads",
               got == (500_000, 16_666_667) and d.contained[112].sized_by == "session",
               "got %r sized_by %r samples %r" % (got, d.contained[112].sized_by, list(s2.frame_cpu.get(112, []))))
 
@@ -4553,16 +4538,16 @@ def _selftest_contain_per_run(cases):
     """check per-run sizing of contained threads"""
     import tempfile
     rt = contain_thread_runtime_ns
-    _case(cases, "contain per-run sizing: an idle thread holds the floor",
+    _case(cases, "contain_thread_runtime_ns(0.0, P, P, None) == MIN_THREAD_RUNTIME_NS",
           rt(0.0, 16_666_667, 16_666_667, None) == MIN_THREAD_RUNTIME_NS,
           "got %r" % (rt(0.0, 16_666_667, 16_666_667, None),))
-    _case(cases, "contain per-run sizing: a thread of 103us runs at 0.0032 CPU holds 2 x the run, not the floor",
+    _case(cases, "contain_thread_runtime_ns(0.0032, P, P, 103us) == 206us",
           rt(0.0032, 16_666_667, 16_666_667, 103_000) == 206_000,
           "got %r" % (rt(0.0032, 16_666_667, 16_666_667, 103_000),))
-    _case(cases, "contain per-run sizing: a busy thread's per-period term wins when larger",
+    _case(cases, "contain_thread_runtime_ns(0.3, 10ms, 10ms, 100us) == 3.75ms",
           rt(0.3, 10_000_000, 10_000_000, 100_000) == 3_750_000,
           "got %r" % (rt(0.3, 10_000_000, 10_000_000, 100_000),))
-    _case(cases, "contain per-run sizing: the ceiling bounds the per-run term",
+    _case(cases, "contain_thread_runtime_ns(0.0, 10ms, 1ms, 4ms) == 1ms",
           rt(0.0, 10_000_000, 1_000_000, 4_000_000) == 1_000_000,
           "got %r" % (rt(0.0, 10_000_000, 1_000_000, 4_000_000),))
     with tempfile.TemporaryDirectory() as tmp, _SchedLog():
@@ -4576,14 +4561,14 @@ def _selftest_contain_per_run(cases):
         d.sweep()
         ct = d.contained[211]
         got = d._contain_requests().get(211)
-        _case(cases, "contain per-run sizing: 3.1ms over 30 schedules gives a 103333ns run and sizes 206666",
+        _case(cases, "run_ns == 103333 and _contain_requests()[211] == (206666, P) for 3.1ms over pcount 30",
               ct.run_ns == 103_333 and got == (206_666, d.contain_period_ns)
               and ct.to_status(None)["cpu_run_ns"] == 103_333,
               "run_ns %r got %r" % (ct.run_ns, got))
         now[0] += 1.0
         d.sweep()
         got = d._contain_requests().get(211)
-        _case(cases, "contain per-run sizing: a window with no schedule-in clears the run and the thread falls to the floor",
+        _case(cases, "run_ns is None and _contain_requests()[211] == (MIN_THREAD_RUNTIME_NS, P) after a window with no pcount growth",
               ct.run_ns is None and got == (MIN_THREAD_RUNTIME_NS, d.contain_period_ns)
               and ct.to_status(None)["cpu_run_ns"] is None,
               "run_ns %r got %r" % (ct.run_ns, got))
@@ -4594,15 +4579,15 @@ def _selftest_frame_period(cases):
     import contextlib
     import tempfile
     T = 11_666_666
-    _case(cases, "frame period: the target with no interval yet",
+    _case(cases, "frame_period_ns([], T) == frame_period_ns(None, T) == T",
           frame_period_ns([], T) == T and frame_period_ns(None, T) == T)
-    _case(cases, "frame period: a 33.3 ms mean at an 11.67 ms target is 11 quarters of it, rounded down",
+    _case(cases, "frame_period_ns(33.3 ms mean, T) == T * 11 // 4",
           frame_period_ns([33_333_333] * 32, T) == T * 11 // 4
           and frame_period_ns([40_000_000, 26_666_666] * 16, T) == T * 11 // 4,
           "got %r" % (frame_period_ns([40_000_000, 26_666_666] * 16, T),))
-    _case(cases, "frame period: an interval jittering inside one quarter keeps one period",
+    _case(cases, "frame_period_ns([32.2 ms] * 16, T) == frame_period_ns([34.9 ms] * 16, T) == T * 11 // 4",
           frame_period_ns([32_200_000] * 16, T) == frame_period_ns([34_900_000] * 16, T) == T * 11 // 4)
-    _case(cases, "frame period: frames faster than the target keep the target, and a slow session stops at 4 targets",
+    _case(cases, "frame_period_ns([5 ms] * 16, T) == T and frame_period_ns([900 ms] * 16, T) == 4 * T",
           frame_period_ns([5_000_000] * 16, T) == T and frame_period_ns([900_000_000] * 16, T) == 4 * T,
           "got %r %r" % (frame_period_ns([5_000_000] * 16, T), frame_period_ns([900_000_000] * 16, T)))
 
@@ -4612,7 +4597,7 @@ def _selftest_frame_period(cases):
             report(0.03, 1_000_000)
         report(0.06, 2_000_000, n=2)
         report(5.0, 900_000_000)
-        _case(cases, "frame period: each live report adds its interval over the frames it carries, a gap adds none",
+        _case(cases, "frame_interval == [30 ms] * 6 after 4 single, 1 double and 1 late actual message",
               list(s.frame_interval) == [30_000_000] * 6, "intervals %r" % (list(s.frame_interval),))
 
     with tempfile.TemporaryDirectory() as tmp, _SchedLog():
@@ -4620,7 +4605,7 @@ def _selftest_frame_period(cases):
         for _ in range(16):
             report(0.005, 1_000_000)
             report(0.026, 1_000_000)
-        _case(cases, "frame period: reports read in bursts (5 then 26 ms) recur at their mean, rounded down to 15 ms, not at either gap",
+        _case(cases, "grant_period_ns() == 15 ms for actual messages at 5 and 26 ms gaps",
               s.grant_period_ns() == 15_000_000, "period %r" % (s.grant_period_ns(),))
 
     with tempfile.TemporaryDirectory() as tmp, _SchedLog() as sl:
@@ -4629,11 +4614,11 @@ def _selftest_frame_period(cases):
             report(0.03, 2_000_000)
         now[0] += REAPPLY_MIN_INTERVAL_S
         d.tick()
-        _case(cases, "frame period: a thread drawing every 3 targets is granted its frame's runtime once per frame",
+        _case(cases, "grants[101] == (2.5ms, 30ms) and reserved_bw == 2.5 / 30 for frames every 30 ms",
               d.grants.get(101, ())[:2] == (2_500_000, 30_000_000)
               and abs(d.reserved_bw("/rhizo") - 2_500_000 / 30_000_000) < 1e-9,
               "grant %r reserved %r" % (d.grants.get(101), d.reserved_bw("/rhizo")))
-        _case(cases, "frame period: status reports the session's mean interval and its grant period",
+        _case(cases, "to_status() grant_period_ns == frame_interval_mean_ns == 30 ms",
               s.to_status(d.grants, now[0])["grant_period_ns"] == 30_000_000
               and s.to_status(d.grants, now[0])["frame_interval_mean_ns"] == 30_000_000)
 
@@ -4654,7 +4639,7 @@ def _selftest_frame_period(cases):
         d.connections[1].sessions["1"] = s
         d.tick()
         periods = {c[1]: c[5] for c in sl.calls if c[0] == "grant"}
-        _case(cases, "frame period: a held RenderThread's hwuiTask and binder helpers recur at its session's frame period",
+        _case(cases, "grant period of 201, 203, 204, 207 and 208 == 3 * P",
               all(periods.get(t) == 3 * p for t in (201, 203, 204, 207, 208)), "periods %r" % (periods,))
 
     with tempfile.TemporaryDirectory() as tmp, _SchedLog(), contextlib.redirect_stderr(open(os.devnull, "w")):
@@ -4668,18 +4653,18 @@ def _selftest_frame_period(cases):
         st = d.carve.states.get("/rhizo")
         used = d.dl_cpu_ns.get("/rhizo", 0) / 1e9 / (400 * 0.03)
         reserved = d.reserved_bw("/rhizo")
-        _case(cases, "frame period: an honest capped tenant drawing every 3 targets reserves what it uses with headroom",
+        _case(cases, "used <= reserved_bw <= 3 x used and grants[101] period == 30 ms with reclaim_revoked == {}",
               not d.reclaim_revoked and used <= reserved <= 3 * used and d.grants[101][1] == 30_000_000,
               "used %.4f reserved %.4f grant %r revoked %r" % (used, reserved, d.grants.get(101), d.reclaim_revoked))
-        _case(cases, "frame period: the carve never takes less than the reserved bandwidth, and is sized from it",
+        _case(cases, "reserved_bw <= carve_bw <= quantize_carve(reserved_bw) + CARVE_STEP_BW",
               st is not None and reserved <= st.carve_bw <= quantize_carve(reserved) + CARVE_STEP_BW + 1e-9,
               "carve %r reserved %.4f" % (st and st.carve_bw, reserved))
 
-    _case(cases, "hard period knob: unset and 2ms are the default 2 ms, frame keeps the grant's own period, anything else refuses",
+    _case(cases, "load_hard_period(unset or 2ms) == (2ms, HARD_PERIOD_NS), load_hard_period(frame) == (frame, None) and load_hard_period(5ms or '') is None",
           load_hard_period({}) == ("2ms", HARD_PERIOD_NS) == load_hard_period({HARD_PERIOD_ENV: "2ms"})
           and load_hard_period({HARD_PERIOD_ENV: "frame"}) == ("frame", None)
           and load_hard_period({HARD_PERIOD_ENV: "5ms"}) is None and load_hard_period({HARD_PERIOD_ENV: ""}) is None)
-    _case(cases, "hard period knob: with no hard period a grant keeps its own runtime and period",
+    _case(cases, "hard_grant(runtime_ns, period_ns, None) == (runtime_ns, period_ns)",
           hard_grant(2_500_000, 30_000_000, None) == (2_500_000, 30_000_000))
     global log
     real_log = log
@@ -4698,7 +4683,7 @@ def _selftest_frame_period(cases):
                 with open(os.path.join(tmp, "status.json")) as f:
                     reported = json.load(f).get("hard_period")
                 got = {c[1]: (c[2], c[5], c[3]) for c in sl.calls if c[0] == "grant"}
-                _case(cases, "hard period knob %s: a tenant without RECLAIM is granted at %r and status says %s"
+                _case(cases, "RHIZO_RTD_HARD_PERIOD=%s grants a reclaim-revoked tenant at period %r and status hard_period == %s"
                       % (name, want[1], name),
                       got.get(101) == want + (SCHED_FLAG_RESET_ON_FORK,) and reported == name,
                       "got %r status %r" % (got, reported))
@@ -4710,7 +4695,7 @@ class _ReplaySocket:
     """queue of packets a replayed connection reads"""
 
     def __init__(self):
-        """start with no queued packet"""
+        """set queue to an empty deque"""
         self.queue = collections.deque()
 
     def recv(self, _size):
@@ -4720,7 +4705,7 @@ class _ReplaySocket:
         return self.queue.popleft()
 
     def close(self):
-        """close nothing"""
+        """return None"""
 
 
 def _replay_view():
@@ -4749,7 +4734,7 @@ def _replay_script():
         out.append((us, len(out), packet, cpu or {}, starts or {}))
 
     def deferred(us):
-        """return the arrival time of a report"""
+        """return the arrival time of an actual message"""
         slot = us // 100_000 * 100_000
         return slot + 30_000 if us - slot < 30_000 else us
 
@@ -4789,7 +4774,7 @@ def _replay_script():
 
 
 def _replay_run(coalesce):
-    """replay the report script and return every decision"""
+    """replay _replay_script and return the record, ticks, wakes and writes"""
     import tempfile
     global sched_setattr, revoke_to_prior, write_status_atomic, log
     real = sched_setattr, revoke_to_prior, write_status_atomic, log
@@ -4828,7 +4813,7 @@ def _replay_run(coalesce):
             real_tick = d.tick
 
             def counted_tick():
-                """count a tick and run it"""
+                """count a tick and call real_tick"""
                 ticks[0] += 1
                 real_tick()
             d.tick = counted_tick
@@ -4877,12 +4862,12 @@ def _replay_run(coalesce):
 
 
 def _replay_decisions(record):
-    """mask the per-plan demand statistics of a replay record"""
+    """delete p50= and p95= from the demand-over-slice lines of record"""
     return [re.sub(r" p50=\S+ p95=\S+", "", line) if " demand-over-slice: " in line else line for line in record]
 
 
 def _status_without_plan_counts(status):
-    """return a status without per-plan counts"""
+    """return a copy of status without request_p50, request_p95 and request_samples"""
     out = json.loads(json.dumps(status))
     for t in out.get("tenants", {}).values():
         for k in ("request_p50", "request_p95", "request_samples"):
@@ -4894,38 +4879,38 @@ REPLAY_DECISIONS_SHA256 = "7b084e3c389c57d8d2aabf1284c76f38a5d1483f22d84a3ea1e2c
 
 
 def _selftest_report_replay(cases):
-    """compare uncoalesced and coalesced report replays"""
+    """compare uncoalesced and coalesced replays"""
     import hashlib
     old, new = _replay_run(False), _replay_run(True)
     digest = hashlib.sha256("\n".join(_replay_decisions(old["record"])).encode()).hexdigest()
-    _case(cases, "the replay through the loop before coalescing decides what the elapsed-time frame CPU split recorded (recorded digest)",
+    _case(cases, "sha256 of the uncoalesced replay decisions == REPLAY_DECISIONS_SHA256",
           digest == REPLAY_DECISIONS_SHA256, "digest %s over %d lines" % (digest, len(old["record"])))
     a, b = _replay_decisions(old["record"]), _replay_decisions(new["record"])
     first = next((j for j, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
     kinds = collections.Counter(line.split(" ", 2)[1] for line in a)
-    _case(cases, "the coalescing loop makes every grant, regrant, revoke, pause, refusal and cap decision at the same time as before",
+    _case(cases, "coalesced replay decisions == uncoalesced replay decisions",
           a == b and kinds["grant"] > 0 and kinds["regrant"] > 0 and kinds["revoke"] > 0 and kinds["refused"] >= 2
           and kinds["session"] > 0 and kinds["cap:"] > 0 and kinds["reclaim-off:"] > 0,
-          "%d vs %d lines, first difference at %d: %r vs %r; kinds %r"
+          "%d vs %d lines, first difference at %d %r vs %r, kinds %r"
           % (len(a), len(b), first, a[first:first + 1], b[first:first + 1], dict(kinds)))
     old_at, new_at = dict(old["writes"]), dict(new["writes"])
     differ = [t for t, st in new_at.items() if _status_without_plan_counts(st) != _status_without_plan_counts(old_at.get(t))]
-    _case(cases, "the last status the coalescing loop writes at each time equals the old loop's last one then, request counts aside",
+    _case(cases, "coalesced status at each write time == uncoalesced status less request_p50, request_p95 and request_samples",
           new_at and not differ, "%d write times, differing at %r" % (len(new_at), differ[:3]))
     grant_times = sorted({float(line.split(" ", 1)[0]) for line in b if " sched_setattr " in line or " revoke_to_prior " in line})
     write_times = [t for t, _st in new["writes"]]
     late = [t for t in grant_times if not any(t <= w <= t + 1.0 for w in write_times)]
-    _case(cases, "a grant change reaches status.json within 1 s", grant_times and not late, "late after %r" % late[:3])
-    _case(cases, "the coalescing loop writes status.json a tenth as often or less, and ticks less, than the old loop",
+    _case(cases, "a status.json write within 1 s of each sched_setattr and revoke_to_prior", grant_times and not late, "late after %r" % late[:3])
+    _case(cases, "10 x coalesced writes <= uncoalesced writes and coalesced ticks < uncoalesced ticks",
           10 * len(new["writes"]) <= len(old["writes"]) and new["ticks"] < old["ticks"],
           "writes %d vs %d, ticks %d vs %d" % (len(new["writes"]), len(old["writes"]), new["ticks"], old["ticks"]))
-    _case(cases, "a wake reads every queued packet, so a burst costs one wake",
+    _case(cases, "left == 0 and coalesced wakes < uncoalesced wakes",
           new["left"] == 0 and new["wakes"] < old["wakes"],
           "left %d, wakes %d vs %d" % (new["left"], new["wakes"], old["wakes"]))
 
 
 def _selftest_status_trailing(cases):
-    """check a status change is written by a later wake"""
+    """test that a later _wake writes status.json for the second actual message"""
     import tempfile
     global write_status_atomic
     real = write_status_atomic
@@ -4950,7 +4935,7 @@ def _selftest_status_trailing(cases):
                 now[0] += REAPPLY_MIN_INTERVAL_S
                 d._wake(None, [])
             last_t, last = mine()[-1]
-            _case(cases, "a report inside the status write interval is not written at once but by a later wake within the interval",
+            _case(cases, "status.json write for the second actual message comes from a later _wake within STATUS_WRITE_INTERVAL_S",
                   after_second == 1 and second < last_t <= second + STATUS_WRITE_INTERVAL_S + REAPPLY_MIN_INTERVAL_S + 1e-9
                   and len(last["sessions"]["1:1"]["reports"]) == 2,
                   "writes %r" % [(t, len(st["sessions"]["1:1"]["reports"])) for t, st in mine()])
@@ -4962,7 +4947,7 @@ class _CountingView(FakeProcView):
     """fake process view that counts schedstat reads"""
 
     def __init__(self, view):
-        """wrap another fake view's tables"""
+        """share view.procs and view.pid_tids and set reads to 0"""
         super().__init__(view.procs, view.pid_tids)
         self.reads = 0
 
@@ -4986,12 +4971,12 @@ def _selftest_window_reads(cases):
         now[0] += 0.5
         d.tick()
         rolled = counting.reads - first - inside
-        _case(cases, "a tick reads the session threads' schedstat when the share window opens or rolls, and none inside it",
+        _case(cases, "tick() schedstat reads == 1 at window open, 0 inside SHARE_WINDOW_S and 1 at the roll",
               first == 1 and inside == 0 and rolled == 1, "reads %d, %d, %d" % (first, inside, rolled))
 
 
 def _selftest_domain(cases):
-    """test enter_domain's marker for each recorded SELinux mode"""
+    """test enter_domain markers and exit status for each mode file"""
     import tempfile
     global log, SELINUXFS, ATTR_DIR
     saved = log, SELINUXFS, ATTR_DIR, read_selinux_mode.__defaults__
@@ -5018,8 +5003,8 @@ def _selftest_domain(cases):
                     enter_domain(DOMAIN, ["rtd.py"])
                 except SystemExit as e:
                     code = e.code
-                _case(cases, "a mode file reading %r logs %s" % (text, want), any(want in m for m in lines), lines)
-                _case(cases, "a mode file reading %r %s" % (text, "refuses the start" if refuse else "lets it go on"),
+                _case(cases, "enter_domain with mode file %r logs %s" % (text, want), any(want in m for m in lines), lines)
+                _case(cases, "enter_domain with mode file %r %s" % (text, "exits SELINUX_MODE_EXIT" if refuse else "returns"),
                       code == (SELINUX_MODE_EXIT if refuse else None), "exit %r" % code)
     finally:
         log, SELINUXFS, ATTR_DIR, read_selinux_mode.__defaults__ = saved
@@ -5081,26 +5066,26 @@ def run_selftest():
         try:
             group(cases)
         except Exception as exc:
-            _case(cases, "%s raised %s: %s" % (group.__name__, type(exc).__name__, exc), False)
+            _case(cases, "%s raised %s (%s)" % (group.__name__, type(exc).__name__, exc), False)
 
     failed = 0
     for name, ok, detail in cases:
         if ok:
-            print("SELFTEST OK:   %s" % name)
+            print("ok %s" % name)
         else:
             failed += 1
-            print("SELFTEST FAIL: %s%s" % (name, (" -- %s" % detail) if detail else ""))
+            print("FAIL %s%s" % (name, (" (%s)" % detail) if detail else ""))
     if not cases:
-        print("SELFTEST FAIL: no cases asserted")
+        print("FAIL cases == []")
         return 1
-    print("rhizo-rtd selftest: %d/%d case(s) passed" % (len(cases) - failed, len(cases)))
+    print("rhizo-rtd selftest passed %d of %d cases" % (len(cases) - failed, len(cases)))
     return 0 if failed == 0 else 1
 
 
 def run_selftest_root():
-    """test sched_setattr inside a new pid namespace"""
+    """test sched_setattr inside a CLONE_NEWPID pid namespace"""
     if os.geteuid() != 0:
-        print("SELFTEST-ROOT FAIL: must run as root (real threads, real sched_setattr)")
+        print("FAIL os.geteuid() != 0")
         return 1
 
     CLONE_NEWPID = 0x20000000
@@ -5111,8 +5096,8 @@ def run_selftest_root():
     def arec(name, ok, detail=""):
         """record and print a selftest-as-root assertion"""
         assertions.append((name, ok, detail))
-        print("%s: %s%s" % ("SELFTEST-ROOT OK" if ok else "SELFTEST-ROOT FAIL", name,
-                             (" -- %s" % detail) if detail else ""))
+        print("%s %s%s" % ("ok" if ok else "FAIL", name,
+                             (" (%s)" % detail) if detail else ""))
 
     r, w = os.pipe()
     child = os.fork()
@@ -5129,7 +5114,7 @@ def run_selftest_root():
             tids = []
 
             def spin():
-                """record the thread id and wait"""
+                """append the native thread id, set ready and sleep 5 s"""
                 tids.append(threading.get_native_id())
                 ready.set()
                 time.sleep(5)
@@ -5148,12 +5133,12 @@ def run_selftest_root():
     os.close(r)
 
     if not msg.startswith("ready:"):
-        arec("real pid namespace + real thread creation", False, "child reported %r" % msg)
-        print("rhizo-rtd selftest-root: 0 assertions passed")
+        arec("child in CLONE_NEWPID writes ready:<pid>:<tid>", False, "child wrote %r" % msg)
+        print("rhizo-rtd selftest-root passed 0 assertions")
         return 1
     _, ns_pid_str, ns_tid_str = msg.split(":")
     ns_pid, ns_tid = int(ns_pid_str), int(ns_tid_str)
-    arec("a child pid namespace boots and starts a real second thread", True)
+    arec("child in CLONE_NEWPID writes ready with a second thread tid", True)
 
     view = RealProcView()
     own_ino = view.ns_ino(os.getpid())
@@ -5168,64 +5153,64 @@ def run_selftest_root():
                 host_ns_ino, grandchild_host = ino, pid
                 break
     host_tgid = translate_tgid(view, host_ns_ino, ns_pid) if grandchild_host else None
-    arec("translate_tgid finds the child's host tgid from its sandbox pid",
+    arec("translate_tgid(child ns, ns_pid) == grandchild host pid",
          host_tgid is not None and host_tgid == grandchild_host,
          "ns_pid=%d host=%r translated=%r" % (ns_pid, grandchild_host, host_tgid))
 
     if host_tgid is not None:
         host_tid, reason = translate_tid(view, host_ns_ino, host_tgid, ns_tid, os.getuid())
-        arec("translate_tid finds the real second thread's host tid",
+        arec("translate_tid(child ns, ns_tid) is not None",
              host_tid is not None, "reason=%r" % reason)
 
         if host_tid is not None:
             forged_host, forged_reason = translate_tid(view, host_ns_ino, host_tgid, 999999, os.getuid())
-            arec("translate_tid refuses a sandbox tid outside the child's own tgid",
+            arec("translate_tid(child ns, 999999) is None",
                  forged_host is None, "got %r" % forged_host)
 
             probe = view.sched_probe(host_tid)
-            arec("sched_getattr reads the real thread's starting policy/nice", probe is not None)
+            arec("sched_getattr(host_tid) is not None", probe is not None)
             prior_policy, prior_nice, _prior_priority = probe if probe else (SCHED_OTHER, 0, 0)
 
             ok, errno = grant_deadline(host_tid, 2_000_000, 16_666_667)
-            arec("sched_setattr grants SCHED_DEADLINE on the real thread", ok, "errno=%d" % errno)
+            arec("grant_deadline(host_tid, 2ms, P) succeeds", ok, "errno=%d" % errno)
 
             if ok:
                 after = view.sched_probe(host_tid)
-                arec("the granted thread now reads back as SCHED_DEADLINE",
+                arec("sched_getattr(host_tid) policy == SCHED_DEADLINE",
                      after is not None and after[0] == SCHED_DEADLINE, "got %r" % (after,))
 
                 attr, _err = sched_getattr(host_tid)
-                arec("a default grant reads back with SCHED_FLAG_RECLAIM set",
+                arec("sched_getattr(host_tid) sched_flags & SCHED_FLAG_RECLAIM after grant_deadline(host_tid)",
                      attr is not None and bool(attr.sched_flags & SCHED_FLAG_RECLAIM),
                      "flags %r" % (attr.sched_flags if attr else None))
                 ok_nr, errno_nr = grant_deadline(host_tid, 2_000_000, 16_666_667, reclaim=False)
                 attr, _err = sched_getattr(host_tid)
-                arec("a reclaim=False grant, a capped tenant's, reads back without SCHED_FLAG_RECLAIM",
+                arec("sched_getattr(host_tid) sched_flags & SCHED_FLAG_RECLAIM == 0 after grant_deadline(reclaim=False)",
                      ok_nr and attr is not None and not attr.sched_flags & SCHED_FLAG_RECLAIM,
                      "errno=%d flags %r" % (errno_nr, attr.sched_flags if attr else None))
 
                 ok2, errno2 = revoke_to_prior(host_tid, prior_policy, prior_nice)
-                arec("revoke restores the prior policy and nice", ok2, "errno=%d" % errno2)
+                arec("revoke_to_prior(host_tid, prior_policy, prior_nice) succeeds", ok2, "errno=%d" % errno2)
                 if ok2:
                     restored = view.sched_probe(host_tid)
-                    arec("the revoked thread reads back as its ORIGINAL policy",
+                    arec("sched_getattr(host_tid) policy == prior_policy after revoke_to_prior",
                          restored is not None and restored[0] == prior_policy,
-                         "got %r want %r" % (restored, prior_policy))
+                         "got %r expected %r" % (restored, prior_policy))
 
                 period_ns = 16_666_667
                 granted, _req, _grant, capped = plan_grants([(period_ns, {host_tid: 4_000_000})], 0.1)
-                arec("plan_grants scales a request that would exceed a tiny cap",
+                arec("plan_grants([(P, {host_tid: 4ms})], 0.1) runtime < 4ms and capped",
                      capped is True and host_tid in granted and granted[host_tid][0] < 4_000_000,
                      "got %r" % (granted,))
                 if host_tid in granted:
                     ok3, errno3 = grant_deadline(host_tid, granted[host_tid][0], period_ns)
-                    arec("the kernel accepts the cap-scaled runtime as a real grant",
+                    arec("grant_deadline(host_tid, cap-scaled runtime, P) succeeds",
                          ok3, "errno=%d" % errno3)
                     if ok3:
                         revoke_to_prior(host_tid, prior_policy, prior_nice)
 
                 dropped, _req2, _grant2, capped2 = plan_grants([(period_ns, {host_tid: 4_000_000})], 0.001)
-                arec("plan_grants drops a request a nearly spent cap would cut under 200us",
+                arec("plan_grants([(P, {host_tid: 4ms})], 0.001) == {} and capped",
                      dropped == {} and capped2 is True, "got %r" % (dropped,))
 
     if grandchild_host is not None:
@@ -5241,12 +5226,12 @@ def run_selftest_root():
     passed = sum(1 for _n, ok, _d in assertions if ok)
     failed = len(assertions) - passed
     if not assertions:
-        print("rhizo-rtd selftest-root: 0 assertions passed")
+        print("rhizo-rtd selftest-root passed 0 assertions")
         return 1
     if failed:
-        print("rhizo-rtd selftest-root: %d/%d assertions passed" % (passed, len(assertions)))
+        print("rhizo-rtd selftest-root passed %d of %d assertions" % (passed, len(assertions)))
         return 1
-    print("rhizo-rtd selftest-root: %d assertions passed" % passed)
+    print("rhizo-rtd selftest-root passed %d assertions" % passed)
     return 0
 
 
@@ -5260,7 +5245,7 @@ SELINUX_MODE_EXIT = 78
 
 
 def read_selinux_mode(path=os.environ.get("RHIZO_SELINUX_MODE_FILE", "/run/rhizo-selinux-mode")):
-    """return the recorded SELinux mode, or None"""
+    """return host or namespace from path, or None"""
     try:
         with open(path) as f:
             mode = f.read().rstrip("\n")
@@ -5327,9 +5312,9 @@ def main(argv=None):
     selinux_mode = enter_domain(DOMAIN, sys.argv)
     hard_period = load_hard_period()
     if hard_period is None:
-        log("%s=%r is neither 2ms nor frame -- refusing to start" % (HARD_PERIOD_ENV, os.environ.get(HARD_PERIOD_ENV)))
+        log("%s=%r is neither 2ms nor frame" % (HARD_PERIOD_ENV, os.environ.get(HARD_PERIOD_ENV)))
         return 1
-    log("hard-period: %s" % hard_period[0])
+    log("hard_period=%s" % hard_period[0])
     cap_percent = load_cap_percent()
     contain_enabled, contain_percent, contain_runtime_ns, contain_period_ns = load_contain_config()
     budgets_enabled = rt_budgets_enabled()

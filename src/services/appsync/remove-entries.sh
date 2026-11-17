@@ -1,19 +1,19 @@
 #!/bin/dash
-# remove launcher entries of uninstalled packages
+# launcher entry removal for uninstalled packages
 set -u
 APPSYNC=${RHIZO_PRUNE_APPSYNC:-/usr/lib/rhizo/tools/appsync.py}
 TRIGGER=${RHIZO_RESYNC_TRIGGER:-/run/rhizo-app-events/trigger}
 SYNCED=${RHIZO_PRUNE_SYNCED:-/run/rhizo-remove-entries/synced}
-# print the trigger value, or none when it cannot be read
+# print the first line of $TRIGGER, or none
 trigger_now() {
   _tn=""
   { IFS= read -r _tn < "$TRIGGER"; } 2>/dev/null || true
   echo "${_tn:-none}"
 }
-# write the line to the synced file
+# write $1 to $SYNCED
 stamp() {
   { printf '%s\n' "$1" > "$SYNCED.tmp" && mv -f "$SYNCED.tmp" "$SYNCED"; } 2>/dev/null && return 0
-  echo "[rhizo-remove-entries] could not record '$1' in $SYNCED" >&2
+  echo "[rhizo-remove-entries] failed to write '$1' to $SYNCED" >&2
   exit 1
 }
 # print the pid of the sandbox init
@@ -30,7 +30,7 @@ stack_init_pid() {
 }
 INIT=$(stack_init_pid)
 if [ -z "$INIT" ]; then
-  echo "[rhizo-remove-entries] no init second_stage -- nothing to reconcile against"
+  echo "[rhizo-remove-entries] no init second_stage process"
   stamp "nosandbox trigger=$(trigger_now)"
   exit 0
 fi
@@ -40,7 +40,7 @@ for pass in 1 2 3 4 5 6; do
   python3 "$APPSYNC" --local --reconcile-only "$INIT" || rc=$?
   now_init=$(stack_init_pid)
   if [ "$now_init" != "$INIT" ]; then
-    echo "[rhizo-remove-entries] init $INIT is no longer the sandbox's (now ${now_init:-none}); reconciling again"
+    echo "[rhizo-remove-entries] stack_init_pid printed ${now_init:-none}, not $INIT"
     INIT=$now_init
     [ -n "$INIT" ] || { stamp "nosandbox trigger=$(trigger_now)"; exit 0; }
     continue
@@ -50,7 +50,7 @@ for pass in 1 2 3 4 5 6; do
     stamp "init=$INIT trigger=$before"
     exit 0
   fi
-  echo "[rhizo-remove-entries] /data/app changed during pass $pass; reconciling again"
+  echo "[rhizo-remove-entries] $TRIGGER changed during pass $pass"
 done
-echo "[rhizo-remove-entries] /data/app still changing after 6 passes" >&2
+echo "[rhizo-remove-entries] $TRIGGER changed in each of 6 passes" >&2
 exit 1

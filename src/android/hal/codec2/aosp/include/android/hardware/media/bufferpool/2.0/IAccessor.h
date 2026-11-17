@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2_AOSP_HIDL_BUFFERPOOL_V2_0_IACCESSOR_H
 #define RHIZO_C2_AOSP_HIDL_BUFFERPOOL_V2_0_IACCESSOR_H
 
-// declare the HIDL bufferpool IAccessor
+// forward declaration of the HIDL bufferpool IAccessor
 
 #include <utils/StrongPointer.h>
 

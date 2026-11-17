@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2VA_STREAMS_H
 #define RHIZO_C2VA_STREAMS_H
 
-// split Annex B and IVF input into decode units
+// Annex B and IVF input splitting into decode units
 
 #include <stddef.h>
 #include <stdint.h>
@@ -28,7 +28,7 @@ std::vector<Unit> SplitAccessUnits(Codec codec, const std::vector<uint8_t>& stre
 bool ReadIvf(const std::vector<uint8_t>& file, std::vector<Unit>* frames, std::string* fourcc, uint32_t* width,
              uint32_t* height);
 
-// parse a codec from its name
+// parse a codec from a codec name
 bool ParseCodec(const std::string& name, Codec* codec);
 
 }

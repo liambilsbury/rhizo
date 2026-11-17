@@ -56,7 +56,7 @@ public class NotifListener extends NotificationListenerService {
         return true;
     }
 
-    // send the notification to BridgeService
+    // queue a notify payload with BridgeService.enqueue
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
         mActive.put(sbn.getKey(), sbn);
@@ -79,13 +79,13 @@ public class NotifListener extends NotificationListenerService {
                 obj.put("icon_b64", iconB64);
             }
         } catch (JSONException e) {
-            Logs.e("cannot build notify payload", e);
+            Logs.e("failed to build notify payload", e);
             return;
         }
         BridgeService.enqueue(this, obj);
     }
 
-    // forget the notification and send a notif_gone message
+    // remove the notification from mActive and queue notif_gone
     @Override
     public void onNotificationRemoved(StatusBarNotification sbn) {
         mActive.remove(sbn.getKey());
@@ -94,7 +94,7 @@ public class NotifListener extends NotificationListenerService {
             obj.put("t", "notif_gone");
             obj.put("key", sbn.getKey());
         } catch (JSONException e) {
-            Logs.e("cannot build notif_gone payload", e);
+            Logs.e("failed to build notif_gone payload", e);
             return;
         }
         BridgeService.enqueue(this, obj);
@@ -116,7 +116,7 @@ public class NotifListener extends NotificationListenerService {
             try {
                 n.contentIntent.send();
             } catch (PendingIntent.CanceledException e) {
-                Logs.e("contentIntent already canceled for " + key, e);
+                Logs.e("contentIntent.send() failed for " + key, e);
             }
         }
         if ((n.flags & Notification.FLAG_AUTO_CANCEL) != 0) {

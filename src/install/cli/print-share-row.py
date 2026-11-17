@@ -4,7 +4,7 @@ import json, os, sys, urllib.parse
 try:
     doc = json.loads(sys.argv[1])
 except ValueError as e:
-    print("ERR hostfs.py status --json did not print JSON: %s" % e)
+    print("ERR failed to parse hostfs.py status --json output (%s)" % e)
     raise SystemExit(0)
 path = sys.argv[2]
 for share in doc.get("shares", []):

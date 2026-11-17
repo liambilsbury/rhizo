@@ -27,7 +27,7 @@ struct FrameSpan {
   size_t size;
 };
 
-// split a chunk into its superframe's frames
+// split a chunk into the frames of a superframe
 bool SplitSuperframe(const uint8_t* data, size_t size, FrameSpan frames[kMaxSuperframeFrames], int* count);
 
 // the color configuration of a frame
@@ -39,7 +39,7 @@ struct ColorConfig {
   bool subsampling_y = true;
 };
 
-// the slot contents the reference frame update stores
+// a slot of the reference frame update process
 struct RefInfo {
   bool valid = false;
   uint32_t width = 0;
@@ -48,7 +48,7 @@ struct RefInfo {
   ColorConfig color;
 };
 
-// the uncompressed header state carried across frames
+// the uncompressed header state between frames
 struct ParseState {
   ColorConfig color;
   int32_t lf_ref_deltas[4] = {1, 0, -1, -1};
@@ -61,7 +61,7 @@ struct ParseState {
   RefInfo refs[kNumRefFrames];
 };
 
-// a frame's uncompressed header and its derived variables
+// a frame's uncompressed header and the derived variables
 struct FrameHeader {
   uint32_t profile = 0;
   bool show_existing_frame = false;

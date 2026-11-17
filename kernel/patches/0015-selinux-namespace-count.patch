@@ -1,8 +1,8 @@
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 1842f134b..718ab3a56 100644
+index 7249786f9..5e03fd90f 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -9084,6 +9084,14 @@ unsigned int selinux_maxnsdepth = CONFIG_SECURITY_SELINUX_MAXNSDEPTH;
+@@ -9157,6 +9157,14 @@ unsigned int selinux_maxnsdepth = CONFIG_SECURITY_SELINUX_MAXNSDEPTH;
  
  static atomic_t selinux_nsnum = ATOMIC_INIT(0);
  
@@ -18,7 +18,7 @@ index 1842f134b..718ab3a56 100644
  static atomic64_t selinux_state_ids = ATOMIC64_INIT(0);
  
 diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
-index baa0e346a..07f600b98 100644
+index aefbe1ddb..0ca2319e3 100644
 --- a/security/selinux/include/security.h
 +++ b/security/selinux/include/security.h
 @@ -119,6 +119,7 @@ struct selinux_state {
@@ -30,10 +30,10 @@ index baa0e346a..07f600b98 100644
  void __put_selinux_state(struct selinux_state *state);
  
 diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
-index 269e28762..4c18de105 100644
+index ecb13edf8..9bb4792c1 100644
 --- a/security/selinux/selinuxfs.c
 +++ b/security/selinux/selinuxfs.c
-@@ -70,6 +70,7 @@ enum sel_inos {
+@@ -69,6 +69,7 @@ enum sel_inos {
  #ifdef CONFIG_SECURITY_SELINUX_NS
  	SEL_MAXNS,	    /* maximum number of SELinux namespaces */
  	SEL_MAXNSDEPTH,	    /* maximum depth of SELinux namespaces */
@@ -41,7 +41,7 @@ index 269e28762..4c18de105 100644
  #endif
  	SEL_INO_NEXT,	/* The next inode number to use */
  };
-@@ -327,6 +328,21 @@ static const struct file_operations sel_disable_ops = {
+@@ -298,6 +299,21 @@ static const struct file_operations sel_disable_ops = {
  };
  
  #ifdef CONFIG_SECURITY_SELINUX_NS
@@ -61,9 +61,9 @@ index 269e28762..4c18de105 100644
 +};
 +
  static ssize_t sel_read_maxns(struct file *filp, char __user *buf,
- 			     size_t count, loff_t *ppos)
+ 			      size_t count, loff_t *ppos)
  {
-@@ -2278,6 +2294,7 @@ static int sel_fill_super(struct super_block *sb, struct fs_context *fc)
+@@ -2111,6 +2127,7 @@ static int sel_fill_super(struct super_block *sb, struct fs_context *fc)
  #ifdef CONFIG_SECURITY_SELINUX_NS
  		[SEL_MAXNS] = {"maxns", &sel_maxns_ops, 0600},
  		[SEL_MAXNSDEPTH] = {"maxnsdepth", &sel_maxnsdepth_ops, 0600},

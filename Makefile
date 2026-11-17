@@ -24,7 +24,7 @@ include tools/build/rules.mk
 # changed stamps
 CHANGED := $(shell python3 tools/build/stamps.py changed)
 ifneq ($(.SHELLSTATUS),0)
-$(error tools/build/stamps.py changed failed -- run it by hand to see why)
+$(error python3 tools/build/stamps.py changed failed with exit status $(.SHELLSTATUS))
 endif
 $(CHANGED): FORCE
 
@@ -54,7 +54,7 @@ FORCE:
 
 # inputs
 .rhizo-inputs.tsv:
-	@echo "no .rhizo-inputs.tsv -- run make inputs first (it runs tools/fetch/build-inputs.sh)" >&2; exit 1
+	@echo "no .rhizo-inputs.tsv" >&2; exit 1
 
 tools/build/rules.mk: tools/build/artifacts.tsv tools/build/rules.py
 	@python3 tools/build/rules.py
@@ -90,8 +90,8 @@ shell:
 	$(IN_ENV) bash
 inputs:
 	@if [[ "$(ACCEPT_ANDROID_SDK_LICENSE)" != 1 ]]; then \
-	  echo "make inputs fetches Google's Android SDK build tools, under https://developer.android.com/studio/terms" >&2; \
-	  echo "  read those terms, then run: make inputs ACCEPT_ANDROID_SDK_LICENSE=1" >&2; exit 1; fi
+	  echo "make inputs fetches Google's Android SDK build tools under https://developer.android.com/studio/terms" >&2; \
+	  echo "make inputs ACCEPT_ANDROID_SDK_LICENSE=1" >&2; exit 1; fi
 	$(IN_ENV) tools/fetch/build-inputs.sh --accept-android-sdk-license --sync-aosp
 inputs-a17:
 	$(IN_ENV) tools/fetch/aosp-a17.sh --sync

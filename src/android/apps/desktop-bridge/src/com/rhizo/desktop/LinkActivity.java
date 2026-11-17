@@ -22,7 +22,7 @@ public class LinkActivity extends Activity {
         finish();
     }
 
-    // send the open message to BridgeService
+    // queue an open payload with BridgeService.enqueue
     private void forward(String uri, String mime) {
         JSONObject obj = new JSONObject();
         try {
@@ -30,7 +30,7 @@ public class LinkActivity extends Activity {
             obj.put("uri", uri);
             obj.put("mime", mime != null ? mime : JSONObject.NULL);
         } catch (JSONException e) {
-            Logs.e("cannot build open payload", e);
+            Logs.e("failed to build open payload", e);
             return;
         }
         BridgeService.enqueue(this, obj);

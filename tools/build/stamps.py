@@ -23,7 +23,7 @@ DEB_TEST = "installer.sh"
 
 
 class InputsChangedError(Exception):
-    """exception for a build whose inputs changed under it"""
+    """exception for a deb whose routed inputs changed during dpkg-buildpackage"""
 
 
 Entry = collections.namedtuple("Entry", "name build sources set after")
@@ -49,11 +49,11 @@ def entries(path=TABLE, text=None):
             continue
         parts = [p.strip() for p in line.split("\t")]
         if len(parts) != 5:
-            raise ValueError("artifacts.tsv needs five tab-separated "
-                             "columns, got %d: %r" % (len(parts), line))
+            raise ValueError("artifacts.tsv row has %d tab-separated "
+                             "columns, expected 5 (%r)" % (len(parts), line))
         name, build, sources, kind, after = parts
         if kind not in ("payload", "test"):
-            raise ValueError("artifacts.tsv: %s is in set %r, want payload or test" % (name, kind))
+            raise ValueError("artifacts.tsv row %s has set %r, expected payload or test" % (name, kind))
         out.append(Entry(name, build, sources.split(), kind, [] if after == "-" else after.split()))
     return out
 
@@ -89,7 +89,7 @@ def source_files(sources, root=ROOT):
 
 
 def source_hash(sources, root=ROOT):
-    """return a hash of the names and contents of the source files"""
+    """return the sha256 of the relative paths and contents of the source files"""
     h = hashlib.sha256()
     for path in source_files(sources, root):
         h.update(os.path.relpath(path, root).encode("utf-8"))
@@ -105,7 +105,7 @@ def source_hash(sources, root=ROOT):
 
 
 def artifact_path(name, share=SHARE, root=ROOT):
-    """return where a row's artifact lives"""
+    """return the artifact path of a row"""
     if name.startswith("toolchain/"):
         return os.path.join(root, name)
     return os.path.join(share, name)
@@ -122,13 +122,13 @@ def stamp_path(name, share=SHARE, root=ROOT):
 
 
 def hashed_after(table):
-    """map each row to its after-rows built by another command"""
+    """return a map of each row to the after-rows another build command builds"""
     build = {e.name: e.build for e in table}
     return {e.name: [a for a in e.after if a in build and build[a] != e.build] for e in table}
 
 
 def manifest_after(name, root=ROOT):
-    """return a row's hashed after-rows from its manifest"""
+    """return hashed_after() of tools/build/artifacts.tsv for row name"""
     path = os.path.join(root, "tools", "build", "artifacts.tsv")
     if not os.path.exists(path):
         return []
@@ -152,28 +152,28 @@ def row_hash(sources, after=(), share=SHARE, root=ROOT):
 
 
 def verdict(name, build, sources, require, share=SHARE, root=ROOT, after=None):
-    """return why an artifact does not match its sources"""
+    """return the stamp finding for an artifact, else None"""
     artifact = artifact_path(name, share, root)
     if not os.path.exists(artifact):
         if not require:
             return None
-        return ("%s is not staged -- build it with %s" % (name, build))
+        return ("%s is not staged by %s" % (name, build))
     stamp = stamp_path(name, share, root)
     if not os.path.exists(stamp):
-        return ("%s carries no source stamp, so nothing can say whether it "
-                "matches its sources -- rebuild it with %s" % (name, build))
+        return ("%s has no source stamp from "
+                "%s" % (name, build))
     with open(stamp) as f:
         recorded = f.read().strip()
     current = row_hash(sources, manifest_after(name, root) if after is None else after, share, root)
     if recorded != current:
-        return ("%s was built from different sources than the tree now has, or against another build of a row "
-                "it is built after (stamped %s, now %s) -- rebuild it with %s"
+        return ("%s was built from different sources or after-rows "
+                "(stamped %s, current %s) by %s"
                 % (name, recorded[:12], current[:12], build))
     return None
 
 
 def check(require_names=(), table=None, share=SHARE, root=ROOT):
-    """return the problems in the table rows"""
+    """return the stamp findings for the table rows"""
     findings = []
     table = as_entries(table)
     after = hashed_after(table)
@@ -187,8 +187,8 @@ def check(require_names=(), table=None, share=SHARE, root=ROOT):
         known = {e.name for e in table}
         for name in require_names:
             if name not in known:
-                findings.append("%s has no row in artifacts.tsv, so its "
-                                "stamp cannot be checked" % name)
+                findings.append("%s has no row in "
+                                "artifacts.tsv" % name)
     return findings
 
 
@@ -224,7 +224,7 @@ def pending_path(name, root=ROOT):
 
 
 def outside_checkout(names, share=SHARE, root=ROOT, table=None):
-    """refuse each row whose paths resolve outside the checkout"""
+    """return a finding for each row whose paths resolve outside the checkout"""
     top = os.path.realpath(root)
     scripts = {e.name: build_script(e.build) for e in as_entries(table)}
     refused = []
@@ -239,9 +239,8 @@ def outside_checkout(names, share=SHARE, root=ROOT, table=None):
             link = next((os.path.join(*parts[:i]) for i in range(1, len(parts) + 1)
                          if os.path.islink(os.path.join(root, *parts[:i]))), rel)
             target = os.path.realpath(os.path.join(root, link))
-            refused.append("%s: %s resolves to %s, outside this checkout, through the link %s -> %s -- "
-                           "build it there, or give this checkout its own: "
-                           "rm %s && cp -a --reflink=auto %s %s" % (name, rel, real, link, target, link, target, link))
+            refused.append("row %s path %s resolves to %s outside the checkout "
+                           "through the link %s -> %s" % (name, rel, real, link, target))
             break
     return refused
 
@@ -255,7 +254,7 @@ def hasher(table, share, root):
 
 
 def record_pending(names, table=None, share=SHARE, root=ROOT):
-    """record each row's hash before its build and remove its stamp"""
+    """write each row hash to var/build-pending and delete the row stamp"""
     current = hasher(table, share, root)
     for name in names:
         path = pending_path(name, root)
@@ -281,7 +280,7 @@ def write_stamps(names, done=False, table=None, share=SHARE, root=ROOT):
             with open(pending) as f:
                 want = f.read().strip()
         if want != current:
-            refused.append("%s: its sources changed during the build (pre-build %s, now %s) -- run make again"
+            refused.append("%s sources changed during the build (pre-build %s, current %s)"
                            % (name, want[:12], current[:12]))
             try:
                 os.remove(stamp)
@@ -303,7 +302,7 @@ def build_script(build):
 
 
 def is_rhizo_deb(deb):
-    """return true for rhizo_*.deb names"""
+    """return whether the basename of deb matches rhizo_*.deb"""
     return fnmatch.fnmatch(os.path.basename(deb), "rhizo_*.deb")
 
 
@@ -313,7 +312,7 @@ def deb_stamp_path(deb):
 
 
 def deb_dir():
-    """return the folder holding the .deb files"""
+    """return RHIZO_DEB_DIR or var/debs"""
     return os.environ.get("RHIZO_DEB_DIR") or DEB_DEFAULT_DIR
 
 
@@ -330,7 +329,7 @@ def tracked_files(root, include_untracked=True):
         args += ["-o", "--exclude-standard"]
     out = subprocess.run(args, cwd=root, capture_output=True, env=GIT_ENV)
     if out.returncode != 0:
-        raise RuntimeError("git ls-files failed in %s (rc=%d): %s"
+        raise RuntimeError("git ls-files failed in %s with exit status %d (%s)"
                             % (root, out.returncode,
                                out.stderr.decode(errors="replace").strip()))
     return [p for p in out.stdout.decode().split("\0") if p]
@@ -341,7 +340,7 @@ def git_head(root):
     out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
                          capture_output=True, text=True, env=GIT_ENV)
     if out.returncode != 0:
-        raise RuntimeError("git rev-parse HEAD failed in %s (rc=%d): %s"
+        raise RuntimeError("git rev-parse HEAD failed in %s with exit status %d (%s)"
                             % (root, out.returncode, out.stderr.strip()))
     return out.stdout.strip()
 
@@ -396,8 +395,8 @@ def deb_stamp(deb, root=ROOT, affects_tsv=None, path_is_input=None, tracked=None
     digest = deb_input_digest(root, affects_tsv, path_is_input, tracked)
     if expect_inputs is not None and expect_inputs != digest:
         raise InputsChangedError(
-            "%s's routed inputs changed while dpkg-buildpackage ran (pre-build %s, "
-            "post-build %s) -- rebuild it with tools/build/packaging/deb/debs.sh"
+            "%s routed inputs changed during dpkg-buildpackage (pre-build %s, "
+            "post-build %s)"
             % (os.path.basename(deb), expect_inputs[:12], digest[:12]))
     with open(deb_stamp_path(deb), "w") as f:
         f.write("sha256\t%s\n" % sha256_file(deb))
@@ -407,7 +406,7 @@ def deb_stamp(deb, root=ROOT, affects_tsv=None, path_is_input=None, tracked=None
 
 def deb_require(deb, root=ROOT, affects_tsv=None, path_is_input=None,
                 tracked=None, check_sha=True):
-    """return why a deb does not match the tree"""
+    """return the deb stamp finding, else None"""
     stamp = deb_stamp_path(deb)
     if not os.path.exists(stamp):
         return "no stamp"
@@ -417,9 +416,9 @@ def deb_require(deb, root=ROOT, affects_tsv=None, path_is_input=None,
     try:
         current = deb_input_digest(root, affects_tsv, path_is_input, tracked)
     except RuntimeError as e:
-        return "refusing: %s" % e
+        return "%s" % e
     if recorded.get("inputs") != current:
-        return "changed: inputs changed since the build at %s" % recorded.get("commit", "unknown")
+        return "inputs changed since the build at commit %s" % recorded.get("commit", "unknown")
     return None
 
 
@@ -429,20 +428,20 @@ def selftest():
     import tempfile
     n = 0
     table = rows()
-    assert table, "artifacts.tsv parsed to nothing"
+    assert table, "rows() != []"
     n += 1
     for name, build, sources in table:
         assert os.path.exists(os.path.join(ROOT, build_script(build))), \
-            "%s names a build command that does not exist: %s" % (name, build)
+            "row %s build script exists (%s)" % (name, build)
         for rel in sources:
             assert os.path.exists(os.path.join(ROOT, rel)), \
-                "%s names a source that does not exist: %s" % (name, rel)
+                "row %s source exists (%s)" % (name, rel)
     n += 1
-    for bad_text, why in (("a\tb.sh\tsrc\n", "five tab-separated columns"),
-                          ("a\tb.sh\tsrc\tship\t-\n", "want payload or test")):
+    for bad_text, why in (("a\tb.sh\tsrc\n", "expected 5"),
+                          ("a\tb.sh\tsrc\tship\t-\n", "expected payload or test")):
         try:
             entries(text=bad_text)
-            raise AssertionError("entries() accepted %r" % bad_text)
+            raise AssertionError("entries(%r) raises ValueError" % bad_text)
         except ValueError as e:
             assert why in str(e), e
     n += 1
@@ -456,9 +455,9 @@ def selftest():
         os.makedirs(os.path.dirname(table))
         os.makedirs(os.path.join(tmp, "test"))
         open(table, "w").write("p\tb.sh\tsrc\tpayload\t-\n")
-        assert [e.name for e in entries(table)] == ["p"], "a tree without its test table"
+        assert [e.name for e in entries(table)] == ["p"], "entries(table) == [p] without a test table"
         open(test_table(table), "w").write("t\tt.sh\tsrc\ttest\tp\n")
-        assert [(e.name, e.set) for e in entries(table)] == [("p", "payload"), ("t", "test")], "both tables"
+        assert [(e.name, e.set) for e in entries(table)] == [("p", "payload"), ("t", "test")], "entries(table) == [p payload, t test]"
     finally:
         shutil.rmtree(tmp)
     n += 1
@@ -495,7 +494,7 @@ def selftest():
         n += 1
         open(srcfile, "w").write("one\n")
         open(stamp_path("art", share, root), "w").write(source_hash(["src"], root))
-        assert changed(table=fixture, share=share, root=root) == [], "a matching stamp was listed as changed"
+        assert changed(table=fixture, share=share, root=root) == [], "changed() == [] for a matching stamp"
         n += 1
         open(srcfile, "w").write("three\n")
         assert changed(table=fixture, share=share, root=root) == [os.path.relpath(stamp_path("art", share), root)]
@@ -514,27 +513,27 @@ def selftest():
         assert write_stamps(["art"], table=fixture, share=share, root=root) == []
         before = source_hash(["src"], root)
         record_pending(["art"], table=fixture, share=share, root=root)
-        assert not os.path.exists(art_stamp), "begin left the stamp"
-        assert open(art_pending).read().strip() == before, "begin did not record the pre-build hash"
+        assert not os.path.exists(art_stamp), "record_pending() deletes the art stamp"
+        assert open(art_pending).read().strip() == before, "record_pending() writes the pre-build hash"
         assert not os.path.abspath(art_pending).startswith(os.path.abspath(share) + os.sep), \
-            "the pending hash sits in the share"
+            "pending_path(art) is outside share"
         assert changed(table=fixture, share=share, root=root) == [os.path.relpath(art_stamp, root)]
         n += 1
         assert write_stamps(["art"], table=fixture, share=share, root=root) == []
         assert open(art_stamp).read().strip() == before and os.path.exists(art_pending), \
-            "a script's own stamp inside the build must write the pre-build hash and leave it pending"
+            "write_stamps([art]) stamp == pre-build hash and art_pending exists"
         n += 1
         assert write_stamps(["art"], done=True, table=fixture, share=share, root=root) == []
         assert open(art_stamp).read().strip() == before and not os.path.exists(art_pending), \
-            "stamp --done must write the pre-build hash and drop the pending file"
+            "write_stamps([art], done=True) stamp == pre-build hash and art_pending is deleted"
         n += 1
         record_pending(["art"], table=fixture, share=share, root=root)
         assert write_stamps(["art"], table=fixture, share=share, root=root) == []
         open(srcfile, "w").write("edited mid-build\n")
         got = write_stamps(["art"], done=True, table=fixture, share=share, root=root)
-        assert len(got) == 1 and "art" in got[0] and "run make again" in got[0], got
-        assert not os.path.exists(art_stamp), "a refused stamp --done left the script's own stamp"
-        assert not os.path.exists(art_pending), "a finished build (--done) left its pending hash"
+        assert len(got) == 1 and "art" in got[0] and "sources changed during the build" in got[0], got
+        assert not os.path.exists(art_stamp), "write_stamps([art], done=True) after an edit deletes art_stamp"
+        assert not os.path.exists(art_pending), "write_stamps([art], done=True) deletes art_pending"
         assert changed(table=fixture, share=share, root=root) == [os.path.relpath(art_stamp, root)]
         n += 1
         record_pending(["art"], table=fixture, share=share, root=root)
@@ -542,12 +541,12 @@ def selftest():
         got = write_stamps(["art"], table=fixture, share=share, root=root)
         assert len(got) == 1 and "art" in got[0], got
         assert not os.path.exists(art_stamp) and os.path.exists(art_pending), \
-            "a script's own refused stamp must leave no stamp and keep the pending hash"
+            "write_stamps([art]) after an edit deletes art_stamp and art_pending exists"
         n += 1
         os.remove(art_pending)
         assert write_stamps(["art"], table=fixture, share=share, root=root) == []
         assert open(art_stamp).read().strip() == source_hash(["src"], root), \
-            "with nothing pending, stamp must write the current hash as it always has"
+            "write_stamps([art]) without art_pending stamp == source_hash([src])"
         n += 1
 
         def entry(name, build, sources, after=()):
@@ -567,23 +566,23 @@ def selftest():
                  entry("y", "tools/build-y.sh", ["ysrc"], ["x"])]
         for name in ("dep", "x", "y"):
             assert write_stamps([name], table=chain, share=share, root=root) == []
-        assert changed(table=chain, share=share, root=root) == [], "a build in order left rows changed"
+        assert changed(table=chain, share=share, root=root) == [], "changed(chain) == [] after write_stamps in order"
         assert check(table=chain, share=share, root=root) == []
         assert open(stamp_path("dep", share, root)).read().strip() == source_hash(["dsrc"], root), \
-            "a row built after nothing must keep its plain source hash, so its existing stamp stays valid"
+            "dep stamp == source_hash([dsrc])"
         assert open(stamp_path("x", share, root)).read().strip() != source_hash(["xsrc"], root), \
-            "a row built after another must fold that row's stamp into its own"
+            "x stamp != source_hash([xsrc])"
         n += 1
         open(os.path.join(root, "dsrc"), "w").write("dsrc two\n")
         assert changed(table=chain, share=share, root=root) == [rel("dep"), rel("x"), rel("y")], \
-            "an edited dependency must make every row built after it, transitively, changed in the same run: %s" \
+            "changed(chain) == dep x y after a write to dsrc (%s)" \
             % changed(table=chain, share=share, root=root)
         got = check(table=chain, share=share, root=root)
         assert len(got) == 1 and got[0].startswith("dep "), got
         n += 1
         assert write_stamps(["dep"], table=chain, share=share, root=root) == []
         assert changed(table=chain, share=share, root=root) == [rel("x"), rel("y")], \
-            "a dependency rebuilt in an earlier run must leave the rows built after it changed: %s" \
+            "changed(chain) == x y after write_stamps([dep]) (%s)" \
             % changed(table=chain, share=share, root=root)
         got = check(table=chain, share=share, root=root)
         assert len(got) == 1 and got[0].startswith("x "), got
@@ -591,11 +590,11 @@ def selftest():
         group = [entry("p", "tools/build-pq.sh", ["pqsrc"]), entry("q", "tools/build-pq.sh", ["pqsrc"], ["p"])]
         record_pending(["p", "q"], table=group, share=share, root=root)
         assert write_stamps(["p", "q"], done=True, table=group, share=share, root=root) == [], \
-            "a row built after a row of its own build command must not fold in a stamp that same build rewrites"
+            "write_stamps([p, q], done=True) == [] for p and q of one build command"
         assert changed(table=group, share=share, root=root) == []
         n += 1
         assert outside_checkout(["art", "toolchain/gen"], os.path.join(root, "var", "share"), root) == [], \
-            "a checkout's own toolchain, share and build-pending were refused"
+            "outside_checkout([art, toolchain/gen]) == [] in root"
         other = os.path.join(tmp, "other")
         wt = os.path.join(tmp, "wt")
         for d in ("toolchain", "var/build-pending", "var/share"):
@@ -605,32 +604,32 @@ def selftest():
         wt_share = os.path.join(wt, "var", "share")
         got = outside_checkout(["toolchain/gen"], wt_share, wt)
         assert len(got) == 1 and "toolchain/gen resolves to" in got[0] and "the link toolchain -> " + os.path.join(other, "toolchain") in got[0] \
-            and got[0].endswith("rm toolchain && cp -a --reflink=auto %s toolchain" % os.path.join(other, "toolchain")), \
-            "a toolchain row through a linked toolchain/ was not refused naming the link: %s" % got
-        assert outside_checkout(["art"], wt_share, wt) == [], "a share row in a checkout with its own share was refused"
+            and got[0].endswith("the link toolchain -> %s" % os.path.join(other, "toolchain")), \
+            "outside_checkout([toolchain/gen]) has the link toolchain -> other/toolchain (%s)" % got
+        assert outside_checkout(["art"], wt_share, wt) == [], "outside_checkout([art]) == [] in wt"
         os.symlink(os.path.join(other, "var", "build-pending"), os.path.join(wt, "var", "build-pending"))
         got = outside_checkout(["art"], wt_share, wt)
         assert len(got) == 1 and "var/build-pending/art.srchash" in got[0] and "the link var/build-pending -> " in got[0], \
-            "a pre-build hash through a linked var/build-pending was not refused naming the link: %s" % got
+            "outside_checkout([art]) has the link var/build-pending (%s)" % got
         n += 1
         drv = [entry("drv", "tools/build/graphics/gpu-driver.sh fixture", ["drvsrc"])]
         os.makedirs(os.path.join(other, "mesa-src", "build-android-fixture"))
         os.makedirs(os.path.join(root, "mesa-src"))
         assert outside_checkout(["drv"], os.path.join(root, "var", "share"), root, table=drv) == [], \
-            "a gpu-driver.sh row in a checkout with its own mesa-src was refused"
+            "outside_checkout([drv]) == [] in root"
         os.symlink(os.path.join(other, "mesa-src"), os.path.join(wt, "mesa-src"))
         os.rename(os.path.join(wt, "var", "build-pending"), os.path.join(wt, "var", "build-pending.link"))
         os.makedirs(os.path.join(wt, "var", "build-pending"))
         got = outside_checkout(["drv"], wt_share, wt, table=drv)
-        assert len(got) == 1 and "drv: mesa-src resolves to " in got[0] \
-            and got[0].endswith("rm mesa-src && cp -a --reflink=auto %s mesa-src" % os.path.join(other, "mesa-src")), \
-            "a gpu-driver.sh row through a linked mesa-src was not refused naming the link: %s" % got
+        assert len(got) == 1 and "row drv path mesa-src resolves to " in got[0] \
+            and got[0].endswith("the link mesa-src -> %s" % os.path.join(other, "mesa-src")), \
+            "outside_checkout([drv]) has the link mesa-src -> other/mesa-src (%s)" % got
         assert outside_checkout(["art"], wt_share, wt, table=drv) == [], \
-            "a row another script builds was refused for a linked mesa-src it never writes"
+            "outside_checkout([art], table=drv) == [] in wt"
         n += 1
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("stamps selftest: %d assertions passed" % n)
+    print("ok stamps.py selftest assertions=%d" % n)
 
 
 def deb_selftest():
@@ -669,9 +668,9 @@ def deb_selftest():
         with open(deb, "wb") as f:
             f.write(b"deb bytes one")
 
-        assert is_rhizo_deb(deb), "is_rhizo_deb rejected a real rhizo_*.deb name"
+        assert is_rhizo_deb(deb), "is_rhizo_deb(rhizo_0.1.0_amd64.deb)"
         assert not is_rhizo_deb(os.path.join(tmp, "rhizo-sample_0.1.0_amd64.deb")), \
-            "is_rhizo_deb accepted a sibling-repo package name"
+            "not is_rhizo_deb(rhizo-sample_0.1.0_amd64.deb)"
         n += 1
 
         def edit(rel, body):
@@ -684,29 +683,29 @@ def deb_selftest():
         before = deb_input_digest(tmp, absent, tracked=tracked)
         edit("docs/bar.md", "doc two\n")
         assert deb_input_digest(tmp, absent, tracked=tracked) != before, \
-            "a tree without affects.tsv left a tracked file out of the deb's inputs"
+            "deb_input_digest() without affects.tsv changes after a write to docs/bar.md"
         edit("docs/bar.md", "doc one\n")
         n += 1
         if importlib.util.find_spec("affects") is None:
-            print("stamps deb selftest: %d assertions passed; the routed cases need the tests' affects module" % n)
+            print("ok stamps.py deb selftest assertions=%d affects=absent" % n)
             return
 
         def stamp(**kw):
-            """stamp the stub .deb"""
+            """call deb_stamp for the stub .deb"""
             deb_stamp(deb, root=tmp, affects_tsv=affects, **kw)
 
         def require(**kw):
-            """return the stub .deb's requirement result"""
+            """return deb_require() for the stub .deb"""
             return deb_require(deb, root=tmp, affects_tsv=affects, **kw)
 
         stamp()
-        assert require() is None, "a stamp just written did not match"
+        assert require() is None, "deb_require() is None after deb_stamp()"
         n += 1
 
         edit("src/install/foo.sh", "echo two\n")
         reason = require()
-        assert reason and reason.startswith("changed:"), \
-            "a routed file edit did not read changed: %r" % reason
+        assert reason and reason.startswith("inputs changed"), \
+            "deb_require() starts with inputs changed after a write to src/install/foo.sh (%r)" % reason
         n += 1
         edit("src/install/foo.sh", "echo one\n")
         assert require() is None
@@ -716,7 +715,7 @@ def deb_selftest():
             f.write(b"deb bytes two")
         reason = require()
         assert reason == "not the stamped package", \
-            "changed deb bytes did not read 'not the stamped package': %r" % reason
+            "deb_require() == 'not the stamped package' after a write to the deb (%r)" % reason
         n += 1
         with open(deb, "wb") as f:
             f.write(b"deb bytes one")
@@ -724,26 +723,26 @@ def deb_selftest():
         n += 1
 
         os.remove(deb_stamp_path(deb))
-        assert require() == "no stamp", "a deleted stamp did not read 'no stamp'"
+        assert require() == "no stamp", "deb_require() == 'no stamp' without the stamp file"
         n += 1
         stamp()
 
         edit("docs/bar.md", "doc two\n")
-        assert require() is None, "a NONE-routed edit read changed"
+        assert require() is None, "deb_require() is None after a write to NONE-routed docs/bar.md"
         n += 1
         edit("docs/bar.md", "doc one\n")
 
         edit("src/install/new.sh", "echo new\n")
         reason = require()
-        assert reason and reason.startswith("changed:"), \
-            "an untracked file under a routed prefix must read changed, not matching: %r" % reason
+        assert reason and reason.startswith("inputs changed"), \
+            "deb_require() starts with inputs changed after an untracked src/install/new.sh (%r)" % reason
         n += 1
         os.remove(os.path.join(tmp, "src", "install", "new.sh"))
         assert require() is None
         n += 1
 
         edit("docs/new.md", "doc new\n")
-        assert require() is None, "an untracked NONE-routed file read changed"
+        assert require() is None, "deb_require() is None after an untracked docs/new.md"
         n += 1
         os.remove(os.path.join(tmp, "docs", "new.md"))
 
@@ -757,7 +756,7 @@ def deb_selftest():
             deb_stamp(clone_deb, root=clone, affects_tsv=clone_affects)
             shutil.copyfile(clone_deb, deb)
             shutil.copyfile(deb_stamp_path(clone_deb), deb_stamp_path(deb))
-            assert require() is None, "a deb+stamp built in a clean clone read changed here"
+            assert require() is None, "deb_require() is None for a deb and stamp from a clone"
             n += 1
         finally:
             shutil.rmtree(clone, ignore_errors=True)
@@ -770,12 +769,12 @@ def deb_selftest():
         except InputsChangedError:
             raised_inputs_changed = True
         assert raised_inputs_changed, \
-            "deb_stamp did not refuse when the pre-build digest no longer matched the tree at stamp time"
+            "deb_stamp(expect_inputs=pre) raises InputsChangedError after a write to src/install/foo.sh"
         edit("src/install/foo.sh", "echo one\n")
         n += 1
         pre = deb_input_digest(tmp, affects_tsv=affects)
         deb_stamp(deb, root=tmp, affects_tsv=affects, expect_inputs=pre)
-        assert require() is None, "a clean mid-build digest match still failed to stamp as matching"
+        assert require() is None, "deb_require() is None after deb_stamp(expect_inputs=pre) with a matching digest"
         n += 1
 
         cli_tmp = tempfile.mkdtemp(prefix="stamps-cli-")
@@ -785,13 +784,13 @@ def deb_selftest():
                 f.write(b"cli deb bytes")
             wrong_pre = "0" * 64
             rc = main(["stamps.py", "deb-stamp", cli_deb, wrong_pre])
-            assert rc == 3, "the CLI's deb-stamp did not exit 3 for a pre-build digest that does not match: rc=%r" % rc
+            assert rc == 3, "main(deb-stamp, wrong_pre) == 3 (rc=%r)" % rc
             assert not os.path.exists(deb_stamp_path(cli_deb)), \
-                "a refused deb-stamp must not leave a stamp behind"
+                "main(deb-stamp, wrong_pre) writes no stamp"
             n += 1
             real_pre = deb_input_digest(ROOT)
             rc = main(["stamps.py", "deb-stamp", cli_deb, real_pre])
-            assert rc == 0, "the CLI's deb-stamp refused a pre-build digest matching the real tree: rc=%r" % rc
+            assert rc == 0, "main(deb-stamp, real_pre) == 0 (rc=%r)" % rc
             n += 1
         finally:
             shutil.rmtree(cli_tmp, ignore_errors=True)
@@ -808,7 +807,7 @@ def deb_selftest():
                 f.write("inputs\t%s\n" % empty_digest)
             reason = deb_require(nogit_deb, root=nogit, affects_tsv=affects)
             assert reason, \
-                "a root with no .git at all matched instead of refusing"
+                "deb_require() is not None for a root without .git"
             n += 1
 
             raised_nogit = False
@@ -817,7 +816,7 @@ def deb_selftest():
             except RuntimeError:
                 raised_nogit = True
             assert raised_nogit, \
-                "deb_stamp on a root with no .git did not raise"
+                "deb_stamp() raises RuntimeError for a root without .git"
             n += 1
         finally:
             shutil.rmtree(nogit, ignore_errors=True)
@@ -826,8 +825,8 @@ def deb_selftest():
         stamp(path_is_input=always_true)
         edit("docs/bar.md", "doc mutated\n")
         got = require(path_is_input=always_true)
-        assert got and got.startswith("changed:"), \
-            "seed 'path_is_input forced True' left a NONE-routed edit matching: %r" % got
+        assert got and got.startswith("inputs changed"), \
+            "deb_require(path_is_input=always_true) starts with inputs changed after a write to docs/bar.md (%r)" % got
         edit("docs/bar.md", "doc one\n")
         n += 1
 
@@ -836,7 +835,7 @@ def deb_selftest():
         edit("src/install/foo.sh", "echo mutated\n")
         got = require(path_is_input=always_false)
         assert got is None, \
-            "seed 'path_is_input forced False' still caught a routed edit: %r" % got
+            "deb_require(path_is_input=always_false) is None after a write to src/install/foo.sh (%r)" % got
         edit("src/install/foo.sh", "echo one\n")
         n += 1
 
@@ -846,7 +845,7 @@ def deb_selftest():
         tracked_only_now = tracked_files(tmp, include_untracked=False)
         got = require(tracked=tracked_only_now)
         assert got is None, \
-            "seed 'tracked-only digest' should reproduce the tracked-only defect, but got: %r" % got
+            "deb_require(tracked=tracked_only_now) is None after an untracked src/install/new.sh (%r)" % got
         os.remove(os.path.join(tmp, "src", "install", "new.sh"))
         n += 1
 
@@ -855,18 +854,18 @@ def deb_selftest():
             f.write(b"deb bytes two")
         got = require(check_sha=False)
         assert got is None, \
-            "seed 'deb sha check skipped' still caught changed deb bytes: %r" % got
+            "deb_require(check_sha=False) is None after a write to the deb (%r)" % got
         with open(deb, "wb") as f:
             f.write(b"deb bytes one")
         n += 1
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("stamps deb selftest: %d assertions passed" % n)
+    print("ok stamps.py deb selftest assertions=%d" % n)
     return n
 
 
 def main(argv):
-    """run the selftests, or the command named in the arguments"""
+    """run --selftest or the argv[1] mode"""
     if "--selftest" in argv:
         selftest()
         deb_selftest()
@@ -876,26 +875,26 @@ def main(argv):
         done = mode == "stamp" and argv[2:3] == ["--done"]
         names = argv[3:] if done else argv[2:]
         if not names:
-            print("usage: stamps.py begin <name>... | stamp [--done] <name>...", file=sys.stderr)
+            print("stamps.py begin <name>... | stamp [--done] <name>...", file=sys.stderr)
             return 2
         table = entries()
         known = {e.name for e in table}
         missing = [n for n in names if n not in known]
         if missing:
-            print("stamps: %s has no row in artifacts.tsv" % " ".join(missing),
+            print("%s has no row in artifacts.tsv" % " ".join(missing),
                   file=sys.stderr)
             return 2
         linked = outside_checkout(names, table=table)
         if linked:
             for r in linked:
-                print("stamps: " + r, file=sys.stderr)
+                print(r, file=sys.stderr)
             return 1
         if mode == "begin":
             record_pending(names, table)
             return 0
         refused = write_stamps(names, done, table)
         for r in refused:
-            print("stamps: " + r, file=sys.stderr)
+            print(r, file=sys.stderr)
         return 1 if refused else 0
     if mode == "changed":
         for stamp in changed():
@@ -911,11 +910,11 @@ def main(argv):
         return 0
     if mode == "deb-stamp":
         if len(argv) not in (3, 4):
-            print("usage: stamps.py deb-stamp <deb> [pre-digest|@file]", file=sys.stderr)
+            print("stamps.py deb-stamp <deb> [pre-digest|@file]", file=sys.stderr)
             return 2
         deb = argv[2]
         if not is_rhizo_deb(deb):
-            print("stamps: %s is not a rhizo_*.deb" % deb, file=sys.stderr)
+            print("%s is not a rhizo_*.deb" % deb, file=sys.stderr)
             return 2
         pre = None
         if len(argv) == 4:
@@ -926,7 +925,7 @@ def main(argv):
         try:
             deb_stamp(deb, expect_inputs=pre)
         except InputsChangedError as e:
-            print("stamps: %s" % e, file=sys.stderr)
+            print("%s" % e, file=sys.stderr)
             return 3
         return 0
     if mode == "deb-require":
@@ -935,12 +934,12 @@ def main(argv):
         else:
             deb = find_deb()
             if deb is None:
-                print("stamps: no rhizo_*.deb found in %s" % deb_dir(),
+                print("no rhizo_*.deb in %s" % deb_dir(),
                       file=sys.stderr)
                 return 1
         reason = deb_require(deb)
         if reason:
-            print("stamps: %s" % reason)
+            print("%s" % reason)
             return 1
         return 0
     if mode == "require":
@@ -953,12 +952,12 @@ def main(argv):
     elif mode == "check":
         findings = check()
     else:
-        print("usage: stamps.py "
+        print("stamps.py "
               "{begin <name>...|stamp [--done] <name>...|changed|products|check [--names]|require <name>...|deb-stamp <deb>|deb-require [deb]}",
               file=sys.stderr)
         return 2
     for f in findings:
-        print("stamps: " + f)
+        print(f)
     return 1 if findings else 0
 
 

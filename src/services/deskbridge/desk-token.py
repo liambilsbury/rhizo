@@ -33,7 +33,7 @@ def log(msg):
 
 
 def redact(text):
-    """replace 32-digit hex runs in the text"""
+    """replace each 32-digit hex run in text with <redacted>"""
     return HEX_RUN_RE.sub("<redacted>", text)
 
 
@@ -44,21 +44,21 @@ def probe(args, cmd, timeout):
             ["/usr/bin/python3", args.probe_client, args.probe_sock, str(timeout), ANDROID_PATH + cmd],
             capture_output=True, text=True, timeout=timeout + 15)
     except subprocess.TimeoutExpired:
-        return 98, "probe client outlived its own %ds deadline" % timeout
+        return 98, "probe client exceeded the %ds timeout" % timeout
     return proc.returncode, proc.stdout + proc.stderr
 
 
 def wait_for_unlock(args):
-    """wait for user 0 to unlock"""
+    """wait for sys.boot_completed=1 and user 0 RUNNING_UNLOCKED"""
     deadline = time.monotonic() + args.boot_timeout
-    last = "no answer"
+    last = "none"
     while time.monotonic() < deadline:
         rc, out = probe(args, "getprop sys.boot_completed; am get-started-user-state 0", 10)
         if rc == 0 and out.split() == ["1", "RUNNING_UNLOCKED"]:
             return True
         last = "rc=%d out=%r" % (rc, out.strip()[:160])
         time.sleep(1)
-    log("FAIL: user 0 not RUNNING_UNLOCKED with sys.boot_completed=1 within %ds (last probe: %s)"
+    log("user 0 is not RUNNING_UNLOCKED with sys.boot_completed=1 after %ds (last probe %s)"
         % (args.boot_timeout, last))
     return False
 
@@ -85,7 +85,7 @@ def grant_commands(want, holders):
 
 
 def browser_holders(args):
-    """return the browser role's holders, or None when unread"""
+    """return the BROWSER_ROLE holders, or None when the probe fails"""
     rc, out = probe(args, "cmd role get-role-holders %s" % BROWSER_ROLE, 20)
     if rc != 0:
         return None
@@ -93,7 +93,7 @@ def browser_holders(args):
 
 
 def settled(held, want):
-    """return whether android holds the policy's grants"""
+    """return whether held matches want for each grant"""
     return all(held[k] == want[k] or (k == "browser" and held[k] == "other") for k in want)
 
 
@@ -128,10 +128,10 @@ def held_grants(args):
 
 
 def set_grants(args, want):
-    """set the grants and read them back"""
+    """set the grants and read the grants back"""
     rc, out = probe(args, "pm path %s" % BRIDGE_PKG, 20)
     if rc != 0 or out.strip() != "package:" + BRIDGE_APK:
-        log("FAIL: %s is not the system app at %s (rc=%d: %s)" % (BRIDGE_PKG, BRIDGE_APK, rc, out.strip()[:300]))
+        log("pm path %s did not print package:%s (rc=%d %s)" % (BRIDGE_PKG, BRIDGE_APK, rc, out.strip()[:300]))
         return False
     deadline = time.monotonic() + args.grant_timeout
     while True:
@@ -145,7 +145,7 @@ def set_grants(args, want):
         if time.monotonic() >= deadline:
             break
         time.sleep(1)
-    log("FAIL: the android app's grants did not match the policy %ds after setting them: wanted %s, held %s (write rc=%d: %s)"
+    log("grants differ from the policy after %ds want=%s held=%s rc=%d out=%s"
         % (args.grant_timeout, want, held, rc, out.strip()[:300]))
     return False
 
@@ -166,12 +166,12 @@ def replace_file(path, token):
 
 
 def write_token(path, token, user):
-    """write the token file for the user"""
+    """write the token file as user"""
     if os.geteuid() == user.pw_uid:
         try:
             replace_file(path, token)
         except OSError as exc:
-            log("FAIL: writing %s as %s: %s" % (path, user.pw_name, exc))
+            log("failed to write %s as %s (%s)" % (path, user.pw_name, exc))
             return False
         return True
     pid = os.fork()
@@ -182,7 +182,7 @@ def write_token(path, token, user):
             os.setuid(user.pw_uid)
             replace_file(path, token)
         except OSError as exc:
-            log("FAIL: writing %s as %s: %s" % (path, user.pw_name, exc))
+            log("failed to write %s as %s (%s)" % (path, user.pw_name, exc))
             os._exit(1)
         os._exit(0)
     _, status = os.waitpid(pid, 0)
@@ -205,12 +205,12 @@ def main():
                            capture_output=True, text=True)
     name = shown.stdout.strip()
     if shown.returncode != 0 or not name:
-        log("FAIL: %s has no User= to own the token (rc=%d: %s)" % (args.deskd_unit, shown.returncode, shown.stderr.strip()))
+        log("systemctl show -p User %s printed no User= (rc=%d %s)" % (args.deskd_unit, shown.returncode, shown.stderr.strip()))
         return 1
     try:
         user = pwd.getpwnam(name)
     except KeyError:
-        log("FAIL: %s runs as %s, which has no passwd entry" % (args.deskd_unit, name))
+        log("%s User=%s has no passwd entry" % (args.deskd_unit, name))
         return 1
     if not wait_for_unlock(args):
         return 1
@@ -219,20 +219,20 @@ def main():
         return 1
     run_dir = os.path.dirname(args.token_file)
     if not os.path.isdir(run_dir):
-        log("FAIL: %s does not exist -- %s is not running" % (run_dir, args.deskd_unit))
+        log("%s of %s does not exist" % (run_dir, args.deskd_unit))
         return 1
 
     rc, out = probe(args, "content call --uri %s --method mint --arg %d" % (AUTHORITY_URI, args.port), 30)
     found = TOKEN_RE.search(out)
     if rc != 0 or not found:
-        log("FAIL: mint over rhizo-probed (rc=%d): %s" % (rc, redact(out.strip())[:600]))
+        log("content call --method mint failed (rc=%d %s)" % (rc, redact(out.strip())[:600]))
         return 1
     if not write_token(args.token_file, found.group(1), user):
         return 1
 
     rc, out = probe(args, "content call --uri %s --method start" % AUTHORITY_URI, 30)
     if rc != 0 or not STARTED_RE.search(out):
-        log("FAIL: start over rhizo-probed (rc=%d): %s" % (rc, redact(out.strip())[:600]))
+        log("content call --method start failed (rc=%d %s)" % (rc, redact(out.strip())[:600]))
         return 1
     log("RHIZO_DESK_TOKEN_DELIVERED port=%d owner=%s" % (args.port, user.pw_name))
     return 0

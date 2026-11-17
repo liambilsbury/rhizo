@@ -94,7 +94,7 @@ bool Vp9Decoder::InSlots(VASurfaceID s) const {
   return false;
 }
 
-// release the surfaces from before that no slot holds now
+// release the surfaces in before that are neither keep nor in slots_
 void Vp9Decoder::ReleaseOrphans(const VASurfaceID (&before)[vp9::kNumRefFrames], VASurfaceID keep) {
   for (int i = 0; i < vp9::kNumRefFrames; i++) {
     const VASurfaceID s = before[i];
@@ -115,7 +115,7 @@ void Vp9Decoder::SetSlots(uint32_t mask, VASurfaceID surface, VASurfaceID keep) 
   ReleaseOrphans(before, keep);
 }
 
-// empty the slots in mask and mark them invalid in state
+// empty the slots in mask and mark the slots invalid in state
 void Vp9Decoder::ClearSlots(uint32_t mask, vp9::ParseState* state) {
   SetSlots(mask, VA_INVALID_SURFACE, VA_INVALID_SURFACE);
   if (!state) return;
@@ -129,7 +129,7 @@ void Vp9Decoder::Reset() {
   state_ = vp9::ParseState();
 }
 
-// configure the VA context when a frame needs new surfaces
+// configure the VA context when the frame format or size does not fit the current surfaces
 Status Vp9Decoder::PrepareContext(const vp9::FrameHeader& h, vp9::ParseState* next) {
   StreamInfo want{};
   want.profile = h.profile == 2 ? VAProfileVP9Profile2 : VAProfileVP9Profile0;
@@ -184,7 +184,7 @@ Status Vp9Decoder::Submit(const vp9::FrameSpan& frame, const vp9::FrameHeader& h
   b.frame_parallel_decoding_mode = h.frame_parallel_decoding_mode;
   b.reset_frame_context = h.reset_frame_context;
   b.refresh_frame_context = h.refresh_frame_context;
-  // radeonsi, radv and anv reset frame_context_idx themselves
+  // radeonsi, radv and anv reset frame_context_idx in the driver
   b.frame_context_idx = h.frame_context_idx;
   b.segmentation_enabled = h.segmentation_enabled;
   b.segmentation_temporal_update = h.segmentation_temporal_update;
@@ -253,7 +253,7 @@ Status Vp9Decoder::Submit(const vp9::FrameSpan& frame, const vp9::FrameHeader& h
   return va == VA_STATUS_SUCCESS ? Status::kOk : Status::kVaError;
 }
 
-// decode a parsed frame and output it when output is set
+// decode a parsed frame and output the frame when output is set
 Status Vp9Decoder::DecodeFrame(const vp9::FrameSpan& frame, const vp9::FrameHeader& h, vp9::ParseState* next,
                                bool output, uint64_t tag) {
   if (h.show_existing_frame) {
@@ -267,7 +267,7 @@ Status Vp9Decoder::DecodeFrame(const vp9::FrameSpan& frame, const vp9::FrameHead
   return st;
 }
 
-// decode a new frame into a new surface
+// decode a coded frame into an acquired surface
 Status Vp9Decoder::DecodeNewFrame(const vp9::FrameSpan& frame, const vp9::FrameHeader& h, vp9::ParseState* next,
                                   bool output, uint64_t tag) {
   if (h.profile != 0 && h.profile != 2) return Status::kUnsupported;

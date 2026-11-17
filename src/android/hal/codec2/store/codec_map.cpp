@@ -13,7 +13,7 @@ namespace {
 
 using c2va::Codec;
 
-// pair a level with its picture-size limit
+// a level and the level's picture-size limit
 struct LevelSize {
   C2Config::level_t level;
   uint32_t minor;

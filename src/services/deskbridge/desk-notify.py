@@ -29,7 +29,7 @@ PEERCRED = struct.Struct("3i")
 
 
 class BusClosed(Exception):
-    """Session bus connection that ended"""
+    """exception for a closed session bus connection"""
 
 
 def log(msg):
@@ -55,19 +55,19 @@ class DirWatch:
     """inotify watch on the socket's directory"""
 
     def __init__(self, path):
-        """watch path's directory for entries coming and going"""
+        """add an inotify watch on the directory of path"""
         self.libc = ctypes.CDLL("libc.so.6", use_errno=True)
         self.fd = self.libc.inotify_init1(0o2000000)
         if self.fd < 0:
-            raise OSError(ctypes.get_errno(), "inotify_init1")
+            raise OSError(ctypes.get_errno(), "inotify_init1 failed")
         mask = IN_CREATE | IN_DELETE | IN_DELETE_SELF | IN_MOVED_FROM | IN_MOVED_TO
         if self.libc.inotify_add_watch(self.fd, os.path.dirname(path).encode(), mask) < 0:
             err = ctypes.get_errno()
             os.close(self.fd)
-            raise OSError(err, "inotify_add_watch %s: %s" % (os.path.dirname(path), os.strerror(err)))
+            raise OSError(err, "inotify_add_watch %s failed (%s)" % (os.path.dirname(path), os.strerror(err)))
 
     def wait(self):
-        """block until the directory changes"""
+        """read the inotify descriptor"""
         os.read(self.fd, 65536)
 
     def close(self):
@@ -76,7 +76,7 @@ class DirWatch:
 
 
 def connect_deskd(path):
-    """connect to rhizo-deskd's socket and check its uid"""
+    """connect to path and compare the SO_PEERCRED uid with os.getuid()"""
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         conn.connect(path)
@@ -86,17 +86,17 @@ def connect_deskd(path):
         raise
     if uid != os.getuid():
         conn.close()
-        raise PermissionError("%s is served by uid %d, this process runs as uid %d" % (path, uid, os.getuid()))
+        raise PermissionError("%s peer uid %d is not uid %d" % (path, uid, os.getuid()))
     return conn
 
 
 def send(conn, obj):
-    """write a JSON line to rhizo-deskd"""
+    """write obj as a JSON line to conn"""
     conn.sendall(json.dumps(obj, separators=(",", ":")).encode("utf-8") + b"\n")
 
 
 def forward_signals(conn, msgs):
-    """send the notification signals to rhizo-deskd"""
+    """write the notification signals to conn"""
     for msg in msgs:
         if msg.interface != IFACE:
             continue
@@ -109,11 +109,11 @@ def forward_signals(conn, msgs):
 
 
 def bus_call(bus, member, signature, args):
-    """call a notification method"""
+    """call IFACE member on OBJECT"""
     try:
         return bus.call(IFACE, OBJECT, IFACE, member, signature, args)
     except (ConnectionError, ValueError) as exc:
-        raise BusClosed("%s: %s" % (type(exc).__name__, exc)) from exc
+        raise BusClosed("%s (%s)" % (type(exc).__name__, exc)) from exc
 
 
 def bus_signals(bus):
@@ -121,11 +121,11 @@ def bus_signals(bus):
     try:
         return bus.dispatch()
     except (ConnectionError, ValueError) as exc:
-        raise BusClosed("%s: %s" % (type(exc).__name__, exc)) from exc
+        raise BusClosed("%s (%s)" % (type(exc).__name__, exc)) from exc
 
 
 def notify(bus, conn, msg):
-    """call Notify for a request and send the result"""
+    """call Notify for msg and write the reply to conn"""
     hints = {name: dbus_min.Variant("s", value) for name, value in msg["hints"].items()}
     try:
         body = bus_call(bus, "Notify", "susssasa{sv}i",
@@ -137,19 +137,19 @@ def notify(bus, conn, msg):
 
 
 def error_text(exc):
-    """return an exception as a bounded error string"""
-    return ("%s: %s" % (type(exc).__name__, exc))[:ERROR_MAX]
+    """return "type (exc)" cut to ERROR_MAX"""
+    return ("%s (%s)" % (type(exc).__name__, exc))[:ERROR_MAX]
 
 
 def uint32(value):
-    """check that a value is a uint32"""
+    """return value, or raise ValueError when value is not a uint32"""
     if type(value) is not int or not 0 <= value < UINT32_LIMIT:
         raise ValueError("%r is not a uint32" % (value,))
     return value
 
 
 def check_request(msg):
-    """check a request and return its type"""
+    """check msg and return msg["t"]"""
     kind = msg["t"]
     if kind == "notify":
         texts = [msg["key"], msg["title"], msg["body"], *msg["actions"], *msg["hints"].keys(), *msg["hints"].values()]
@@ -157,7 +157,7 @@ def check_request(msg):
             if not isinstance(text, str):
                 raise TypeError("notify field %r is not a string" % (text,))
             if "\x00" in text:
-                raise ValueError("notify field %r holds a NUL" % text[:80])
+                raise ValueError("notify field %r contains a NUL" % text[:80])
             text.encode("utf-8")
         uint32(msg["replaces"])
     elif kind == "close":
@@ -165,40 +165,40 @@ def check_request(msg):
     elif kind == "refused":
         str(msg["reason"])
     else:
-        raise ValueError("unknown request type %r" % (kind,))
+        raise ValueError("unknown message type %r" % (kind,))
     return kind
 
 
 def request_key(msg):
-    """return a request's notification key, or an empty string"""
+    """return msg["key"] cut to KEY_MAX, or an empty string"""
     key = msg.get("key") if isinstance(msg, dict) else None
     return key[:KEY_MAX] if isinstance(key, str) else ""
 
 
 def handle_line(bus, conn, line):
-    """act on a request line from rhizo-deskd"""
+    """parse a line from rhizo-deskd and dispatch on msg["t"]"""
     msg = None
     try:
         msg = json.loads(line.decode("utf-8"))
         kind = check_request(msg)
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
-        log("rhizo-deskd sent a malformed request, dropped: %s" % error_text(exc))
-        send(conn, {"t": "notify_failed", "key": request_key(msg), "error": "malformed request: " + error_text(exc)})
+        log("dropped a malformed line from rhizo-deskd (%s)" % error_text(exc))
+        send(conn, {"t": "notify_failed", "key": request_key(msg), "error": "malformed line " + error_text(exc)})
         return
     if kind == "notify":
         notify(bus, conn, msg)
     elif kind == "close":
         close_notification(bus, msg)
     else:
-        raise PermissionError("rhizo-deskd refused this relay: %s" % msg["reason"])
+        raise PermissionError("rhizo-deskd refused the relay (%s)" % msg["reason"])
 
 
 def close_notification(bus, msg):
-    """call CloseNotification for a request"""
+    """call CloseNotification for msg["id"]"""
     try:
         bus_call(bus, "CloseNotification", "u", [msg["id"]])
     except (dbus_min.DBusError, TimeoutError) as exc:
-        log("CloseNotification for id %d failed: %s: %s" % (msg["id"], type(exc).__name__, exc))
+        log("CloseNotification for id %d failed with %s (%s)" % (msg["id"], type(exc).__name__, exc))
 
 
 def serve(bus, conn, address):
@@ -214,7 +214,7 @@ def serve(bus, conn, address):
             continue
         data = conn.recv(65536)
         if not data:
-            return "rhizo-deskd closed the connection"
+            return "recv returned EOF from rhizo-deskd"
         buf += data
         while b"\n" in buf:
             line, _, rest = bytes(buf).partition(b"\n")
@@ -226,8 +226,8 @@ def serve(bus, conn, address):
             forward_signals(conn, bus_signals(bus))
         if len(buf) > LINE_MAX:
             if not skipping:
-                log("a line from rhizo-deskd is over %d bytes, dropped" % LINE_MAX)
-                send(conn, {"t": "notify_failed", "key": "", "error": "a request over %d bytes was dropped" % LINE_MAX})
+                log("dropped a line from rhizo-deskd over %d bytes" % LINE_MAX)
+                send(conn, {"t": "notify_failed", "key": "", "error": "dropped a line over %d bytes" % LINE_MAX})
             skipping = True
             buf.clear()
 
@@ -239,27 +239,27 @@ def main():
     args = ap.parse_args()
     address = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
     if not address:
-        log("no DBUS_SESSION_BUS_ADDRESS in the user session, nothing to relay")
+        log("DBUS_SESSION_BUS_ADDRESS is unset")
         return 1
     try:
         bus = attach_bus()
     except (OSError, ValueError, dbus_min.DBusError) as exc:
-        log("session bus %s not attached: %s: %s" % (address, type(exc).__name__, exc))
+        log("session bus %s not attached with %s (%s)" % (address, type(exc).__name__, exc))
         return 1
     log("session bus %s attached as %s" % (address, bus.unique_name))
     while True:
         try:
             watch = DirWatch(args.socket)
         except (FileNotFoundError, NotADirectoryError):
-            log("%s is gone, rhizo-deskd is not serving notifications" % os.path.dirname(args.socket))
+            log("%s does not exist" % os.path.dirname(args.socket))
             return 0
         except OSError as exc:
-            log("cannot watch %s for rhizo-deskd's socket: %s" % (os.path.dirname(args.socket), exc))
+            log("failed to watch %s (%s)" % (os.path.dirname(args.socket), exc))
             return 1
         try:
             conn = connect_deskd(args.socket)
         except (FileNotFoundError, NotADirectoryError):
-            log("%s is gone, rhizo-deskd is not serving notifications" % args.socket)
+            log("%s does not exist" % args.socket)
             watch.close()
             return 0
         except ConnectionRefusedError:
@@ -278,12 +278,12 @@ def main():
             log("%s" % exc)
             return EXIT_REFUSED
         except BusClosed as exc:
-            log("session bus %s closed (%s), the relay ends with the session" % (address, exc))
+            log("session bus %s closed (%s)" % (address, exc))
             return 0
         except (ConnectionResetError, BrokenPipeError) as exc:
-            why = "rhizo-deskd's connection broke: %s" % exc
+            why = "connection to rhizo-deskd reset (%s)" % exc
         except (ValueError, KeyError, TypeError) as exc:
-            log("rhizo-deskd sent a malformed request: %s: %s" % (type(exc).__name__, exc))
+            log("malformed line from rhizo-deskd with %s (%s)" % (type(exc).__name__, exc))
             return 1
         finally:
             conn.close()

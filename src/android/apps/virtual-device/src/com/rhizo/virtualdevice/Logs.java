@@ -6,7 +6,7 @@ import android.util.Log;
 final class Logs {
     static final String TAG = "RhizoVirtualDevice";
 
-    // forbid instances
+    // private constructor
     private Logs() {}
 
     // log an info message
@@ -19,7 +19,7 @@ final class Logs {
         Log.e(TAG, msg);
     }
 
-    // log an error message with its throwable
+    // log an error message and a throwable
     static void e(String msg, Throwable t) {
         Log.e(TAG, msg, t);
     }

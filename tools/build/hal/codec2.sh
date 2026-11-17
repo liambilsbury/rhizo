@@ -1,14 +1,14 @@
 #!/bin/bash
-# build rhizo-codec2-service into gfx_hal
+# var/share/gfx_hal/rhizo-codec2-service var/share/gfx_hal/rhizo-codec2-service.policy RHIZO_HAL_ABI= RHIZO_HAL_STAGE= RHIZO_HIDL_GEN=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
-USAGE="usage: codec2.sh [--no-va] [-h | --help]"
+USAGE="codec2.sh [--no-va] [-h | --help]"
 WITH_VA=1
 for a in "$@"; do
   case "$a" in
     --no-va) WITH_VA=0 ;;
     -h|--help) echo "$USAGE"; exit 0 ;;
-    *) echo "codec2: unknown argument: $a" >&2; echo "$USAGE" >&2; exit 2 ;;
+    *) echo "unknown argument $a" >&2; echo "$USAGE" >&2; exit 2 ;;
   esac
 done
 ABI_ARGS=(); [[ -n "${RHIZO_HAL_ABI:-}" ]] && ABI_ARGS=(--abi "$RHIZO_HAL_ABI")
@@ -18,19 +18,18 @@ C2="$A/frameworks/av/media/codec2"
 OURS=src/android/hal/codec2
 HIDL_OUT=toolchain/out/codec2/hidl-headers
 GEN_OUT=toolchain/out/codec2/gen
-[[ -d "$C2" ]] || { echo "codec2: no AOSP checkout at $A -- run make inputs" >&2; exit 1; }
+[[ -d "$C2" ]] || { echo "no $C2" >&2; exit 1; }
 
 HIDL_GEN="${RHIZO_HIDL_GEN:-$A/out/host/linux-x86/bin/hidl-gen}"
 if [[ ! -x "$HIDL_GEN" ]]; then
-  echo "codec2: no hidl-gen at $HIDL_GEN, building it (m hidl-gen in $A)"
   ( set +u; cd "$A" && source build/envsetup.sh && lunch aosp_x86_64 bp2a userdebug && m hidl-gen ) \
-    || { echo "codec2: m hidl-gen failed in $A" >&2; exit 1; }
+    || { echo "m hidl-gen failed in $A" >&2; exit 1; }
 fi
 rm -rf "$HIDL_OUT.part"
 for v in 1.0 1.1 1.2; do
   "$HIDL_GEN" -o "$HIDL_OUT.part" -L c++-headers -r "android.hardware:$A/hardware/interfaces" \
     -r "android.hidl:$A/system/libhidl/transport" "android.hardware.graphics.common@$v" \
-    || { echo "codec2: hidl-gen failed for android.hardware.graphics.common@$v" >&2; exit 1; }
+    || { echo "hidl-gen failed for android.hardware.graphics.common@$v" >&2; exit 1; }
 done
 rm -rf "$HIDL_OUT" && mv "$HIDL_OUT.part" "$HIDL_OUT"
 
@@ -178,7 +177,7 @@ tools/build/hal/hal.sh rhizo-codec2-service "$OURS/store/service.cpp" "${ARGS[@]
 
 install -D -m 0644 "$OURS/store/seccomp/rhizo-codec2-service.x86_64.policy" \
   "var/share/${RHIZO_HAL_STAGE:-gfx_hal}/rhizo-codec2-service.policy"
-echo "[build-hal] staged -> var/share/${RHIZO_HAL_STAGE:-gfx_hal}/rhizo-codec2-service.policy"
+echo "staged var/share/${RHIZO_HAL_STAGE:-gfx_hal}/rhizo-codec2-service.policy"
 
 if [[ -z "${RHIZO_HAL_ABI:-}" && "${RHIZO_HAL_STAGE:-gfx_hal}" == gfx_hal ]]; then
   python3 tools/build/stamps.py stamp gfx_hal/rhizo-codec2-service || exit 1

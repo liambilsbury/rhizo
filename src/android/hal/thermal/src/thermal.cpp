@@ -21,10 +21,10 @@ namespace {
 constexpr float kMinPlausibleC = -40.0f;
 constexpr float kMaxPlausibleC = 150.0f;
 
-// write a message to the kernel log
+// write msg to the kernel log
 void klog(const char* msg) { rhizo_device::Klog("rhizo-thermal", msg); }
 
-// return an illegal-argument exception status
+// return EX_ILLEGAL_ARGUMENT with msg
 ScopedAStatus illegalArgument(const char* msg) {
   return ScopedAStatus::fromExceptionCodeWithMessage(EX_ILLEGAL_ARGUMENT, msg);
 }
@@ -39,7 +39,7 @@ bool parseSkinTempC(const std::map<std::string, std::string>& state, float* out)
       v < kMinPlausibleC || v > kMaxPlausibleC) {
     char buf[192];
     snprintf(buf, sizeof(buf),
-             "device-state.conf: bad skin_temp_c '%s' (want a number between %g and %g), ignoring",
+             "skin_temp_c '%s' in device-state.conf is not a number in %g..%g",
              it->second.c_str(), kMinPlausibleC, kMaxPlausibleC);
     klog(buf);
     return false;
@@ -187,7 +187,7 @@ class RhizoThermal : public BnThermal {
     return ScopedAStatus::ok();
   }
 
-  // return unsupported for skin temperature forecasts
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus forecastSkinTemperature(int32_t forecastSeconds, float*) override {
     if (forecastSeconds < 0) return illegalArgument("forecastSeconds is negative");
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
@@ -203,7 +203,7 @@ class RhizoThermal : public BnThermal {
     CoolingType type;
   };
 
-  // send the skin temperature to the callbacks
+  // call notifyThrottling with SkinTemperature() on each matching callback
   void broadcastThermalChanged() {
     std::vector<std::shared_ptr<IThermalChangedCallback>> cbs;
     {
@@ -227,19 +227,17 @@ class RhizoThermal : public BnThermal {
 
 // register the thermal service and join the binder thread pool
 int main() {
-  klog("main() entered");
   auto device = ndk::SharedRefBase::make<RhizoThermal>();
   const std::string instance = std::string(RhizoThermal::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(device->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

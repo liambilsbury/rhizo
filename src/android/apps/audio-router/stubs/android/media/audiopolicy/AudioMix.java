@@ -8,7 +8,7 @@ public class AudioMix {
     public static final int ROUTE_FLAG_RENDER = 0x1;
     public static final int ROUTE_FLAG_LOOP_BACK = 0x1 << 1;
 
-    // forbid direct construction
+    // private constructor
     private AudioMix() {}
 
     public static class Builder {

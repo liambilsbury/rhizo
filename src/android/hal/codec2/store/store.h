@@ -44,7 +44,7 @@ class Store : public C2ComponentStore {
   uint32_t live(const std::string& name) const;
 
  private:
-  // declare the store's buffer usage and resource parameters
+  // interface of the store's buffer usage and resource parameters
   class Interface : public C2InterfaceHelper {
    public:
     Interface(const std::shared_ptr<C2ReflectorHelper>& helper, const std::vector<C2SystemResourceStruct>& capacity);
@@ -68,7 +68,7 @@ class Store : public C2ComponentStore {
   };
 
  public:
-  // return the throughput a component's instances hold
+  // return the throughput reserved by a component's instances
   uint64_t throughput_held(const std::string& name) const;
 
  private:

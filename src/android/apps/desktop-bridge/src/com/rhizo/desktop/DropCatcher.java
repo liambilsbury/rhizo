@@ -61,7 +61,7 @@ final class DropCatcher {
     private static final Object sLock = new Object();
     private static final Map<Integer, Pad> sPads = new HashMap<>();
 
-    // forbid instances
+    // private constructor
     private DropCatcher() {}
 
     // stage the dropped payload and show a pad
@@ -77,14 +77,14 @@ final class DropCatcher {
         try {
             bytes = Base64.decode(obj.getString("b64"), Base64.NO_WRAP);
         } catch (JSONException | IllegalArgumentException e) {
-            Logs.e("drop with unreadable payload", e);
+            Logs.e("failed to decode drop payload", e);
             return;
         }
         final Uri uri;
         try {
             uri = PasteStore.write(context, bytes, mime, "drop_", name);
         } catch (IOException e) {
-            Logs.e("cannot stage dropped file", e);
+            Logs.e("failed to stage dropped file", e);
             return;
         }
         Logs.i("RHIZO_DROP_STAGED display=" + display + " name=" + name + " mime=" + mime);
@@ -211,7 +211,7 @@ final class DropCatcher {
         });
     }
 
-    // report the pad ready once its window takes input
+    // register a TrustedPresentationListener for the pad window
     private static void announceOnInput(final Pad entry, final int displayId, final Context appContext) {
         Consumer<Boolean> listener = new Consumer<Boolean>() {
             @Override
@@ -233,13 +233,13 @@ final class DropCatcher {
                             appContext.getMainExecutor(), listener);
             entry.inputListener = listener;
         } catch (ReflectiveOperationException | RuntimeException e) {
-            Logs.e("cannot watch the pad's input state on display " + displayId
-                    + "; using its first frame", e);
+            Logs.e("registerTrustedPresentationListener on display " + displayId
+                    + " failed", e);
             announceOnFirstDraw(entry, displayId, appContext);
         }
     }
 
-    // stop watching the pad window's input state
+    // unregister the pad TrustedPresentationListener
     private static void stopInputWait(Pad entry) {
         Consumer<Boolean> listener = entry.inputListener;
         entry.inputListener = null;
@@ -250,11 +250,11 @@ final class DropCatcher {
             WindowManager.class.getMethod("unregisterTrustedPresentationListener", Consumer.class)
                     .invoke(entry.wm, listener);
         } catch (ReflectiveOperationException | RuntimeException e) {
-            Logs.e("cannot stop watching the pad window's input state", e);
+            Logs.e("failed to unregister TrustedPresentationListener", e);
         }
     }
 
-    // report the pad ready on its first frame
+    // add an OnDrawListener that calls removeOnDrawListener and padOnInput
     private static void announceOnFirstDraw(final Pad entry, final int displayId, final Context appContext) {
         final View pad = entry.view;
         pad.getViewTreeObserver().addOnDrawListener(
@@ -273,7 +273,7 @@ final class DropCatcher {
                 });
     }
 
-    // mark the pad ready and report it in its current mode
+    // set entry.onInput and call announceReady for entry.mode
     private static void padOnInput(Pad entry, int displayId, Context appContext) {
         if (entry.onInput) {
             return;
@@ -288,7 +288,7 @@ final class DropCatcher {
         entry.watchAsked = false;
     }
 
-    // send the pad position to the host
+    // queue a dragwatch_ready or drop_pad payload with the pad position
     private static void announceReady(final View pad, final Mode mode, final int displayId,
             final int centerX, final int centerY, final Context appContext) {
                         boolean current;
@@ -317,18 +317,18 @@ final class DropCatcher {
                             reply.put("x", x);
                             reply.put("y", y);
                         } catch (JSONException e) {
-                            Logs.e("cannot build " + type + " payload", e);
+                            Logs.e("failed to build " + type + " payload", e);
                             return;
                         }
                         BridgeService.enqueue(appContext, reply);
     }
 
-    // start a global drag of the uri and report that it is armed
+    // start a global drag of the uri and queue drag_armed
     private static void armDrag(Context context, View v, int displayId, Uri uri, String mime, String name) {
         ClipData clip = new ClipData(name, new String[] {mime}, new ClipData.Item(uri));
         int flags = View.DRAG_FLAG_GLOBAL | View.DRAG_FLAG_GLOBAL_URI_READ;
         if (!v.startDragAndDrop(clip, new View.DragShadowBuilder(v), null, flags)) {
-            reportError(context, displayId, Mode.ARMED, "startDragAndDrop refused");
+            reportError(context, displayId, Mode.ARMED, "startDragAndDrop returned false");
             return;
         }
         Logs.i("RHIZO_DRAG_ARMED");
@@ -336,13 +336,13 @@ final class DropCatcher {
         try {
             obj.put("t", "drag_armed");
         } catch (JSONException e) {
-            Logs.e("cannot build drag_armed payload", e);
+            Logs.e("failed to build drag_armed payload", e);
             return;
         }
         BridgeService.enqueue(context, obj);
     }
 
-    // report drag events for a display pad
+    // handle drag events for a display pad
     private static boolean onPadDrag(Context context, int displayId, DragEvent event) {
         Mode mode;
         synchronized (sLock) {
@@ -375,7 +375,7 @@ final class DropCatcher {
         }
     }
 
-    // log and send the mime types of a started drag
+    // log and queue the mime types of a started drag
     private static void reportDragStarted(Context context, int displayId, ClipDescription desc) {
         JSONArray mimes = new JSONArray();
         StringBuilder log = new StringBuilder();
@@ -395,17 +395,17 @@ final class DropCatcher {
             obj.put("mimes", mimes);
             obj.put("display", displayId);
         } catch (JSONException e) {
-            Logs.e("cannot build drag_started payload", e);
+            Logs.e("failed to build drag_started payload", e);
             return;
         }
         BridgeService.enqueue(context, obj);
     }
 
-    // send the dragged item to the host
+    // queue the dragged item as a drag_data payload
     private static void reportDragData(Context context, int displayId, DragEvent event) {
         ClipData clip = event.getClipData();
         if (clip == null || clip.getItemCount() == 0) {
-            reportDragDataError(context, "drop carried no clip data");
+            reportDragDataError(context, "drop has no clip data");
             return;
         }
         ClipDescription desc = event.getClipDescription();
@@ -415,10 +415,10 @@ final class DropCatcher {
         if (item.getText() != null) {
             bytes = item.getText().toString().getBytes(StandardCharsets.UTF_8);
         } else if (item.getUri() != null) {
-            reportDragDataError(context, "no activity context to request drag permissions for " + item.getUri());
+            reportDragDataError(context, "no Activity for requestDragAndDropPermissions on " + item.getUri());
             return;
         } else {
-            reportDragDataError(context, "clip item carries neither text nor a uri");
+            reportDragDataError(context, "clip item has no text or uri");
             return;
         }
         Logs.i("RHIZO_DRAGOUT_DATA mime=" + mime + " bytes=" + bytes.length + " display=" + displayId);
@@ -429,27 +429,27 @@ final class DropCatcher {
             obj.put("b64", Base64.encodeToString(bytes, Base64.NO_WRAP));
             obj.put("display", displayId);
         } catch (JSONException e) {
-            Logs.e("cannot build drag_data payload", e);
+            Logs.e("failed to build drag_data payload", e);
             return;
         }
         BridgeService.enqueue(context, obj);
     }
 
-    // log and send why drag data is unavailable
+    // log and queue a drag_data_error reason
     private static void reportDragDataError(Context context, String reason) {
-        Logs.e("drag data unavailable: " + reason);
+        Logs.e("drag_data_error reason=" + reason);
         JSONObject obj = new JSONObject();
         try {
             obj.put("t", "drag_data_error");
             obj.put("reason", reason);
         } catch (JSONException e) {
-            Logs.e("cannot build drag_data_error payload", e);
+            Logs.e("failed to build drag_data_error payload", e);
             return;
         }
         BridgeService.enqueue(context, obj);
     }
 
-    // send the result of a finished drag
+    // queue a drag_ended payload with the drag result
     private static void sendDragEnded(Context context, int displayId, boolean result) {
         JSONObject obj = new JSONObject();
         try {
@@ -457,23 +457,23 @@ final class DropCatcher {
             obj.put("result", result);
             obj.put("display", displayId);
         } catch (JSONException e) {
-            Logs.e("cannot build drag_ended payload", e);
+            Logs.e("failed to build drag_ended payload", e);
             return;
         }
         BridgeService.enqueue(context, obj);
     }
 
-    // log and send a drag watch or drop error
+    // log and queue a dragwatch_error or drop_error payload
     private static void reportError(Context context, int displayId, Mode mode, String reason) {
         String type = mode == Mode.WATCHING ? "dragwatch_error" : "drop_error";
-        Logs.e(type + " for display " + displayId + ": " + reason);
+        Logs.e(type + " display=" + displayId + " reason=" + reason);
         JSONObject obj = new JSONObject();
         try {
             obj.put("t", type);
             obj.put("display", displayId);
             obj.put("reason", reason);
         } catch (JSONException e) {
-            Logs.e("cannot build " + type + " payload", e);
+            Logs.e("failed to build " + type + " payload", e);
             return;
         }
         BridgeService.enqueue(context, obj);
@@ -492,7 +492,7 @@ final class DropCatcher {
         try {
             pad.wm.removeView(pad.view);
         } catch (IllegalArgumentException e) {
-            Logs.i("pad on display " + displayId + " was already gone: " + e.getMessage());
+            Logs.i("removeView on display " + displayId + " failed with " + e.getMessage());
         }
     }
 }

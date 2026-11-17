@@ -45,7 +45,7 @@ namespace {
 int gKmsgFd = -1;
 
 void klogf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-// format a message and write it to the kernel log
+// write a formatted message to /dev/kmsg
 void klogf(const char* fmt, ...) {
   if (gKmsgFd < 0) {
     gKmsgFd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
@@ -65,24 +65,24 @@ constexpr int kWorkerNice = -19;
 void SetWorkerPriority(const char* label, const char* threadName) {
   prctl(PR_SET_NAME, threadName);
   if (setpriority(PRIO_PROCESS, gettid(), kWorkerNice) != 0) {
-    klogf("[%s] setpriority(%d) FAILED errno=%d (%s) -- worker stays at nice %d", label, kWorkerNice,
+    klogf("[%s] setpriority(%d) failed with errno=%d (%s), getpriority() returned %d", label, kWorkerNice,
           errno, strerror(errno), getpriority(PRIO_PROCESS, gettid()));
   }
 }
 
-// log and return an illegal argument status
+// log msg and return EX_ILLEGAL_ARGUMENT
 ScopedAStatus illegalArgument(const char* msg) {
-  klogf("rejected (illegal argument): %s", msg);
+  klogf("%s exception=EX_ILLEGAL_ARGUMENT", msg);
   return ScopedAStatus::fromExceptionCodeWithMessage(EX_ILLEGAL_ARGUMENT, msg);
 }
 
-// log and return an illegal-state exception status
+// log msg and return EX_ILLEGAL_STATE
 ScopedAStatus illegalState(const char* msg) {
-  klogf("rejected (illegal state): %s", msg);
+  klogf("%s exception=EX_ILLEGAL_STATE", msg);
   return ScopedAStatus::fromExceptionCodeWithMessage(EX_ILLEGAL_STATE, msg);
 }
 
-// check the audio mode against allowed values
+// return whether mode is NORMAL, RINGTONE, IN_CALL, IN_COMMUNICATION or CALL_SCREEN
 bool isValidAudioMode(AudioMode mode) {
   switch (mode) {
     case AudioMode::NORMAL:
@@ -113,7 +113,7 @@ constexpr int32_t kPortRecordIn = kPortBus0Out + kMaxBusCount;
 
 int gBusCount = kMaxBusCount;
 
-// read the bus count file
+// read gBusCount from /data/misc/rhizo/audio_buses
 void loadBusCount() {
   FILE* f = fopen("/data/misc/rhizo/audio_buses", "r");
   if (f == nullptr) return;
@@ -154,7 +154,7 @@ AudioProfile pcmProfile() {
   return p;
 }
 
-// return the address of a bus by number
+// return the address of bus i
 std::string busAddress(int i) { return "bus" + std::to_string(i); }
 
 // create a device port
@@ -257,20 +257,20 @@ class HostSink {
     const std::string path = env && *env ? env : "/dev/socket/rhizo_audio/audiod";
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) {
-      klogf("[%s] socket() failed: %s", mLabel.c_str(), strerror(errno));
+      klogf("[%s] socket() failed (%s)", mLabel.c_str(), strerror(errno));
       return;
     }
     struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     if (path.size() >= sizeof(addr.sun_path)) {
-      klogf("[%s] socket path too long: %s", mLabel.c_str(), path.c_str());
+      klogf("[%s] %s is longer than sun_path", mLabel.c_str(), path.c_str());
       close(fd);
       return;
     }
     strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
     if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0 &&
         errno != EINPROGRESS) {
-      klogf("[%s] no host bridge at %s (%s)", mLabel.c_str(), path.c_str(), strerror(errno));
+      klogf("[%s] failed to connect to %s (%s)", mLabel.c_str(), path.c_str(), strerror(errno));
       close(fd);
       return;
     }
@@ -278,13 +278,13 @@ class HostSink {
     int n = snprintf(hdr, sizeof(hdr), "rhizo-audio/1 port=%s rate=%d channels=%d format=s16le\n",
                      mLabel.c_str(), kSampleRate, kChannelCount);
     if (send(fd, hdr, n, MSG_NOSIGNAL) != n) {
-      klogf("[%s] header write failed: %s", mLabel.c_str(), strerror(errno));
+      klogf("[%s] send() failed for the header (%s)", mLabel.c_str(), strerror(errno));
       close(fd);
       return;
     }
     mFd = fd;
     mXruns = 0;
-    klogf("[%s] connected to host bridge %s", mLabel.c_str(), path.c_str());
+    klogf("[%s] connected to %s", mLabel.c_str(), path.c_str());
   }
 
   // close the sink socket
@@ -295,7 +295,7 @@ class HostSink {
     }
   }
 
-  // send the bytes to rhizo-audiod
+  // write the bytes to mFd with send()
   bool write(const void* data, size_t bytes) {
     if (mFd < 0 || bytes == 0) return mFd >= 0;
     const uint8_t* p = static_cast<const uint8_t*>(data);
@@ -309,12 +309,12 @@ class HostSink {
       }
       if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
         if ((mXruns++ % 100) == 0) {
-          klogf("[%s] host bridge behind, dropped %zu bytes (xrun %d)", mLabel.c_str(), left,
+          klogf("[%s] send() returned EAGAIN, dropped %zu bytes (xrun %d)", mLabel.c_str(), left,
                 mXruns);
         }
         return true;
       }
-      klogf("[%s] host bridge write failed: %s", mLabel.c_str(), strerror(errno));
+      klogf("[%s] send() failed (%s)", mLabel.c_str(), strerror(errno));
       disconnect();
       return false;
     }
@@ -342,13 +342,13 @@ class HostSource {
     const std::string path = env && *env ? env : "/dev/socket/rhizo_audio/mic";
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) {
-      klogf("[record] socket() failed: %s", strerror(errno));
+      klogf("[record] socket() failed (%s)", strerror(errno));
       return;
     }
     struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     if (path.size() >= sizeof(addr.sun_path)) {
-      klogf("[record] socket path too long: %s", path.c_str());
+      klogf("[record] %s is longer than sun_path", path.c_str());
       close(fd);
       return;
     }
@@ -356,7 +356,7 @@ class HostSource {
     if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0 &&
         errno != EINPROGRESS) {
       if (!mSaidAbsent) {
-        klogf("[record] no host microphone at %s (%s): recording silence", path.c_str(),
+        klogf("[record] failed to connect to %s (%s)", path.c_str(),
               strerror(errno));
         mSaidAbsent = true;
       }
@@ -367,13 +367,13 @@ class HostSource {
     int n = snprintf(hdr, sizeof(hdr), "rhizo-audio/1 port=mic rate=%d channels=%d format=s16le\n",
                      kSampleRate, kChannelCount);
     if (send(fd, hdr, n, MSG_NOSIGNAL) != n) {
-      klogf("[record] header write failed: %s", strerror(errno));
+      klogf("[record] send() failed for the header (%s)", strerror(errno));
       close(fd);
       return;
     }
     mFd = fd;
     mSaidAbsent = false;
-    klogf("[record] connected to the host microphone %s", path.c_str());
+    klogf("[record] connected to %s", path.c_str());
   }
 
   // close the source socket
@@ -384,16 +384,16 @@ class HostSource {
     }
   }
 
-  // reset the logged absence of the microphone
+  // clear mSaidAbsent
   void resetNotes() { mSaidAbsent = false; }
 
-  // read whole captured frames
+  // read whole frames from the microphone socket
   size_t read(uint8_t* out, size_t bytes) {
     if (mFd < 0 && monotonicNs() - mLastAttemptNs > kRetryNs) connect();
     if (mFd < 0) return 0;
     int queued = 0;
     if (ioctl(mFd, FIONREAD, &queued) != 0) {
-      klogf("[record] FIONREAD failed: %s", strerror(errno));
+      klogf("[record] FIONREAD failed (%s)", strerror(errno));
       disconnect();
       return 0;
     }
@@ -410,7 +410,7 @@ class HostSource {
       }
       mDroppedBytes += dropped;
       if ((mBacklogDrops++ % 50) == 0) {
-        klogf("[record] host microphone ahead by %zu bytes: dropped %zu (drop %d)", have, dropped,
+        klogf("[record] FIONREAD returned %zu bytes, dropped %zu (drop %d)", have, dropped,
               mBacklogDrops);
       }
       have -= dropped;
@@ -425,7 +425,7 @@ class HostSource {
         continue;
       }
       if (r == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
-        klogf("[record] host microphone closed (%s)", r == 0 ? "end of stream" : strerror(errno));
+        klogf("[record] microphone socket closed (%s)", r == 0 ? "end of stream" : strerror(errno));
         disconnect();
       }
       break;
@@ -457,32 +457,32 @@ class RhizoStreamCommon : public BnStreamCommon {
   explicit RhizoStreamCommon(int32_t portConfigId) : mPortConfigId(portConfigId) {}
 
   ScopedAStatus close() override;
-  // reject a closed stream
+  // return EX_ILLEGAL_STATE for a closed stream
   ScopedAStatus prepareToClose() override {
     if (mClosed.load()) {
       return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_STATE);
     }
     return ScopedAStatus::ok();
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus updateHwAvSyncId(int32_t) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // return an unsupported operation error
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getVendorParameters(const std::vector<std::string>&,
                                     std::vector<VendorParameter>*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setVendorParameters(const std::vector<VendorParameter>&, bool) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus addEffect(
       const std::shared_ptr<aidl::android::hardware::audio::effect::IEffect>&) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus removeEffect(
       const std::shared_ptr<aidl::android::hardware::audio::effect::IEffect>&) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
@@ -523,7 +523,7 @@ class RhizoStreamOut : public BnStreamOut {
     desc->audio.set<StreamDescriptor::AudioBuffer::Tag::fmq>(mDataMQ->dupeDesc());
   }
 
-  // start the worker thread at its priority
+  // start the worker thread
   void startWorker() {
     mWorker = std::thread([this] {
       SetWorkerPriority(mLabel.c_str(), "rhizo-aud-out");
@@ -551,7 +551,7 @@ class RhizoStreamOut : public BnStreamOut {
   ScopedAStatus updateMetadata(const SourceMetadata&) override {
     return ScopedAStatus::ok();
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus updateOffloadMetadata(const AudioOffloadMetadata&) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
@@ -563,7 +563,7 @@ class RhizoStreamOut : public BnStreamOut {
   // check and save the hardware volume
   ScopedAStatus setHwVolume(const std::vector<float>& volumes) override {
     if (volumes.size() != static_cast<size_t>(kChannelCount)) {
-      return illegalArgument("wrong channel count for hw volume");
+      return illegalArgument("hw volume count is not 2");
     }
     for (float v : volumes) {
       if (!std::isfinite(v) || v < IStreamOut::HW_VOLUME_MIN || v > IStreamOut::HW_VOLUME_MAX) {
@@ -573,39 +573,39 @@ class RhizoStreamOut : public BnStreamOut {
     mHwVolume = volumes;
     return ScopedAStatus::ok();
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getAudioDescriptionMixLevel(float*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setAudioDescriptionMixLevel(float) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getDualMonoMode(AudioDualMonoMode*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setDualMonoMode(AudioDualMonoMode) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // return an unsupported operation error
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getRecommendedLatencyModes(std::vector<AudioLatencyMode>*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setLatencyMode(AudioLatencyMode) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getPlaybackRateParameters(AudioPlaybackRate*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setPlaybackRateParameters(const AudioPlaybackRate&) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus selectPresentation(int32_t, int32_t) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
@@ -623,18 +623,18 @@ class RhizoStreamOut : public BnStreamOut {
     reply->xrunFrames = 0;
   }
 
-  // log the rejected command and set an invalid-operation status
+  // log cmd and set STATUS_INVALID_OPERATION
   void wrongState(StreamDescriptor::Reply* reply, const char* cmd) {
-    klogf("[%s] command %s rejected in state %d", mLabel.c_str(), cmd, static_cast<int>(mState));
+    klogf("[%s] set STATUS_INVALID_OPERATION for %s in state %d", mLabel.c_str(), cmd, static_cast<int>(mState));
     reply->status = STATUS_INVALID_OPERATION;
   }
 
-  // read the data queue and send the bytes
+  // read the data FMQ and call mSink.write with the bytes
   void transfer(size_t bytes, StreamDescriptor::Reply* reply) {
     const size_t available = mDataMQ->availableToRead();
     if (available > 0) {
       if (!mDataMQ->read(reinterpret_cast<int8_t*>(mDataBuffer.data()), available)) {
-        klogf("[%s] data FMQ read of %zu bytes failed", mLabel.c_str(), available);
+        klogf("[%s] failed to read %zu bytes from the data FMQ", mLabel.c_str(), available);
         reply->status = STATUS_NOT_ENOUGH_DATA;
         return;
       }
@@ -775,7 +775,7 @@ class RhizoStreamOut : public BnStreamOut {
       }
       reply.state = mState;
       if (!mReplyMQ->writeBlocking(&reply, 1)) {
-        klogf("[%s] reply FMQ write failed", mLabel.c_str());
+        klogf("[%s] failed to write the reply FMQ", mLabel.c_str());
         mState = StreamDescriptor::State::ERROR;
         return;
       }
@@ -836,7 +836,7 @@ class RhizoStreamIn : public BnStreamIn {
     desc->audio.set<StreamDescriptor::AudioBuffer::Tag::fmq>(mDataMQ->dupeDesc());
   }
 
-  // start the worker thread at its priority
+  // start the worker thread
   void startWorker() {
     mWorker = std::thread([this] {
       SetWorkerPriority("record", "rhizo-aud-rec");
@@ -868,27 +868,27 @@ class RhizoStreamIn : public BnStreamIn {
     out->clear();
     return ScopedAStatus::ok();
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getMicrophoneDirection(IStreamIn::MicrophoneDirection*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setMicrophoneDirection(IStreamIn::MicrophoneDirection) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getMicrophoneFieldDimension(float*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setMicrophoneFieldDimension(float) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getHwGain(std::vector<float>*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setHwGain(const std::vector<float>&) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
@@ -905,9 +905,9 @@ class RhizoStreamIn : public BnStreamIn {
     reply->xrunFrames = 0;
   }
 
-  // log the rejected command and set an invalid-operation status
+  // log cmd and set STATUS_INVALID_OPERATION
   void wrongState(StreamDescriptor::Reply* reply, const char* cmd) {
-    klogf("[record] command %s rejected in state %d", cmd, static_cast<int>(mState));
+    klogf("[record] set STATUS_INVALID_OPERATION for %s in state %d", cmd, static_cast<int>(mState));
     reply->status = STATUS_INVALID_OPERATION;
   }
 
@@ -919,7 +919,7 @@ class RhizoStreamIn : public BnStreamIn {
     mHostFrames += got / kFrameSizeBytes;
     if (byteCount > 0 &&
         !mDataMQ->write(reinterpret_cast<const int8_t*>(mBuffer.data()), byteCount)) {
-      klogf("[record] data FMQ write of %zu bytes failed", byteCount);
+      klogf("[record] failed to write %zu bytes to the data FMQ", byteCount);
       reply->status = STATUS_NOT_ENOUGH_DATA;
       return;
     }
@@ -1048,7 +1048,7 @@ class RhizoStreamIn : public BnStreamIn {
       }
       reply.state = mState;
       if (!mReplyMQ->writeBlocking(&reply, 1)) {
-        klogf("[record] reply FMQ write failed");
+        klogf("[record] failed to write the reply FMQ");
         mState = StreamDescriptor::State::ERROR;
         return;
       }
@@ -1161,13 +1161,13 @@ class RhizoModule : public BnModule {
     return ScopedAStatus::ok();
   }
 
-  // reject connecting an external device
+  // return EX_ILLEGAL_ARGUMENT
   ScopedAStatus connectExternalDevice(const AudioPort&, AudioPort*) override {
-    return illegalArgument("no external devices on this module");
+    return illegalArgument("module has no external device ports");
   }
-  // reject disconnecting an external device
+  // return EX_ILLEGAL_ARGUMENT
   ScopedAStatus disconnectExternalDevice(int32_t) override {
-    return illegalArgument("no external devices on this module");
+    return illegalArgument("module has no external device ports");
   }
 
   // return the audio ports
@@ -1346,12 +1346,12 @@ class RhizoModule : public BnModule {
           break;
         }
       }
-      if (route == nullptr) return illegalArgument("no route to the requested sink");
+      if (route == nullptr) return illegalArgument("no route to the sink port");
       for (int32_t srcCfgId : patch.sourcePortConfigIds) {
         const int32_t srcPortId = mPortConfigs[srcCfgId].portId;
         if (std::find(route->sourcePortIds.begin(), route->sourcePortIds.end(), srcPortId) ==
             route->sourcePortIds.end()) {
-          return illegalArgument("route does not connect this source to this sink");
+          return illegalArgument("route does not connect the source port to the sink port");
         }
       }
     }
@@ -1370,7 +1370,7 @@ class RhizoModule : public BnModule {
     return ScopedAStatus::ok();
   }
 
-  // open an input stream, rejecting an output port config
+  // open an input stream on an input mix port config
   ScopedAStatus openInputStream(const IModule::OpenInputStreamArguments& args,
                                 IModule::OpenInputStreamReturn* out) override {
     std::lock_guard<std::mutex> lock(mLock);
@@ -1388,7 +1388,7 @@ class RhizoModule : public BnModule {
     }
     int64_t bufferSizeFrames = args.bufferSizeFrames;
     if (bufferSizeFrames < kMinBufferSizeFrames || bufferSizeFrames > kMaxBufferSizeFrames) {
-      klogf("rejecting record buffer size %lld frames (allowed %lld..%lld)",
+      klogf("record buffer size %lld frames is outside %lld..%lld",
             static_cast<long long>(bufferSizeFrames), static_cast<long long>(kMinBufferSizeFrames),
             static_cast<long long>(kMaxBufferSizeFrames));
       return illegalArgument("unsupported buffer size");
@@ -1396,7 +1396,7 @@ class RhizoModule : public BnModule {
 
     auto stream = ndk::SharedRefBase::make<RhizoStreamIn>(cfg.id, bufferSizeFrames);
     if (!stream->isValid()) {
-      klogf("[record] stream FMQ setup failed");
+      klogf("[record] failed to create the stream FMQs");
       return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_STATE);
     }
     stream->fillDescriptor(&out->desc);
@@ -1408,7 +1408,7 @@ class RhizoModule : public BnModule {
     return ScopedAStatus::ok();
   }
 
-  // open an output stream, rejecting an input port config
+  // open an output stream on an output mix port config
   ScopedAStatus openOutputStream(const IModule::OpenOutputStreamArguments& args,
                                  IModule::OpenOutputStreamReturn* out) override {
     std::lock_guard<std::mutex> lock(mLock);
@@ -1426,7 +1426,7 @@ class RhizoModule : public BnModule {
     }
     int64_t bufferSizeFrames = args.bufferSizeFrames;
     if (bufferSizeFrames < kMinBufferSizeFrames || bufferSizeFrames > kMaxBufferSizeFrames) {
-      klogf("rejecting buffer size %lld frames (allowed %lld..%lld)",
+      klogf("buffer size %lld frames is outside %lld..%lld",
             static_cast<long long>(bufferSizeFrames), static_cast<long long>(kMinBufferSizeFrames),
             static_cast<long long>(kMaxBufferSizeFrames));
       return illegalArgument("unsupported buffer size");
@@ -1434,7 +1434,7 @@ class RhizoModule : public BnModule {
 
     auto stream = ndk::SharedRefBase::make<RhizoStreamOut>(cfg.id, cfg.portId, bufferSizeFrames);
     if (!stream->isValid()) {
-      klogf("[%s] stream FMQ setup failed", stream->label().c_str());
+      klogf("[%s] failed to create the stream FMQs", stream->label().c_str());
       return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_STATE);
     }
     stream->fillDescriptor(&out->desc);
@@ -1446,7 +1446,7 @@ class RhizoModule : public BnModule {
     return ScopedAStatus::ok();
   }
 
-  // erase the stream and stop its thread
+  // erase the stream and stop the stream worker
   void closeStream(int32_t portConfigId) {
     std::shared_ptr<RhizoStreamOut> outStream;
     std::shared_ptr<RhizoStreamIn> inStream;
@@ -1511,13 +1511,13 @@ class RhizoModule : public BnModule {
     mMicMute = mute;
     return ScopedAStatus::ok();
   }
-  // report microphone info as unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getMicrophones(std::vector<MicrophoneInfo>* out) override {
     (void)out;
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
 
-  // check the audio mode
+  // return EX_ILLEGAL_ARGUMENT for an invalid audio mode
   ScopedAStatus updateAudioMode(AudioMode mode) override {
     if (!isValidAudioMode(mode)) {
       return illegalArgument("invalid audio mode");
@@ -1531,25 +1531,25 @@ class RhizoModule : public BnModule {
   // ignore the screen state
   ScopedAStatus updateScreenState(bool) override { return ScopedAStatus::ok(); }
 
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus generateHwAvSyncId(int32_t*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // return an unsupported operation error
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getVendorParameters(const std::vector<std::string>&,
                                     std::vector<VendorParameter>*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setVendorParameters(const std::vector<VendorParameter>&, bool) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus addDeviceEffect(
       int32_t, const std::shared_ptr<aidl::android::hardware::audio::effect::IEffect>&) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus removeDeviceEffect(
       int32_t, const std::shared_ptr<aidl::android::hardware::audio::effect::IEffect>&) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
@@ -1560,16 +1560,16 @@ class RhizoModule : public BnModule {
     out->clear();
     return ScopedAStatus::ok();
   }
-  // report that variable latency is unsupported
+  // set out to false
   ScopedAStatus supportsVariableLatency(bool* out) override {
     *out = false;
     return ScopedAStatus::ok();
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getAAudioMixerBurstCount(int32_t*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // report that the operation is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getAAudioHardwareBurstMinUsec(int32_t*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
@@ -1594,7 +1594,7 @@ class RhizoModule : public BnModule {
 
 // register IConfig and IModule
 int main() {
-  klogf("main() entered, pid=%d", getpid());
+  klogf("pid=%d", getpid());
   loadBusCount();
   auto config = ndk::SharedRefBase::make<RhizoConfig>();
   auto module = ndk::SharedRefBase::make<RhizoModule>();
@@ -1605,18 +1605,17 @@ int main() {
   binder_status_t status =
       AServiceManager_addService(config->asBinder().get(), configInstance.c_str());
   if (status != STATUS_OK) {
-    klogf("IConfig addService FAILED status=%d", status);
+    klogf("AServiceManager_addService IConfig/default failed with status %d", status);
     return 1;
   }
   status = AServiceManager_addService(module->asBinder().get(), moduleInstance.c_str());
   if (status != STATUS_OK) {
-    klogf("IModule addService FAILED status=%d", status);
+    klogf("AServiceManager_addService IModule/default failed with status %d", status);
     return 1;
   }
-  klogf("registered IConfig/default + IModule/default with %d buses, joining thread pool",
-        gBusCount);
+  klogf("gBusCount=%d", gBusCount);
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klogf("joinThreadPool RETURNED (unexpected)");
+  klogf("ABinderProcess_joinThreadPool returned");
   return 0;
 }

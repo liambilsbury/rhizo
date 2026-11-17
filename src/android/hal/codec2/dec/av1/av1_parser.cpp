@@ -58,7 +58,7 @@ void DefaultGmParams(int32_t gm[kTotalRefsPerFrame][6]) {
   }
 }
 
-// parse the uncompressed header
+// uncompressed_header() parser
 class HeaderParser {
  public:
   HeaderParser(const SequenceHeader& seq, const RefSlot* refs, Bits& b, FrameHeader* h)

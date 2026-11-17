@@ -1,4 +1,4 @@
-// print the c2.rhizo.* components the VA driver offers as a JSON object
+// probe that prints the c2.rhizo.* components of the VA driver as a JSON object
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,10 +18,10 @@ namespace {
 
 void Usage() {
   fprintf(stderr,
-          "usage: rhizo-codec2-probe (--node PATH | --fd N) [--quiet] [--no-functional] [--clip-timeout-ms N]\n"
-          "                          [--measure [--measure-budget-ms N] [--measure-clips DIR] [--measure-no-draw]\n"
-          "                          [--measure-dump DIR] [--measure-window-ms N] [--measure-step-ms N]\n"
-          "                          [--measure-loops] [--measure-encode-frames N]]\n");
+          "rhizo-codec2-probe (--node PATH | --fd N) [--quiet] [--no-functional] [--clip-timeout-ms N]\n"
+          "                   [--measure [--measure-budget-ms N] [--measure-clips DIR] [--measure-no-draw]\n"
+          "                   [--measure-dump DIR] [--measure-window-ms N] [--measure-step-ms N]\n"
+          "                   [--measure-loops] [--measure-encode-frames N]]\n");
 }
 
 }
@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
   std::vector<ComponentCaps> components = QueryComponents(display->va());
   for (const auto& c : components) {
     if (!c.min_from_driver) {
-      Logf("%s: the driver reports no minimum size; %ux%u is radeonsi's floor", c.name.c_str(), c.min_width,
+      Logf("%s has no driver minimum size, radeonsi minimum %ux%u", c.name.c_str(), c.min_width,
            c.min_height);
     }
   }
@@ -121,8 +121,8 @@ int main(int argc, char** argv) {
   if (functional) {
     FunctionalReport report = ApplyFunctionalChecks(&components, &dropped, device, options);
     for (const std::string& line : report.log) Logf("functional %s", line.c_str());
-    Logf("functional checks: %u ms%s", report.total_ms,
-         report.wedged ? ", a clip timed out: exiting without closing the display" : "");
+    Logf("functional checks took %u ms%s", report.total_ms,
+         report.wedged ? ", a clip timed out" : "");
     wedged = report.wedged;
   }
   std::string measurements;
@@ -130,13 +130,12 @@ int main(int argc, char** argv) {
     MeasureReport report = MeasureComponents(components, device, measure_options);
     for (const std::string& line : report.log) Logf("measure %s", line.c_str());
     for (const std::string& line : report.skipped) Logf("measure skipped %s", line.c_str());
-    Logf("measurements: %u ms%s", report.elapsed_ms, report.complete ? "" : ", the budget ran out");
+    Logf("measurements took %u ms%s", report.elapsed_ms, report.complete ? "" : ", budget_ms exceeded");
     measurements = MeasurementsJson(report);
   }
   std::string json =
       ComponentsJson(display->vendor(), display->major(), display->minor(), components, dropped, measurements);
   bool printed = printf("%s\n", json.c_str()) >= 0 && fflush(stdout) == 0;
-  // closing the display can hang behind a timed-out decode thread
   if (wedged) _exit(printed ? 0 : 1);
   display.reset();
   return printed ? 0 : 1;

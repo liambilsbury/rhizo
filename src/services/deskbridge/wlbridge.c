@@ -116,19 +116,19 @@ static int run_selftest_base64(void) {
   for (size_t k = 0; k < sizeof(lens) / sizeof(lens[0]); k++) {
     size_t len = lens[k];
     char *enc = b64_encode(data, len);
-    if (!enc) { fprintf(stderr, "selftest: encode failed at len %zu\n", len); return 1; }
+    if (!enc) { fprintf(stderr, "b64_encode failed for len %zu\n", len); return 1; }
     size_t declen;
     unsigned char *dec = b64_decode(enc, strlen(enc), &declen);
-    if (!dec) { fprintf(stderr, "selftest: decode failed at len %zu\n", len); free(enc); return 1; }
+    if (!dec) { fprintf(stderr, "b64_decode failed for len %zu\n", len); free(enc); return 1; }
     if (declen != len || (len && memcmp(dec, data, len) != 0)) {
-      fprintf(stderr, "selftest: round trip mismatch at len %zu (got %zu bytes)\n", len, declen);
+      fprintf(stderr, "b64_decode(b64_encode(data)) != data for len %zu (declen %zu)\n", len, declen);
       free(enc); free(dec);
       return 1;
     }
     free(enc);
     free(dec);
   }
-  fprintf(stderr, "selftest: base64 round trip OK (%zu lengths)\n", sizeof(lens) / sizeof(lens[0]));
+  fprintf(stderr, "b64_decode(b64_encode(data)) == data for %zu lengths\n", sizeof(lens) / sizeof(lens[0]));
   return 0;
 }
 
@@ -188,7 +188,7 @@ static void dc_offer_destroy(void *offer) {
   if (dc_ext) ext_data_control_offer_v1_destroy(offer);
   else zwlr_data_control_offer_v1_destroy(offer);
 }
-// ask a data control offer to write a mime type to a descriptor
+// call the data control offer receive for mime and fd
 static void dc_offer_receive(void *offer, const char *mime, int fd) {
   if (dc_ext) ext_data_control_offer_v1_receive(offer, mime, fd);
   else zwlr_data_control_offer_v1_receive(offer, mime, fd);
@@ -282,7 +282,7 @@ static int wl_pump(int extra_fd, short extra_events, short *extra_revents, int t
 static void emit_conn_error(void);
 static unsigned char *grow_buf(unsigned char *buf, size_t *cap, size_t need);
 
-// free an offer state and its mime types
+// free s and s->mimes
 static void free_offer_state(struct offer_state *s, int destroy_proxy) {
   if (!s) return;
   for (size_t i = 0; i < s->n_mimes; i++) free(s->mimes[i]);
@@ -299,7 +299,7 @@ static int mime_in_list(const struct offer_state *s, const char *mime) {
   return 0;
 }
 
-// free a drag offer and its mime types
+// free the drag offer s and s->mimes
 static void free_dnd_offer(struct dnd_offer *s, int destroy_proxy) {
   if (!s) return;
   for (size_t i = 0; i < s->n_mimes; i++) free(s->mimes[i]);
@@ -347,14 +347,14 @@ static void vp_box(int64_t *bx, int64_t *by, int64_t *bw, int64_t *bh) {
   *bx = x0; *by = y0; *bw = x1 - x0; *bh = y1 - y0;
 }
 
-// check a point against the pointer box
+// return whether x,y is inside vp_box, and write why when x,y is outside
 static int vp_reachable(long x, long y, char *why, size_t n) {
   int64_t bx, by, bw, bh;
   vp_box(&bx, &by, &bw, &bh);
   if (bw > 0 && bh > 0 && x >= bx && y >= by && x < bx + bw && y < by + bh) return 1;
   if (why)
-    snprintf(why, n, "%ld,%ld lies outside the %s %lldx%lld at %lld,%lld", x, y,
-             vp_on_output ? "pad's output" : "output layout", (long long)bw, (long long)bh,
+    snprintf(why, n, "%ld,%ld is outside the %s %lldx%lld at %lld,%lld", x, y,
+             vp_on_output ? "pad output" : "output layout", (long long)bw, (long long)bh,
              (long long)bx, (long long)by);
   return 0;
 }
@@ -437,7 +437,7 @@ static const struct zxdg_output_v1_listener xdg_output_listener = {
   .description = on_xdg_output_description,
 };
 
-// request an xdg-output for each wl_output
+// call zxdg_output_manager_v1_get_xdg_output for each wl_output
 static void watch_output_rects(void) {
   if (!xdg_output_manager) return;
   for (size_t i = 0; i < n_outputs; i++) {
@@ -449,7 +449,7 @@ static void watch_output_rects(void) {
 
 static const struct wl_seat_listener seat_listener;
 
-// answer a ping from the window manager
+// call xdg_wm_base_pong for a ping
 static void on_wm_base_ping(void *data, struct xdg_wm_base *base, uint32_t serial) {
   (void)data;
   xdg_wm_base_pong(base, serial);
@@ -458,7 +458,7 @@ static const struct xdg_wm_base_listener wm_base_listener = { .ping = on_wm_base
 
 static int cap_clipboard = 0, cap_drag = 0, cap_pointer = 0;
 
-// search the list for a capability
+// return whether the comma-separated list contains want
 static int caps_has(const char *list, const char *want) {
   size_t n = strlen(want);
   for (const char *p = list; *p; ) {
@@ -552,14 +552,14 @@ static const struct ext_data_control_offer_v1_listener ext_offer_listener = {
   .offer = ext_on_offer_mime,
 };
 
-// start tracking a new data control offer
+// add a listener to a data control offer
 static void dc_on_data_offer(void *id) {
   struct offer_state *pending = calloc(1, sizeof(*pending));
   pending->offer = id;
   if (dc_ext) ext_data_control_offer_v1_add_listener(id, &ext_offer_listener, pending);
   else zwlr_data_control_offer_v1_add_listener(id, &wlr_offer_listener, pending);
 }
-// replace the current selection with a new data control offer
+// replace current_selection with the data control offer id
 static void dc_on_selection(void *id) {
   selection_gen++;
   free_offer_state(current_selection, 1);
@@ -583,13 +583,13 @@ static void dc_on_selection(void *id) {
 static void dc_on_primary_selection(void *id) {
   if (id) free_offer_state(wl_proxy_get_user_data(id), 1);
 }
-// report that the data control device finished and stop
+// print the finished error line and set should_quit
 static void dc_on_finished(void) {
   printf("error data control device finished\n");
   fflush(stdout);
   should_quit = 1;
 }
-// handle a new wlr data control offer
+// call dc_on_data_offer for a wlr data control offer
 static void wlr_on_data_offer(void *data, struct zwlr_data_control_device_v1 *dev,
                               struct zwlr_data_control_offer_v1 *id) {
   (void)data; (void)dev;
@@ -618,7 +618,7 @@ static const struct zwlr_data_control_device_v1_listener wlr_device_listener = {
   .finished = wlr_on_finished,
   .primary_selection = wlr_on_primary_selection,
 };
-// handle a new ext data control offer
+// call dc_on_data_offer for an ext data control offer
 static void ext_on_data_offer(void *data, struct ext_data_control_device_v1 *dev,
                               struct ext_data_control_offer_v1 *id) {
   (void)data; (void)dev;
@@ -648,7 +648,7 @@ static const struct ext_data_control_device_v1_listener ext_device_listener = {
   .primary_selection = ext_on_primary_selection,
 };
 
-// write the outgoing clipboard data to the requesting descriptor
+// write the outgoing clipboard data to fd
 static void dc_on_source_send(void *data, int32_t fd) {
   struct outgoing *node = data;
   if (getenv("RHIZO_WLBRIDGE_TEST_HOLD_SEND")) {
@@ -678,7 +678,7 @@ static void dc_on_source_canceled(void *data, void *src) {
   free(node->data);
   free(node);
 }
-// handle a send request on a wlr data control source
+// call dc_on_source_send for a wlr data control source send event
 static void wlr_on_source_send(void *data, struct zwlr_data_control_source_v1 *src,
                                const char *mime_type, int32_t fd) {
   (void)src; (void)mime_type;
@@ -691,7 +691,7 @@ static void wlr_on_source_canceled(void *data, struct zwlr_data_control_source_v
 static const struct zwlr_data_control_source_v1_listener wlr_source_listener = {
   .send = wlr_on_source_send, .cancelled = wlr_on_source_canceled,
 };
-// handle a send request on an ext data control source
+// call dc_on_source_send for an ext data control source send event
 static void ext_on_source_send(void *data, struct ext_data_control_source_v1 *src,
                                const char *mime_type, int32_t fd) {
   (void)src; (void)mime_type;
@@ -728,10 +728,10 @@ static void on_layer_surface_configure(void *data, struct zwlr_layer_surface_v1 
   zwlr_layer_surface_v1_ack_configure(ls, serial);
   pad_configured = 1;
 }
-// report that the compositor closed the drag pad
+// print the drag pad closed error line for the layer surface
 static void on_layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *ls) {
   (void)data; (void)ls;
-  printf("error drag pad closed by compositor\n");
+  printf("error zwlr_layer_surface_v1.closed for the drag pad\n");
   fflush(stdout);
 }
 static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
@@ -752,10 +752,10 @@ static void on_pad_xdg_toplevel_configure(void *data, struct xdg_toplevel *tl, i
                                           int32_t height, struct wl_array *states) {
   (void)data; (void)tl; (void)width; (void)height; (void)states;
 }
-// report that the compositor closed the pad toplevel
+// print the drag pad closed error line for the pad toplevel
 static void on_pad_xdg_toplevel_close(void *data, struct xdg_toplevel *tl) {
   (void)data; (void)tl;
-  printf("error drag pad closed by compositor\n");
+  printf("error xdg_toplevel.close for the drag pad\n");
   fflush(stdout);
 }
 static const struct xdg_toplevel_listener pad_xdg_toplevel_listener = {
@@ -796,19 +796,19 @@ static int create_shm_file(size_t size) {
   return fd;
 }
 
-// fill the pad and set its input region
+// fill the pad buffer and set the pad input region
 static int map_pad_buffer(struct pad *p) {
   int32_t stride = PAD_SIZE * 4;
   size_t size = (size_t)stride * PAD_SIZE;
   int fd = create_shm_file(size);
   if (fd < 0) {
-    printf("error shm file for drag pad: %s\n", strerror(errno));
+    printf("error create_shm_file failed (%s)\n", strerror(errno));
     fflush(stdout);
     return 0;
   }
   void *mem = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (mem == MAP_FAILED) {
-    printf("error mmap for drag pad: %s\n", strerror(errno));
+    printf("error mmap failed (%s)\n", strerror(errno));
     fflush(stdout);
     close(fd);
     return 0;
@@ -883,7 +883,7 @@ static int create_pad(void) {
 static void on_pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
                              struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y) {
   (void)data; (void)p; (void)serial;
-  fprintf(stderr, "wlbridge: pointer enter surface=%u pad=%u at %d,%d\n",
+  fprintf(stderr, "[rhizo-wlbridge] pointer enter surface=%u pad=%u at %d,%d\n",
           surface ? wl_proxy_get_id((struct wl_proxy *)surface) : 0,
           pad && pad->surface ? wl_proxy_get_id((struct wl_proxy *)pad->surface) : 0,
           wl_fixed_to_int(x), wl_fixed_to_int(y));
@@ -936,13 +936,13 @@ static const struct wl_pointer_listener pointer_listener = {
   .button = on_pointer_button, .axis = on_pointer_axis,
 };
 
-// close the keymap descriptor without using it
+// close the keymap fd
 static void on_keyboard_keymap(void *data, struct wl_keyboard *k, uint32_t format, int32_t fd,
                                uint32_t size) {
   (void)data; (void)k; (void)format; (void)size;
   close(fd);
 }
-// note that the pad has keyboard focus
+// set pad_has_keyboard on a pad keyboard enter
 static void on_keyboard_enter(void *data, struct wl_keyboard *k, uint32_t serial,
                               struct wl_surface *surface, struct wl_array *keys) {
   (void)data; (void)k; (void)keys;
@@ -1036,7 +1036,7 @@ static const struct wl_data_offer_listener dnd_offer_listener = {
   .action = on_dnd_offer_action,
 };
 
-// start tracking a new drag offer
+// add a listener to a drag offer
 static void on_dnd_data_offer(void *data, struct wl_data_device *dev, struct wl_data_offer *id) {
   (void)data; (void)dev;
   struct dnd_offer *pending = calloc(1, sizeof(*pending));
@@ -1044,7 +1044,7 @@ static void on_dnd_data_offer(void *data, struct wl_data_device *dev, struct wl_
   wl_data_offer_set_user_data(id, pending);
   wl_data_offer_add_listener(id, &dnd_offer_listener, pending);
 }
-// accept an incoming drag and list its mimes
+// call wl_data_offer_accept and print the drag offer mime types
 static void on_dnd_enter(void *data, struct wl_data_device *dev, uint32_t serial,
                          struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y,
                          struct wl_data_offer *id) {
@@ -1072,7 +1072,7 @@ static void on_dnd_enter(void *data, struct wl_data_device *dev, uint32_t serial
   printf("\n");
   fflush(stdout);
 }
-// drop the current drag offer when the drag leaves
+// free current_dnd_offer on drag leave
 static void on_dnd_leave(void *data, struct wl_data_device *dev) {
   (void)data; (void)dev;
   free_dnd_offer(current_dnd_offer, 1);
@@ -1085,7 +1085,7 @@ static void on_dnd_motion(void *data, struct wl_data_device *dev, uint32_t time,
 }
 static struct dnd_offer *drop_offer;
 
-// take the current drag offer when it is dropped
+// move current_dnd_offer to drop_offer on drop
 static void on_dnd_drop(void *data, struct wl_data_device *dev) {
   (void)data; (void)dev;
   if (!current_dnd_offer || dnd_source_active || current_dnd_offer->n_mimes == 0) {
@@ -1120,7 +1120,7 @@ static void on_dnd_selection(void *data, struct wl_data_device *dev, struct wl_d
 static void on_pad_source_target(void *data, struct wl_data_source *src, const char *mime_type) {
   (void)data; (void)src; (void)mime_type;
 }
-// write the pad source data to the requesting descriptor
+// write the pad source data to fd
 static void on_pad_source_send(void *data, struct wl_data_source *src, const char *mime_type,
                                int32_t fd) {
   (void)src; (void)mime_type;
@@ -1179,7 +1179,7 @@ static void process_pending_drop(void) {
 
   int pfd[2];
   if (pipe(pfd) != 0) {
-    printf("error pipe failed: %s\n", strerror(errno));
+    printf("error pipe failed (%s)\n", strerror(errno));
     fflush(stdout);
     free_dnd_offer(o, 1);
     return;
@@ -1209,7 +1209,7 @@ static void process_pending_drop(void) {
     ssize_t n = read(pfd[0], tmp, sizeof(tmp));
     if (n < 0) {
       if (errno == EINTR) continue;
-      printf("error read failed for %s: %s\n", mime, strerror(errno));
+      printf("error read failed for %s (%s)\n", mime, strerror(errno));
       fflush(stdout);
       free(buf);
       close(pfd[0]);
@@ -1236,7 +1236,7 @@ static void process_pending_drop(void) {
     return;
   }
   if (timed_out) {
-    printf("error drag source never finished sending %s within 60s\n", mime);
+    printf("error no EOF from the drag source for %s after 60s\n", mime);
     fflush(stdout);
     free(buf);
     free_dnd_offer(o, 1);
@@ -1287,7 +1287,7 @@ static void on_dnd_source_target(void *data, struct wl_data_source *src, const c
   printf("dragtarget %s\n", mime_type ? mime_type : "(none)");
   fflush(stdout);
 }
-// write the drag payload to the requesting descriptor
+// write the drag payload to fd
 static void on_dnd_source_send(void *data, struct wl_data_source *src, const char *mime_type, int32_t fd) {
   (void)src; (void)mime_type;
   struct dnd_payload *p = data;
@@ -1302,7 +1302,7 @@ static void on_dnd_source_send(void *data, struct wl_data_source *src, const cha
   }
   close(fd);
 }
-// report that the drag was canceled and destroy the source
+// print dragto canceled and destroy src
 static void on_dnd_source_canceled(void *data, struct wl_data_source *src) {
   (void)data;
   printf("dragto canceled\n");
@@ -1314,7 +1314,7 @@ static void on_dnd_source_canceled(void *data, struct wl_data_source *src) {
 static void on_dnd_source_dnd_drop_performed(void *data, struct wl_data_source *src) {
   (void)data; (void)src;
 }
-// report that the drag finished and destroy the source
+// print dragto done and destroy src
 static void on_dnd_source_dnd_finished(void *data, struct wl_data_source *src) {
   (void)data;
   printf("dragto done\n");
@@ -1322,7 +1322,7 @@ static void on_dnd_source_dnd_finished(void *data, struct wl_data_source *src) {
   wl_data_source_destroy(src);
   finish_dragto();
 }
-// report the action chosen for the drag
+// print the dragaction value
 static void on_dnd_source_action(void *data, struct wl_data_source *src, uint32_t dnd_action) {
   (void)data; (void)src;
   printf("dragaction %u\n", dnd_action);
@@ -1381,7 +1381,7 @@ static int wl_pump(int extra_fd, short extra_events, short *extra_revents, int t
   return 0;
 }
 
-// report that the Wayland connection was lost
+// print the wayland connection lost error line
 static void emit_conn_error(void) {
   printf("error wayland connection lost\n");
   fflush(stdout);
@@ -1421,7 +1421,7 @@ static void cmd_set_via_pad(const char *mime, const unsigned char *data, size_t 
     return;
   }
   if (!pad || !pad_has_keyboard) {
-    printf("error the pad does not hold keyboard focus, so the compositor would refuse the selection\n");
+    printf("error the drag pad has no keyboard focus\n");
     fflush(stdout);
     return;
   }
@@ -1470,7 +1470,7 @@ static void get_answer_error(const char *tag, const char *fmt, ...) {
   printf("\n");
   fflush(stdout);
 }
-// print a nodata answer for a mime type and tag
+// print a nodata line for mime and tag
 static void get_answer_nodata(const char *mime, const char *tag) {
   printf("nodata %s%s%s\n", mime, tag ? " " : "", tag ? tag : "");
   fflush(stdout);
@@ -1479,7 +1479,7 @@ static void get_answer_nodata(const char *mime, const char *tag) {
 // print the selection data
 static void cmd_get(const char *mime, const char *tag) {
   if (selection_via_pad && !pad_has_keyboard) {
-    get_answer_error(tag, "the pad does not hold keyboard focus, so the compositor offers it no selection");
+    get_answer_error(tag, "the drag pad has no keyboard focus");
     return;
   }
   if (selection_via_pad ? !dnd_mime_in_list(pad_selection, mime)
@@ -1493,7 +1493,7 @@ static void cmd_get(const char *mime, const char *tag) {
   }
   int pfd[2];
   if (pipe(pfd) != 0) {
-    get_answer_error(tag, "pipe failed: %s", strerror(errno));
+    get_answer_error(tag, "pipe failed (%s)", strerror(errno));
     return;
   }
   const unsigned long read_gen = selection_gen;
@@ -1504,7 +1504,7 @@ static void cmd_get(const char *mime, const char *tag) {
   close(pfd[1]);
   int rt = wl_display_roundtrip(display);
   if (getenv("RHIZO_WLBRIDGE_DEBUG"))
-    fprintf(stderr, "wlbridge: receive mime=%s roundtrip=%d display_err=%d\n",
+    fprintf(stderr, "[rhizo-wlbridge] receive mime=%s roundtrip=%d display_err=%d\n",
             mime, rt, wl_display_get_error(display));
 
   size_t cap = 65536, len = 0;
@@ -1527,7 +1527,7 @@ static void cmd_get(const char *mime, const char *tag) {
     ssize_t n = read(pfd[0], tmp, sizeof(tmp));
     if (n < 0) {
       if (errno == EINTR) continue;
-      get_answer_error(tag, "read failed for %s: %s", mime, strerror(errno));
+      get_answer_error(tag, "read failed for %s (%s)", mime, strerror(errno));
       free(buf);
       close(pfd[0]);
       return;
@@ -1552,7 +1552,7 @@ static void cmd_get(const char *mime, const char *tag) {
     return;
   }
   if (timed_out) {
-    get_answer_error(tag, "selection owner never finished sending %s within 60s", mime);
+    get_answer_error(tag, "no EOF from the selection owner for %s after 60s", mime);
     free(buf);
     return;
   }
@@ -1730,9 +1730,9 @@ static void cmd_press(const char *xs, const char *ys) {
   }
   char *end;
   long x = strtol(xs, &end, 10);
-  if (*end || x < 0) { printf("error invalid x: %s\n", xs); fflush(stdout); return; }
+  if (*end || x < 0) { printf("error invalid x=%s\n", xs); fflush(stdout); return; }
   long y = strtol(ys, &end, 10);
-  if (*end || y < 0) { printf("error invalid y: %s\n", ys); fflush(stdout); return; }
+  if (*end || y < 0) { printf("error invalid y=%s\n", ys); fflush(stdout); return; }
   char why[160];
   if (!vp_reachable(x, y, why, sizeof(why))) { printf("error press %s\n", why); fflush(stdout); return; }
   vp_move_absolute((uint32_t)x, (uint32_t)y);
@@ -1753,9 +1753,9 @@ static void cmd_moveto(const char *xs, const char *ys) {
   }
   char *end;
   long x = strtol(xs, &end, 10);
-  if (*end || x < 0) { printf("error invalid x: %s\n", xs); fflush(stdout); return; }
+  if (*end || x < 0) { printf("error invalid x=%s\n", xs); fflush(stdout); return; }
   long y = strtol(ys, &end, 10);
-  if (*end || y < 0) { printf("error invalid y: %s\n", ys); fflush(stdout); return; }
+  if (*end || y < 0) { printf("error invalid y=%s\n", ys); fflush(stdout); return; }
   char why[160];
   if (!vp_reachable(x, y, why, sizeof(why))) { printf("error moveto %s\n", why); fflush(stdout); return; }
   const int steps = 4;
@@ -1780,7 +1780,7 @@ static void cmd_release(void) {
   fflush(stdout);
 }
 
-// find the pad origin on screen
+// move the virtual pointer over candidate pad points and return pad_abs_known
 static int discover_pad_position(void) {
   if (pad_abs_known) return 1;
   if (!pad || !vp_pointer || !output_have_mode) return 0;
@@ -1828,8 +1828,7 @@ static void cmd_padorigin(void) {
       uint32_t assumed_x = pad_abs_x, assumed_y = pad_abs_y;
       pad_abs_known = 0;
       if (!discover_pad_position() || !pointer_on_pad) {
-        printf("error the pointer never entered the drag pad: not at its assumed origin %u,%u "
-               "(output %dx%d at %d,%d) nor anywhere discovery looked; %u enter(s) on it so far\n",
+        printf("error pointer_on_pad=0 assumed_origin=%u,%u output_size=%dx%d output_origin=%d,%d pad_enters=%u\n",
                assumed_x, assumed_y, (int)output_width, (int)output_height, (int)output_x,
                (int)output_y, pad_enters);
         fflush(stdout);
@@ -1849,7 +1848,7 @@ static void cmd_dragto(const char *xs, const char *ys, const char *mime, const c
     return;
   }
   if (!ensure_pointer(2000)) {
-    printf("error the seat has no pointer, so no press serial can exist\n");
+    printf("error the seat has no pointer\n");
     fflush(stdout);
     return;
   }
@@ -1862,14 +1861,14 @@ static void cmd_dragto(const char *xs, const char *ys, const char *mime, const c
   errno = 0;
   long x = strtol(xs, &end, 10);
   if (errno || *end || x < 0) {
-    printf("error invalid x: %s\n", xs);
+    printf("error invalid x=%s\n", xs);
     fflush(stdout);
     return;
   }
   errno = 0;
   long y = strtol(ys, &end, 10);
   if (errno || *end || y < 0) {
-    printf("error invalid y: %s\n", ys);
+    printf("error invalid y=%s\n", ys);
     fflush(stdout);
     return;
   }
@@ -1899,7 +1898,7 @@ static void cmd_dragto(const char *xs, const char *ys, const char *mime, const c
     return;
   }
   if (!discover_pad_position()) {
-    printf("error could not locate the drag pad on screen\n");
+    printf("error discover_pad_position failed\n");
     fflush(stdout);
     free(data);
     if (!dragpad_persistent) destroy_pad();
@@ -1920,8 +1919,7 @@ static void cmd_dragto(const char *xs, const char *ys, const char *mime, const c
     uint32_t assumed_x = pad_abs_x, assumed_y = pad_abs_y;
     pad_abs_known = 0;
     if (!discover_pad_position() || !pointer_on_pad) {
-      printf("error the pointer never entered the drag pad: not at its assumed origin %u,%u "
-             "(output %dx%d at %d,%d) nor anywhere discovery looked; %u enter(s) on it so far\n",
+      printf("error pointer_on_pad=0 assumed_origin=%u,%u output_size=%dx%d output_origin=%d,%d pad_enters=%u\n",
              assumed_x, assumed_y, (int)output_width, (int)output_height, (int)output_x,
              (int)output_y, pad_enters);
       fflush(stdout);
@@ -1952,7 +1950,7 @@ static void cmd_dragto(const char *xs, const char *ys, const char *mime, const c
     return;
   }
   if (!have_press_serial) {
-    printf("error no press serial from compositor, with the pointer %s the pad at %u,%u\n",
+    printf("error no press serial with the pointer %s the pad at %u,%u\n",
            pointer_on_pad ? "on" : "off", pad_abs_x, pad_abs_y);
     fflush(stdout);
     free(data);
@@ -2072,7 +2070,7 @@ static void handle_line(char *line) {
     cmd_dragto(xs, ys, mime, cursor);
     return;
   }
-  printf("error unknown command: %s\n", cmd);
+  printf("error unknown command %s\n", cmd);
   fflush(stdout);
 }
 
@@ -2089,7 +2087,7 @@ static void line_ensure(size_t need) {
   while (cap < need) cap *= 2;
   char *grown = realloc(linebuf, cap);
   if (!grown) {
-    fprintf(stderr, "rhizo-wlbridge: out of memory growing the stdin line buffer to %zu bytes\n", cap);
+    fprintf(stderr, "[rhizo-wlbridge] realloc failed for the stdin line buffer at %zu bytes\n", cap);
     exit(1);
   }
   linebuf = grown;
@@ -2132,7 +2130,7 @@ static int run_selftest_buffers(void) {
   size_t big = 200 * 1024;
   char *chunk = malloc(big + 1);
   if (!chunk) {
-    fprintf(stderr, "selftest: out of memory building the fixture\n");
+    fprintf(stderr, "malloc failed for the stdin fixture\n");
     return 1;
   }
   memset(chunk, 'x', big);
@@ -2142,7 +2140,7 @@ static int run_selftest_buffers(void) {
   int saved_stdout = dup(STDOUT_FILENO);
   int devnull = open("/dev/null", O_WRONLY);
   if (saved_stdout < 0 || devnull < 0 || dup2(devnull, STDOUT_FILENO) < 0) {
-    fprintf(stderr, "selftest: could not redirect stdout\n");
+    fprintf(stderr, "failed to redirect stdout to /dev/null\n");
     free(chunk);
     if (saved_stdout >= 0) close(saved_stdout);
     if (devnull >= 0) close(devnull);
@@ -2158,31 +2156,30 @@ static int run_selftest_buffers(void) {
   int ok = 1;
   if (linecap > LINE_SHRINK_THRESHOLD) {
     fprintf(stderr,
-            "selftest: linebuf is still %zu bytes after one %zu-byte line -- "
-            "the shrink-back never ran\n", linecap, big);
+            "linecap %zu > LINE_SHRINK_THRESHOLD after a %zu-byte line\n", linecap, big);
     ok = 0;
   }
   if (linelen != 0) {
-    fprintf(stderr, "selftest: linelen is %zu after a terminated line, expected 0\n", linelen);
+    fprintf(stderr, "linelen == %zu after a terminated line, expected 0\n", linelen);
     ok = 0;
   }
 
   size_t cap = 4;
   unsigned char *b = malloc(cap);
   if (!b) {
-    fprintf(stderr, "selftest: out of memory building the grow_buf fixture\n");
+    fprintf(stderr, "malloc failed for the grow_buf fixture\n");
     return 1;
   }
   b[0] = 0xAB;
   unsigned char *grown = grow_buf(b, &cap, 4096);
   if (!grown || cap < 4096 || grown[0] != 0xAB) {
-    fprintf(stderr, "selftest: grow_buf(need=4096) gave cap=%zu ptr=%p byte0=%d\n",
+    fprintf(stderr, "grow_buf(b, &cap, 4096) returned cap=%zu ptr=%p byte0=%d\n",
             cap, (void *)grown, grown ? grown[0] : -1);
     ok = 0;
   }
   free(grown);
 
-  if (ok) fprintf(stderr, "selftest: stdin buffer shrink and grow_buf both OK\n");
+  if (ok) fprintf(stderr, "linecap <= LINE_SHRINK_THRESHOLD && linelen == 0 && grow_buf(b, &cap, 4096)[0] == 0xAB\n");
   return ok ? 0 : 1;
 }
 
@@ -2196,7 +2193,7 @@ static void on_term_signal(int sig) {
 static void release_selection(void) {
   if (!outgoing_head) return;
   releasing = 1;
-  fprintf(stderr, "rhizo-wlbridge: releasing its selection before exit\n");
+  fprintf(stderr, "[rhizo-wlbridge] release_selection before exit\n");
   while (outgoing_head) {
     struct outgoing *node = outgoing_head;
     outgoing_head = node->next;
@@ -2222,7 +2219,7 @@ static void main_loop(void) {
     ssize_t n = read(STDIN_FILENO, chunk, sizeof(chunk));
     if (n < 0) {
       if (errno == EINTR) continue;
-      fprintf(stderr, "rhizo-wlbridge: stdin read failed: %s\n", strerror(errno));
+      fprintf(stderr, "[rhizo-wlbridge] stdin read failed (%s)\n", strerror(errno));
       return;
     }
     if (n == 0) break;
@@ -2242,28 +2239,28 @@ int main(int argc, char **argv) {
       const char *mode = argv[++i];
       if (!strcmp(mode, "xdg")) { pad_mode_xdg = 1; continue; }
       if (!strcmp(mode, "layer")) { pad_mode_xdg = 0; continue; }
-      fprintf(stderr, "rhizo-wlbridge: --pad wants xdg or layer, got %s\n", mode);
+      fprintf(stderr, "[rhizo-wlbridge] --pad %s is not xdg or layer\n", mode);
       return 2;
     }
     if (!strcmp(argv[i], "--selection") && i + 1 < argc) {
       const char *via = argv[++i];
       if (!strcmp(via, "pad")) { selection_via_pad = 1; continue; }
       if (!strcmp(via, "data-control")) { selection_via_pad = 0; continue; }
-      fprintf(stderr, "rhizo-wlbridge: --selection wants pad or data-control, got %s\n", via);
+      fprintf(stderr, "[rhizo-wlbridge] --selection %s is not pad or data-control\n", via);
       return 2;
     }
-    fprintf(stderr, "rhizo-wlbridge: unknown argument %s\n", argv[i]);
+    fprintf(stderr, "[rhizo-wlbridge] unknown argument %s\n", argv[i]);
     return 2;
   }
   if (!caps) {
-    fprintf(stderr, "rhizo-wlbridge: --caps is required; pass an empty value to grant nothing\n");
+    fprintf(stderr, "[rhizo-wlbridge] --caps is required\n");
     return 2;
   }
   cap_clipboard = caps_has(caps, "clipboard");
   cap_drag = caps_has(caps, "drag");
   cap_pointer = caps_has(caps, "pointer");
   if (selection_via_pad && !(cap_clipboard && cap_drag)) {
-    fprintf(stderr, "rhizo-wlbridge: --selection pad needs --caps clipboard,drag\n");
+    fprintf(stderr, "[rhizo-wlbridge] --selection pad without --caps clipboard,drag\n");
     return 2;
   }
 
@@ -2288,7 +2285,7 @@ int main(int argc, char **argv) {
   }
   display = wl_display_connect(NULL);
   if (!display) {
-    fprintf(stderr, "rhizo-wlbridge: cannot connect to compositor (check WAYLAND_DISPLAY)\n");
+    fprintf(stderr, "[rhizo-wlbridge] wl_display_connect(NULL) failed\n");
     return 1;
   }
 
@@ -2305,11 +2302,10 @@ int main(int argc, char **argv) {
   wlr_manager = NULL;
   ext_manager = NULL;
   if (cap_clipboard && !manager) {
-    fprintf(stderr, "rhizo-wlbridge: compositor offers neither zwlr_ nor ext_data_control_manager_v1, "
-                    "clipboard stays off for this bridge\n");
+    fprintf(stderr, "[rhizo-wlbridge] registry has no zwlr_data_control_manager_v1 or ext_data_control_manager_v1\n");
   }
   if (!seat) {
-    fprintf(stderr, "rhizo-wlbridge: compositor has no wl_seat\n");
+    fprintf(stderr, "[rhizo-wlbridge] registry has no wl_seat\n");
     return 1;
   }
   wl_display_roundtrip(display);
@@ -2338,7 +2334,7 @@ int main(int argc, char **argv) {
   wl_display_roundtrip(display);
 
   if (cap_clipboard && !manager && !selection_via_pad)
-    printf("noclipboard the compositor offers neither zwlr_ nor ext_data_control_manager_v1\n");
+    printf("noclipboard registry has no zwlr_data_control_manager_v1 or ext_data_control_manager_v1\n");
   printf("ready\n");
   fflush(stdout);
   main_loop();

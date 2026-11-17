@@ -6,7 +6,7 @@ namespace rhizo::c2va::h264enc {
 
 namespace {
 
-// return true when the profile's SPS carries chroma info
+// return true when the profile's SPS has chroma_format_idc
 bool HasChromaInfo(uint32_t profile_idc) {
   switch (profile_idc) {
     case 100: case 110: case 122: case 244: case 44: case 83: case 86: case 118: case 128: case 138: case 139:

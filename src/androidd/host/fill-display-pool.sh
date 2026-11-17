@@ -1,5 +1,5 @@
 #!/bin/sh
-# create a spare pooled display
+# spare pool display creation through rhizo-add-pool-display.sh
 set -eu
 
 POOL_DIR=/run/rhizo-display-pool
@@ -47,7 +47,7 @@ for _dl_lib in /root/rhizo-display-list.sh /root/share/rhizo-display-list.sh "$_
   # shellcheck source=/dev/null
   [ -r "$_dl_lib" ] && { . "$_dl_lib"; break; }
 done
-command -v rhizo_dl_spares >/dev/null 2>&1 || { logger -t rhizo-display-pool "no rhizo-display-list.sh beside $0 -- refusing to read the pool"; exit 1; }
+command -v rhizo_dl_spares >/dev/null 2>&1 || { logger -t rhizo-display-pool "no rhizo-display-list.sh in /root, /root/share or $_here/tools"; exit 1; }
 _cg=$(rhizo_stack_cgroup "$INIT") || exit 0
 rhizo_stack_frozen "$_cg" && exit 0
 
@@ -56,9 +56,9 @@ PROBE_CLIENT=""
 for _pc in /root/share/rhizo-probe-client "$_here/rhizo-probe-client" "$_here/probe-client.py"; do
   [ -r "$_pc" ] && { PROBE_CLIENT="$_pc"; break; }
 done
-[ -n "$PROBE_CLIENT" ] || { echo "rhizo-display-pool: no probe client beside $_here or in /root/share" >&2; exit 1; }
+[ -n "$PROBE_CLIENT" ] || { echo "no rhizo-probe-client or probe-client.py in /root/share or $_here" >&2; exit 1; }
 
-# send a shell command to rhizo-probed
+# run a shell command through rhizo-probe-client
 probe() {
   "$PROBE_CLIENT" "$PROBE_SOCK" "$1" \
     "export PATH=/system/bin:/system/xbin:/vendor/bin; $2" 2>/dev/null || true
@@ -95,7 +95,7 @@ fi
 if [ -e "$READY" ] && [ -n "$dlist" ]; then
   ready_id=$(sed -n 's/.* id=\([0-9]*\).*/\1/p' "$READY" 2>/dev/null || true)
   if [ -z "$ready_id" ] || ! rhizo_dl_spares "$dlist_eff" | grep -qx "$ready_id"; then
-    logger -t rhizo-display-pool "ready names spare ${ready_id:-?}, which is not live -- discarding it"
+    logger -t rhizo-display-pool "removed $READY for spare ${ready_id:-?} outside the display list"
     rm -f "$READY"
     boot_prime=1
   fi
@@ -104,7 +104,7 @@ already_spare=$(rhizo_dl_spares "$dlist_eff" | grep -c . || true)
 if [ "${already_spare:-0}" -gt 0 ]; then
   [ -e "$READY" ] && exit 0
   for spare in $(rhizo_dl_spares "$dlist_eff"); do
-    logger -t rhizo-display-pool "removing spare $spare: no ready file names it"
+    logger -t rhizo-display-pool "display remove $spare with no $READY"
     probe 5 "echo display remove $spare > /data/rhizo_control/control" >/dev/null
   done
 fi
@@ -130,9 +130,9 @@ while [ "$q_same" -lt "$QUIET_S" ] && [ "$q_waited" -lt "$QUIET_MAX" ]; do
   if [ "$q_now" = "$q_last" ]; then q_same=$((q_same + 1)); else q_same=0; q_last=$q_now; fi
 done
 [ "$q_same" -ge "$QUIET_S" ] \
-  || logger -t rhizo-display-pool "app processes were still starting after ${QUIET_MAX}s; hotplugging the spare now"
+  || logger -t rhizo-display-pool "pid_* set still changing after ${QUIET_MAX}s"
 out=$(probe 30 "sh /system_ext/bin/rhizo-add-pool-display.sh $DISP_W $DISP_H")
-logger -t rhizo-display-pool "guest: $(printf '%s' "$out" | tr '\n' ' ')"
+logger -t rhizo-display-pool "rhizo-add-pool-display.sh $(printf '%s' "$out" | tr '\n' ' ')"
 
 case "$out" in
   *'reason=display-add-refused-no-free-port'*) exit 0 ;;

@@ -1,4 +1,4 @@
-// decode baseline MJPEG camera frames
+// baseline MJPEG decoder for camera frames
 #include "mjpeg.h"
 
 #include <stdlib.h>
@@ -42,7 +42,7 @@ static const uint8_t STD_AC_CHROMA_VALS[162] = {
     0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
 };
 
-// a Huffman decoding table
+// Huffman decoding table
 struct huff {
     uint8_t lut_len[1 << LUT_BITS];
     uint8_t lut_sym[1 << LUT_BITS];
@@ -75,7 +75,7 @@ struct mjpeg_decoder {
     size_t planes_cap;
 };
 
-// the entropy-coded segment bit reader
+// entropy-coded segment bit reader
 struct bits {
     const uint8_t *p, *end;
     uint64_t acc;
@@ -186,7 +186,7 @@ static inline int extend(uint32_t v, int k)
     return v < (1u << (k - 1)) ? (int)v - (int)((1u << k) - 1) : (int)v;
 }
 
-// decode a Huffman symbol, or -1 on an unknown code
+// return the next Huffman symbol, or -1 for an unknown code
 static inline int huff_decode(struct bits *b, const struct huff *h)
 {
     if (b->n < 16) {
@@ -405,7 +405,7 @@ static const char *parse_sof(struct mjpeg_decoder *d, const uint8_t *p, int len)
     if (d->ncomp == 1) {
         d->comp[0].h = d->comp[0].v = d->hmax = d->vmax = 1;
     } else if (d->comp[0].h != d->hmax || d->comp[0].v != d->vmax) {
-        return "unsupported sampling (chroma finer than luma)";
+        return "unsupported sampling with chroma factors above luma factors";
     }
     return NULL;
 }
@@ -425,7 +425,7 @@ static const char *alloc_planes(struct mjpeg_decoder *d)
     if (total > d->planes_cap) {
         uint8_t *p = realloc(d->planes, total);
         if (p == NULL) {
-            return "out of memory";
+            return "realloc failed";
         }
         d->planes = p;
         d->planes_cap = total;
@@ -515,13 +515,13 @@ static const char *decode_scan(struct mjpeg_decoder *d, const uint8_t *p, int le
         return "SOS before SOF";
     }
     if (len < 1 || p[0] != d->ncomp || len < 1 + 2 * d->ncomp + 3) {
-        return "scan does not interleave every component";
+        return "SOS Ns differs from SOF Nf or SOS is short";
     }
     const struct huff *dc[MAX_COMPONENTS], *ac[MAX_COMPONENTS];
     for (int i = 0; i < d->ncomp; i++) {
         int id = p[1 + 2 * i], td = p[2 + 2 * i] >> 4, ta = p[2 + 2 * i] & 15;
         if (id != d->comp[i].id) {
-            return "scan component order differs from the frame's";
+            return "SOS component order differs from SOF";
         }
         if (td > 3 || ta > 3) {
             return "bad scan table";
@@ -531,17 +531,17 @@ static const char *decode_scan(struct mjpeg_decoder *d, const uint8_t *p, int le
         } else if (td <= 1) {
             dc[i] = &d->std_dc[td];
         } else {
-            return "scan names an undefined DC table";
+            return "scan DC table is undefined";
         }
         if (d->dht_ac_set[ta]) {
             ac[i] = &d->dht_ac[ta];
         } else if (ta <= 1) {
             ac[i] = &d->std_ac[ta];
         } else {
-            return "scan names an undefined AC table";
+            return "scan AC table is undefined";
         }
         if (!d->quant_set[d->comp[i].tq]) {
-            return "component names an undefined quantizer";
+            return "component quantizer is undefined";
         }
         d->comp[i].pred = 0;
     }
@@ -709,7 +709,7 @@ int mjpeg_decode(struct mjpeg_decoder *d, const uint8_t *data, size_t size, uint
                 err = parse_sof(d, seg, seglen);
             }
             if (err == NULL && ((uint32_t)d->width != width || (uint32_t)d->height != height)) {
-                err = "frame size differs from the stream's";
+                err = "SOF size differs from width and height";
             }
             break;
         case 0xc4:

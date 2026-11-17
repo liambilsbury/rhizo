@@ -24,7 +24,7 @@ class DecoderIntf : public android::SimpleInterface<void>::BaseParams {
 
   const c2va::ComponentCaps& caps() const { return caps_; }
 
-  // return a codec's output delay before the stream sets one
+  // return the default C2PortActualDelayTuning::output of a codec
   static uint32_t DefaultOutputDelay(c2va::Codec codec);
   static constexpr uint32_t kMaxOutputDelay = 32;
 
@@ -105,7 +105,7 @@ class VideoDecoder : public android::SimpleC2Component {
   // size the session's surfaces by the app's KEY_MAX_WIDTH/HEIGHT
   void ApplyMaxPictureSize();
 
-  // send changed or forced resource needs to the client
+  // queue changed or forced C2ResourcesNeededTuning in updates_
   void RestateNeeds(bool force);
 
   // handle a decoded frame on the component's thread
@@ -116,7 +116,7 @@ class VideoDecoder : public android::SimpleC2Component {
   // fill an output block with a decoded frame
   std::shared_ptr<C2GraphicBlock> FillOutput(const c2va::Frame& frame, uint32_t width, uint32_t height,
                                              const C2StreamColorAspectsInfo::output& declared);
-  // finish a work item with its buffer and pending updates
+  // finish a work item with the output buffer and pending updates
   void Complete(uint64_t tag, const std::shared_ptr<C2Buffer>& buffer);
   static c2_status_t C2Status(c2va::Status status);
 

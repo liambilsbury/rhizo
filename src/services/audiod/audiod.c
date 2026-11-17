@@ -1,4 +1,4 @@
-// relay the audio HAL's streams through PipeWire
+// PipeWire relay for the audio HAL streams
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -80,7 +80,7 @@ static int g_capture_count = 0;
 static int g_wake_fd = -1;
 static char g_status_path[PATH_MAX];
 
-// derive the status file path beside the socket
+// write the status file path in the socket_path directory to out
 static void derive_status_path(const char *socket_path, char *out, size_t out_len)
 {
     char buf[PATH_MAX - 16];
@@ -94,7 +94,7 @@ static void derive_status_path(const char *socket_path, char *out, size_t out_le
     }
 }
 
-// write the stream count to the status file
+// write streams= and captures= to g_status_path
 static void write_status(void)
 {
     if (g_status_path[0] == '\0') {
@@ -102,14 +102,14 @@ static void write_status(void)
     }
     FILE *f = fopen(g_status_path, "w");
     if (f == NULL) {
-        fprintf(stderr, "[audiod] could not write %s: %s\n", g_status_path, strerror(errno));
+        fprintf(stderr, "[audiod] failed to write %s (%s)\n", g_status_path, strerror(errno));
         return;
     }
     fprintf(f, "streams=%d\ncaptures=%d\n", g_stream_count, g_capture_count);
     fclose(f);
 }
 
-// set the stop flag and wake the poll loop
+// set g_stop and write g_stop_fd
 static void on_signal(int sig)
 {
     (void)sig;
@@ -127,7 +127,7 @@ static time_t mono_now(void)
     return ts.tv_sec;
 }
 
-// return the mtime of the bus map, or 0 when it cannot be read
+// return the g_map_path mtime, or 0 if stat fails
 static time_t map_mtime(void)
 {
     struct stat st;
@@ -140,7 +140,7 @@ static size_t ring_available(const struct client *c)
     return (c->head - c->tail) % RING_BYTES;
 }
 
-// copy bytes into the ring, dropping what does not fit
+// copy at most the free ring bytes into the ring
 static void ring_write(struct client *c, const unsigned char *data, size_t len)
 {
     pthread_mutex_lock(&c->lock);
@@ -214,7 +214,7 @@ static void on_stream_state_changed(void *userdata, enum pw_stream_state old,
     struct client *c = userdata;
     fprintf(stderr, "[audiod] %s stream state %s -> %s%s%s\n", c->label,
             pw_stream_state_as_string(old), pw_stream_state_as_string(state),
-            error ? ": " : "", error ? error : "");
+            error ? " error=" : "", error ? error : "");
 }
 
 static const struct pw_stream_events stream_events = {
@@ -244,7 +244,7 @@ static void ring_write_capture(struct client *c, const unsigned char *data, size
     pthread_mutex_unlock(&c->lock);
 }
 
-// queue a captured buffer and wake the poll loop
+// copy a captured buffer into the ring and write g_wake_fd
 static void on_capture_process(void *userdata)
 {
     struct client *c = userdata;
@@ -309,18 +309,18 @@ static int start_capture(struct client *c)
                                     PW_STREAM_FLAG_RT_PROCESS,
                                 params, 1);
     if (res < 0) {
-        fprintf(stderr, "[audiod] pw_stream_connect failed for the microphone: %s (rate=%d channels=%d)\n",
+        fprintf(stderr, "[audiod] pw_stream_connect failed for the microphone (%s) rate=%d channels=%d\n",
                 spa_strerror(res), c->rate, c->channels);
         return -1;
     }
-    fprintf(stderr, "[audiod] capture node 'rhizo.mic' up (default source, %d Hz %d ch)\n", c->rate,
+    fprintf(stderr, "[audiod] connected capture node 'rhizo.mic' rate=%d channels=%d\n", c->rate,
             c->channels);
     g_capture_count++;
     write_status();
     return 0;
 }
 
-// send the queued capture to a microphone client without blocking
+// write the queued capture to a microphone client with MSG_DONTWAIT
 static int flush_capture(struct client *c)
 {
     int rc = 0;
@@ -345,15 +345,15 @@ static int flush_capture(struct client *c)
     return rc;
 }
 
-// look up the package for a bus, falling back to the bus name
+// copy the map package for label to out, or label
 static void lookup_app_name(const char *label, char *out, size_t out_len)
 {
     strncpy(out, label, out_len - 1);
     out[out_len - 1] = '\0';
     FILE *f = fopen(g_map_path, "r");
     if (f == NULL) {
-        fprintf(stderr, "[audiod] %s found no map yet (%s), naming the node for its bus\n", label,
-                errno == ENOENT ? "not created" : strerror(errno));
+        fprintf(stderr, "[audiod] failed to open the map for %s (%s)\n", label,
+                errno == ENOENT ? "ENOENT" : strerror(errno));
         return;
     }
     char line[256];
@@ -366,7 +366,7 @@ static void lookup_app_name(const char *label, char *out, size_t out_len)
         }
     }
     fclose(f);
-    fprintf(stderr, "[audiod] %s has no line in the map yet, naming the node for its bus\n", label);
+    fprintf(stderr, "[audiod] map has no line for %s\n", label);
 }
 
 // create and connect the PipeWire stream of a client
@@ -417,19 +417,19 @@ static int start_stream(struct client *c)
                                 params, 1);
     if (res < 0) {
         fprintf(stderr,
-                "[audiod] pw_stream_connect failed for %s: %s "
-                "(rate=%d channels=%d target='%s' node='%s')\n",
+                "[audiod] pw_stream_connect failed for %s (%s) "
+                "rate=%d channels=%d target='%s' node='%s'\n",
                 c->label, spa_strerror(res), c->rate, c->channels, target, node_name);
         return -1;
     }
-    fprintf(stderr, "[audiod] node '%s' up (app '%s', target '%s', %d Hz %d ch)\n", node_name,
+    fprintf(stderr, "[audiod] connected node '%s' app='%s' target='%s' rate=%d channels=%d\n", node_name,
             c->app, target, c->rate, c->channels);
     g_stream_count++;
     write_status();
     return 0;
 }
 
-// push the app name into the live node properties
+// set the node description, app name and media name to c->app
 static void rename_stream(struct client *c)
 {
     struct pw_properties *props = pw_properties_new(
@@ -443,13 +443,13 @@ static void rename_stream(struct client *c)
     pw_properties_free(props);
 }
 
-// close a client and its stream
+// close a client fd and the client stream
 static void drop_client(struct client *c)
 {
     if (c->fd < 0) {
         return;
     }
-    fprintf(stderr, "[audiod] %s closed: %llu bytes in, %llu out, %llu underruns, %llu overruns\n",
+    fprintf(stderr, "[audiod] %s closed bytes_in=%llu bytes_out=%llu underruns=%llu overruns=%llu\n",
             c->label, c->bytes_in, c->bytes_out, c->underruns, c->overruns);
     if (c->stream != NULL) {
         pw_thread_loop_lock(g_loop);
@@ -467,7 +467,7 @@ static void drop_client(struct client *c)
     c->fd = -1;
 }
 
-// reset a client slot for a newly accepted connection
+// reset a client slot for an accept4 fd
 static void reset_client_slot(struct client *c, int fd, int is_mic)
 {
     memset(c->label, 0, sizeof(c->label));
@@ -484,7 +484,7 @@ static void reset_client_slot(struct client *c, int fd, int is_mic)
     c->fd = fd;
 }
 
-// check a label is one of the bus ports or the primary fallback
+// return whether label is primary or bus<N> with N < AUDIOD_MAX_BUS
 static int label_is_valid(const char *label)
 {
     if (strcmp(label, "primary") == 0) {
@@ -523,7 +523,7 @@ static int parse_header_line(const char *line, int rule, char *label_out,
     return 0;
 }
 
-// return whether a daemon is listening at a socket path
+// return whether connect to path succeeds
 static int socket_path_is_live(const char *path)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -552,8 +552,7 @@ static int make_listen_socket(const char *path)
     addr.sun_family = AF_UNIX;
     snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
     if (socket_path_is_live(path)) {
-        fprintf(stderr, "[audiod] %s is a live daemon's socket -- refusing; stop that "
-                        "daemon or pass another socket path\n", path);
+        fprintf(stderr, "[audiod] socket %s is still listening\n", path);
         close(fd);
         return -1;
     }
@@ -624,8 +623,8 @@ static int run_header_cases(void)
         int rc = parse_header_line(tc->line, tc->rule, label, sizeof(label), &rate, &channels);
         int got_ok = (rc == 0);
         if (got_ok != tc->want_ok) {
-            fprintf(stderr, "SELFTEST FAIL: '%s' -> %s, wanted %s\n", tc->line,
-                    got_ok ? "accepted" : "refused", tc->want_ok ? "accepted" : "refused");
+            fprintf(stderr, "FAIL parse_header_line('%s') %s, expected %s\n", tc->line,
+                    got_ok ? "== 0" : "!= 0", tc->want_ok ? "== 0" : "!= 0");
             mismatches++;
             continue;
         }
@@ -633,15 +632,16 @@ static int run_header_cases(void)
             (strcmp(label, tc->want_label) != 0 || rate != tc->want_rate ||
              channels != tc->want_channels)) {
             fprintf(stderr,
-                    "SELFTEST FAIL: '%s' parsed label='%s' rate=%d channels=%d, wanted "
+                    "FAIL parse_header_line('%s') label='%s' rate=%d channels=%d, expected "
                     "label='%s' rate=%d channels=%d\n",
                     tc->line, label, rate, channels, tc->want_label, tc->want_rate,
                     tc->want_channels);
             mismatches++;
             continue;
         }
-        fprintf(stderr, "SELFTEST OK:   %s '%s' -> %s\n", tc->rule == LABELS_MIC ? "mic" : "playback",
-                tc->line, got_ok ? "accepted" : "refused");
+        fprintf(stderr, "ok %s parse_header_line('%s') %s\n",
+                tc->rule == LABELS_MIC ? "LABELS_MIC" : "LABELS_PLAYBACK", tc->line,
+                got_ok ? "== 0" : "!= 0");
     }
     return mismatches;
 }
@@ -650,29 +650,29 @@ static int run_header_cases(void)
 static int run_selftest(void)
 {
     if (N_SELFTEST_CASES == 0) {
-        fprintf(stderr, "SELFTEST FAIL: no header cases enumerated -- this checks nothing\n");
+        fprintf(stderr, "FAIL N_SELFTEST_CASES == 0\n");
         return 1;
     }
     int mismatches = run_header_cases();
     if (mismatches > 0) {
-        fprintf(stderr, "SELFTEST: %d of %zu case(s) FAILED\n", mismatches, N_SELFTEST_CASES);
+        fprintf(stderr, "SELFTEST mismatches=%d cases=%zu\n", mismatches, N_SELFTEST_CASES);
         return 1;
     }
-    fprintf(stderr, "SELFTEST: all %zu header cases passed\n", N_SELFTEST_CASES);
+    fprintf(stderr, "SELFTEST mismatches=0 cases=%zu\n", N_SELFTEST_CASES);
     return 0;
 }
 
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s [--socket PATH | --no-socket] [--mic-socket PATH] [--map PATH]\n"
-            "          [--sink-prefix PREFIX] [--idle-timeout SECONDS] [-v]\n"
-            "       %s --status [--socket PATH]\n"
-            "       %s --selftest\n",
+            "%s [--socket PATH | --no-socket] [--mic-socket PATH] [--map PATH]\n"
+            "    [--sink-prefix PREFIX] [--idle-timeout SECONDS] [-v]\n"
+            "%s --status [--socket PATH]\n"
+            "%s --selftest\n",
             argv0, argv0, argv0);
 }
 
-// print the status file written by the running daemon
+// print the status file in the socket_path directory, or streams=0
 static int print_status(const char *socket_path)
 {
     char status_path[PATH_MAX];
@@ -733,7 +733,7 @@ int main(int argc, char *argv[])
     }
 
     if (!g_playback_socket && g_mic_socket_path == NULL) {
-        fprintf(stderr, "[audiod] --no-socket without --mic-socket leaves nothing to serve\n");
+        fprintf(stderr, "[audiod] --no-socket without --mic-socket\n");
         return 2;
     }
     derive_status_path(g_playback_socket ? g_socket_path : g_mic_socket_path, g_status_path,
@@ -774,7 +774,7 @@ int main(int argc, char *argv[])
     g_core = pw_context_connect(g_context, NULL, 0);
     pw_thread_loop_unlock(g_loop);
     if (g_core == NULL) {
-        fprintf(stderr, "[audiod] cannot connect to PipeWire (is it running?)\n");
+        fprintf(stderr, "[audiod] pw_context_connect failed\n");
         return 1;
     }
 
@@ -785,9 +785,9 @@ int main(int argc, char *argv[])
     if (g_mic_socket_path != NULL && (mic_fd = make_listen_socket(g_mic_socket_path)) < 0) {
         return 1;
     }
-    fprintf(stderr, "[audiod] playback on %s, microphone on %s (map %s, idle timeout %ds)\n",
-            g_playback_socket ? g_socket_path : "nothing (--no-socket)",
-            g_mic_socket_path != NULL ? g_mic_socket_path : "nothing (no --mic-socket)", g_map_path,
+    fprintf(stderr, "[audiod] socket=%s mic_socket=%s map=%s idle_timeout_s=%d\n",
+            g_playback_socket ? g_socket_path : "none",
+            g_mic_socket_path != NULL ? g_mic_socket_path : "none", g_map_path,
             g_idle_timeout_s);
 
     unsigned char buf[16384];
@@ -872,7 +872,7 @@ int main(int argc, char *argv[])
                     }
                 }
                 if (slot < 0) {
-                    fprintf(stderr, "[audiod] too many streams, refusing\n");
+                    fprintf(stderr, "[audiod] MAX_CLIENTS client slots in use\n");
                     close(cfd);
                     continue;
                 }
@@ -885,7 +885,7 @@ int main(int argc, char *argv[])
             }
             if (c->state == CLIENT_HEADER) {
                 if (c->hdrlen + 1 >= sizeof(c->hdrbuf)) {
-                    fprintf(stderr, "[audiod] header line too long, refusing\n");
+                    fprintf(stderr, "[audiod] header line exceeds HEADER_MAX\n");
                     close(c->fd);
                     c->fd = -1;
                     continue;
@@ -909,7 +909,7 @@ int main(int argc, char *argv[])
                 int rc = parse_header_line(c->hdrbuf, c->is_mic ? LABELS_MIC : LABELS_PLAYBACK,
                                             c->label, sizeof(c->label), &c->rate, &c->channels);
                 if (rc != 0) {
-                    fprintf(stderr, "[audiod] bad %s header, refusing: '%s'\n",
+                    fprintf(stderr, "[audiod] failed to parse %s header '%s'\n",
                             c->is_mic ? "microphone" : "playback", c->hdrbuf);
                     close(c->fd);
                     c->fd = -1;
@@ -953,7 +953,7 @@ int main(int argc, char *argv[])
                 c->last_activity = mono_now();
                 ring_write(c, buf, (size_t)got);
                 if (g_verbose) {
-                    fprintf(stderr, "[audiod] %s +%zd bytes (queued %zu)\n", c->label, got,
+                    fprintf(stderr, "[audiod] %s +%zd bytes queued=%zu\n", c->label, got,
                             ring_available(c));
                 }
             } else if (got == 0 || (got < 0 && errno != EINTR && errno != EAGAIN)) {
@@ -967,8 +967,8 @@ int main(int argc, char *argv[])
                 struct client *c = &g_clients[i];
                 if (c->fd >= 0 && !(c->is_mic && c->state == CLIENT_STREAM) &&
                     now - c->last_activity >= g_idle_timeout_s) {
-                    fprintf(stderr, "[audiod] %s idle for %lds, reaping\n",
-                            c->label[0] ? c->label : "(no header)", (long)(now - c->last_activity));
+                    fprintf(stderr, "[audiod] %s idle for %lds\n",
+                            c->label[0] ? c->label : "no-label", (long)(now - c->last_activity));
                     drop_client(c);
                 }
             }
@@ -1010,6 +1010,5 @@ int main(int argc, char *argv[])
     pw_context_destroy(g_context);
     pw_thread_loop_destroy(g_loop);
     pw_deinit();
-    fprintf(stderr, "[audiod] stopped\n");
     return 0;
 }

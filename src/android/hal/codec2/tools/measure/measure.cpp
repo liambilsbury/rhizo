@@ -98,7 +98,7 @@ VAProfile EncodeProfile(const ComponentCaps& c) {
   return c.va_profiles.empty() ? VAProfileNone : c.va_profiles.front();
 }
 
-// draw a noise patch moving over a static noise texture
+// pictures of a noise patch moving over a static noise texture
 struct Pictures {
   uint32_t w = 0, h = 0;
   std::vector<std::vector<uint8_t>> frames;
@@ -144,7 +144,7 @@ struct Pictures {
   }
 };
 
-// draw a window panning over a still picture
+// a window panning over a still picture
 struct Scene {
   static constexpr uint32_t kMargin = 256;
   uint32_t w = 0, h = 0, bw = 0, bh = 0;
@@ -237,7 +237,7 @@ std::string EncodeStream(const ComponentCaps& c, uint32_t w, uint32_t h, const s
   };
   Status st;
   auto s = EncodeSession::Create(c.codec, cfg, cb, &st, device);
-  if (!s) return std::string("no encode session (status ") + std::to_string(static_cast<int>(st)) + ")";
+  if (!s) return std::string("EncodeSession::Create failed (status ") + std::to_string(static_cast<int>(st)) + ")";
   double t0 = NowMs();
   uint32_t n = 0;
   for (; n < frames && NowMs() - t0 < o.step_ms; n++) {
@@ -257,7 +257,7 @@ std::string EncodeStream(const ComponentCaps& c, uint32_t w, uint32_t h, const s
   return "";
 }
 
-// hold a guest-memory YV12 buffer in the allocator's layout
+// a guest-memory YV12 buffer in the allocator's layout
 struct GuestBuffer {
   int fd = -1;
   uint8_t* map = nullptr;
@@ -306,7 +306,7 @@ std::string Encode(const ComponentCaps& c, uint32_t w, uint32_t h, const Picture
   std::vector<std::unique_ptr<GuestBuffer>> ring;
   for (uint32_t i = 0; i < std::max(1u, o.input_ring); i++) {
     ring.push_back(std::make_unique<GuestBuffer>());
-    if (!ring.back()->Make(w, h)) return "no guest-memory input buffer";
+    if (!ring.back()->Make(w, h)) return "failed to create a guest-memory input buffer";
     ring.back()->Write(pics.Src(i), w, h);
   }
   EncoderConfig cfg{};
@@ -335,7 +335,7 @@ std::string Encode(const ComponentCaps& c, uint32_t w, uint32_t h, const Picture
   };
   Status st;
   auto s = EncodeSession::Create(c.codec, cfg, cb, &st, device);
-  if (!s) return std::string("no encode session (status ") + std::to_string(static_cast<int>(st)) + ")";
+  if (!s) return std::string("EncodeSession::Create failed (status ") + std::to_string(static_cast<int>(st)) + ")";
   const bool settling = static_cast<uint64_t>(w) * h >= o.settle_min_pixels;
   const double sub_ms = settling ? o.window_ms / 3.0 : o.small_window_ms;
   std::vector<std::pair<uint32_t, double>> subs;
@@ -378,7 +378,7 @@ std::string Encode(const ComponentCaps& c, uint32_t w, uint32_t h, const Picture
   if (st != Status::kOk) return "drain failed (" + std::to_string(static_cast<int>(st)) + ")";
   if (empty) return "some access units were empty";
   if (subs.empty()) return std::to_string(out_ms.size()) + " access units in " + std::to_string(o.step_ms) +
-                           " ms: too few after the warm-up to measure";
+                           " ms, too few after the warm-up";
   uint32_t frames = 0;
   double ms = 0;
   for (size_t i = subs.size() >= 3 ? subs.size() - 3 : 0; i < subs.size(); i++) {
@@ -492,7 +492,7 @@ std::string Decode(const ComponentCaps& c, uint32_t w, uint32_t h, const std::ve
       if (vaCreateSurfaces(dpy, VA_RT_FORMAT_RGB32, f.crop.width, f.crop.height, &rgba, 1, &attr, 1) !=
           VA_STATUS_SUCCESS) {
         rgba = VA_INVALID_SURFACE;
-        err = "no RGB surface";
+        err = "vaCreateSurfaces failed for an RGB surface";
       }
     }
     if (rgba != VA_INVALID_SURFACE &&
@@ -528,14 +528,14 @@ std::string Decode(const ComponentCaps& c, uint32_t w, uint32_t h, const std::ve
   Status st;
   double t_create = NowMs();
   auto owned = DecodeSession::Create(c.codec, cb, &st, device);
-  if (!owned) return std::string("no decode session (status ") + std::to_string(static_cast<int>(st)) + ")";
+  if (!owned) return std::string("DecodeSession::Create failed (status ") + std::to_string(static_cast<int>(st)) + ")";
   session = owned.get();
   dpy = session->display();
   t_first = NowMs();
   uint64_t tag = 0;
   if (!csd.empty()) {
     st = session->Decode(csd.data(), csd.size(), tag++, true);
-    if (st != Status::kOk) err = "parameter sets refused";
+    if (st != Status::kOk) err = "Decode of the parameter sets failed";
   }
   for (uint64_t fed = 0; err.empty(); fed++) {
     double now = NowMs();
@@ -546,7 +546,7 @@ std::string Decode(const ComponentCaps& c, uint32_t w, uint32_t h, const std::ve
     st = session->Decode(u.data(), u.size(), tag++, false);
     if (counting) decode_ms += (NowMs() - d0) - (in_callback - cb0);
     if (st != Status::kOk) {
-      err = "input " + std::to_string(fed) + " refused (" + std::to_string(static_cast<int>(st)) + ")";
+      err = "Decode of input " + std::to_string(fed) + " failed (" + std::to_string(static_cast<int>(st)) + ")";
     }
   }
   double t_stop = NowMs();
@@ -574,8 +574,8 @@ std::string Decode(const ComponentCaps& c, uint32_t w, uint32_t h, const std::ve
     fps = pics * 1000.0 / ms;
   }
   if (t_window < 0 || subs.empty() || pics < o.min_window_frames) {
-    return std::to_string(out) + " pictures in " + std::to_string(o.step_ms) + " ms: too few after the warm-up to " +
-           "measure";
+    return std::to_string(out) + " pictures in " + std::to_string(o.step_ms) + " ms, too few pictures after the " +
+           "warm-up";
   }
   m->name = c.name;
   m->width = w;
@@ -629,7 +629,7 @@ std::vector<MeasureClip> ReadMeasureClips(const std::string& dir, std::vector<st
   std::vector<uint8_t> manifest;
   if (dir.empty()) return out;
   if (!ReadFile(dir + "/clips.tsv", &manifest)) {
-    skipped->push_back("measurement clips: no " + dir + "/clips.tsv");
+    skipped->push_back("ReadFile " + dir + "/clips.tsv failed");
     return out;
   }
   std::string text(manifest.begin(), manifest.end());
@@ -651,7 +651,7 @@ std::vector<MeasureClip> ReadMeasureClips(const std::string& dir, std::vector<st
     Codec codec;
     if (f.size() != 7 || f[0].find('/') != std::string::npos || !ParseCodec(f[1], &codec) ||
         (codec != Codec::kVp9 && codec != Codec::kAv1)) {
-      skipped->push_back("measurement clips: manifest line \"" + line.substr(0, 80) + "\" is not a clip");
+      skipped->push_back("clips.tsv line \"" + line.substr(0, 80) + "\" is not a clip");
       continue;
     }
     clip.file = f[0];
@@ -666,15 +666,15 @@ std::vector<MeasureClip> ReadMeasureClips(const std::string& dir, std::vector<st
     uint32_t fw = 0, fh = 0;
     const char* want = codec == Codec::kVp9 ? "VP90" : "AV01";
     if (!ReadFile(dir + "/" + clip.file, &data)) {
-      skipped->push_back("measurement clips: " + clip.file + " does not read");
+      skipped->push_back("ReadFile " + clip.file + " failed");
     } else if (data.size() != bytes) {
-      skipped->push_back("measurement clips: " + clip.file + " is " + std::to_string(data.size()) + " bytes, its " +
-                         "manifest says " + std::to_string(bytes));
+      skipped->push_back("clip " + clip.file + " is " + std::to_string(data.size()) + " bytes, " +
+                         "clips.tsv lists " + std::to_string(bytes));
     } else if (!ReadIvf(data, &frames, &fourcc, &fw, &fh) || fourcc != want || fw != clip.width ||
                fh != clip.height || frames.size() != clip.frames || frames.empty()) {
-      skipped->push_back("measurement clips: " + clip.file + " is not the " + want + " " +
+      skipped->push_back("clip " + clip.file + " is not the " + want + " " +
                          SizeName(clip.width, clip.height) + " IVF of " + std::to_string(clip.frames) +
-                         " frames its manifest says");
+                         " frames clips.tsv lists");
     } else {
       for (auto& u : frames) clip.units.push_back(std::move(u.data));
       out.push_back(std::move(clip));
@@ -690,15 +690,15 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
   double t0 = NowMs();
   auto over = [&]() { return NowMs() - t0 >= o.budget_ms; };
   auto skip = [&](const std::string& name, uint32_t w, uint32_t h, const std::string& why) {
-    r.skipped.push_back(name + " " + SizeName(w, h) + ": " + why);
+    r.skipped.push_back(name + " " + SizeName(w, h) + " " + why);
   };
   auto logged = [&](const Measurement& m) {
     char line[256];
-    snprintf(line, sizeof(line), "%s %s: %u pictures in %u ms (%.1f fps)", m.name.c_str(),
+    snprintf(line, sizeof(line), "%s %s %u pictures in %u ms (%.1f fps)", m.name.c_str(),
              SizeName(m.width, m.height).c_str(), m.frames, m.ms, m.fps);
     std::string s = line;
     if (m.source != "generated") {
-      snprintf(line, sizeof(line), "; warm-up %u ms, decode %.0f ms, draw %.0f ms, %u kbit/s", m.warmup_ms,
+      snprintf(line, sizeof(line), ", warm-up %u ms, decode %.0f ms, draw %.0f ms, %u kbit/s", m.warmup_ms,
                m.decode_ms, m.draw_ms, m.stream_kbps);
       s += line;
     }
@@ -716,7 +716,7 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
     const ComponentCaps* enc = encoders[static_cast<int>(codec)];
     const ComponentCaps* dec = decoders[static_cast<int>(codec)];
     if (!enc) {
-      if (dec) r.skipped.push_back(dec->name + ": no encoder of its codec to make a stream");
+      if (dec) r.skipped.push_back(dec->name + " with no encoder of the decoder's codec");
       continue;
     }
     std::vector<std::pair<uint32_t, uint32_t>> enc_sizes = MeasureLadder(*enc), sizes = enc_sizes;
@@ -735,7 +735,7 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
       if (std::find(enc_sizes.begin(), enc_sizes.end(), size) != enc_sizes.end()) {
         if (over()) {
           r.complete = false;
-          skip(enc->name, w, h, "budget");
+          skip(enc->name, w, h, "budget_ms exceeded");
           continue;
         }
         double tp = NowMs();
@@ -756,12 +756,12 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
       }
       if (!dec || !OnDecodeLadder(codec, w, h) || !Fits(*dec, w, h)) continue;
       if (!Fits(*enc, w, h)) {
-        skip(dec->name, w, h, "its encoder does not make a stream of this size");
+        skip(dec->name, w, h, "no encoder stream at the size");
         continue;
       }
       if (over()) {
         r.complete = false;
-        skip(dec->name, w, h, "budget");
+        skip(dec->name, w, h, "budget_ms exceeded");
         continue;
       }
       constexpr uint32_t kGop = 16, kGops = 3;
@@ -776,9 +776,9 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
       double tse = NowMs();
       std::string why = EncodeStream(*enc, w, h, [&scene](uint32_t k) { return scene.Src(k); }, kGops * kGop,
                          DecodeKbps(codec, w, h) * 1000, kGop, o, device, &dcsd, &all, &ms, &n);
-      if (why.empty() && all.size() < kGops * kGop) why = "the encode stopped short of its GOPs";
+      if (why.empty() && all.size() < kGops * kGop) why = "stopped before kGops GOPs";
       if (!why.empty()) {
-        skip(dec->name, w, h, "its stream did not encode: " + why);
+        skip(dec->name, w, h, "stream encode " + why);
         continue;
       }
       std::vector<std::vector<uint8_t>> daus(all.end() - kGop, all.end());
@@ -804,7 +804,7 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
       if (clip.codec != codec) continue;
       any = true;
       if (!OnDecodeLadder(codec, clip.width, clip.height)) {
-        skip(dec->name, clip.width, clip.height, "not a size of its decoder's ladder");
+        skip(dec->name, clip.width, clip.height, "not a size of the decoder's ladder");
         continue;
       }
       if (!Fits(*dec, clip.width, clip.height)) {
@@ -813,7 +813,7 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
       }
       if (over()) {
         r.complete = false;
-        skip(dec->name, clip.width, clip.height, "budget");
+        skip(dec->name, clip.width, clip.height, "budget_ms exceeded");
         continue;
       }
       Measurement dm;
@@ -825,7 +825,7 @@ MeasureReport MeasureComponents(const std::vector<ComponentCaps>& components, Va
       r.results.push_back(dm);
       logged(dm);
     }
-    if (!any) r.skipped.push_back(dec->name + ": no measurement clip of its codec");
+    if (!any) r.skipped.push_back(dec->name + " with no measurement clip of the decoder's codec");
   }
   r.elapsed_ms = static_cast<uint32_t>(NowMs() - t0 + 0.5);
   return r;

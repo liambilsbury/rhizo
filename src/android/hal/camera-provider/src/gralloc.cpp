@@ -27,7 +27,7 @@ constexpr char kStandardMetadataTypeName[] = "android.hardware.graphics.common.S
 
 using LoadMapperFn = AIMapper_Error (*)(AIMapper**);
 
-// load the AIMapper of the allocator's mapper library
+// load AIMapper from RHIZO_CAMERA_MAPPER or mapper.rhizo.so
 AIMapper* LoadMapper() {
   std::vector<std::string> candidates;
   if (const char* env = getenv("RHIZO_CAMERA_MAPPER"); env != nullptr && *env != '\0') candidates.push_back(env);
@@ -36,21 +36,21 @@ AIMapper* LoadMapper() {
   for (const std::string& path : candidates) {
     void* lib = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (lib == nullptr) {
-      klogf("mapper: dlopen %s failed: %s", path.c_str(), dlerror());
+      klogf("dlopen %s failed (%s)", path.c_str(), dlerror());
       continue;
     }
     auto load = reinterpret_cast<LoadMapperFn>(dlsym(lib, "AIMapper_loadIMapper"));
     AIMapper* mapper = nullptr;
     if (load == nullptr || load(&mapper) != AIMAPPER_ERROR_NONE || mapper == nullptr) {
-      klogf("mapper: %s has no usable AIMapper_loadIMapper", path.c_str());
+      klogf("failed to load AIMapper from %s", path.c_str());
       dlclose(lib);
       continue;
     }
     if (mapper->version < AIMAPPER_VERSION_5) {
-      klogf("mapper: %s is AIMapper version %u, want 5", path.c_str(), static_cast<unsigned>(mapper->version));
+      klogf("%s AIMapper version %u < AIMAPPER_VERSION_5", path.c_str(), static_cast<unsigned>(mapper->version));
       continue;
     }
-    klogf("mapper: loaded %s", path.c_str());
+    klogf("loaded AIMapper from %s", path.c_str());
     return mapper;
   }
   return nullptr;
@@ -73,7 +73,7 @@ buffer_handle_t Gralloc::importBuffer(const native_handle_t* raw) {
   buffer_handle_t out = nullptr;
   AIMapper_Error err = mapper_->v5.importBuffer(raw, &out);
   if (err != AIMAPPER_ERROR_NONE) {
-    klogf("mapper: importBuffer failed (%d)", static_cast<int>(err));
+    klogf("AIMapper importBuffer failed (%d)", static_cast<int>(err));
     return nullptr;
   }
   return out;
@@ -102,17 +102,17 @@ bool Gralloc::metadataU64(buffer_handle_t buffer, int64_t type, uint64_t* out) {
   return true;
 }
 
-// lock a buffer for CPU writes and describe its planes
+// lock a buffer for CPU writes and describe the buffer's planes
 bool Gralloc::lock(buffer_handle_t buffer, LockedBuffer* out) {
   uint64_t width = 0, height = 0, allocation = 0;
   if (!metadataU64(buffer, kMetadataWidth, &width) || !metadataU64(buffer, kMetadataHeight, &height) ||
       width == 0 || height == 0 || width > 0x7fffffff || height > 0x7fffffff) {
-    klogf("mapper: buffer %p has no usable width/height", buffer);
+    klogf("buffer %p has no valid WIDTH and HEIGHT metadata", buffer);
     return false;
   }
   int32_t size = mapper_->v5.getStandardMetadata(buffer, kMetadataPlaneLayouts, nullptr, 0);
   if (size <= 0) {
-    klogf("mapper: buffer %p has no plane layouts (%d)", buffer, size);
+    klogf("buffer %p has no plane layouts (%d)", buffer, size);
     return false;
   }
   std::vector<uint8_t> layout(static_cast<size_t>(size));
@@ -121,7 +121,7 @@ bool Gralloc::lock(buffer_handle_t buffer, LockedBuffer* out) {
   }
   std::vector<PlaneLayoutInfo> planes;
   if (!DecodePlaneLayouts(layout.data(), layout.size(), &planes)) {
-    klogf("mapper: buffer %p plane layouts do not decode", buffer);
+    klogf("failed to decode PLANE_LAYOUTS of buffer %p", buffer);
     return false;
   }
   size_t mapped = 0;
@@ -138,12 +138,12 @@ bool Gralloc::lock(buffer_handle_t buffer, LockedBuffer* out) {
   void* data = nullptr;
   AIMapper_Error err = mapper_->v5.lock(buffer, kCpuWriteOften, region, -1, &data);
   if (err != AIMAPPER_ERROR_NONE || data == nullptr) {
-    klogf("mapper: lock %p failed (%d)", buffer, static_cast<int>(err));
+    klogf("AIMapper lock %p failed (%d)", buffer, static_cast<int>(err));
     return false;
   }
   if (!DescribePlanes(planes, static_cast<uint8_t*>(data), mapped, static_cast<int32_t>(width),
                       static_cast<int32_t>(height), out)) {
-    klogf("mapper: buffer %p (%llux%llu) has no plane layout the provider can write", buffer,
+    klogf("failed to describe planes of buffer %p (%llux%llu)", buffer,
           static_cast<unsigned long long>(width), static_cast<unsigned long long>(height));
     int fence = -1;
     unlock(buffer, &fence);
@@ -158,7 +158,7 @@ bool Gralloc::unlock(buffer_handle_t buffer, int* releaseFence) {
   *releaseFence = -1;
   AIMapper_Error err = mapper_->v5.unlock(buffer, releaseFence);
   if (err != AIMAPPER_ERROR_NONE) {
-    klogf("mapper: unlock %p failed (%d)", buffer, static_cast<int>(err));
+    klogf("AIMapper unlock %p failed (%d)", buffer, static_cast<int>(err));
     return false;
   }
   return true;

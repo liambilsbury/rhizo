@@ -13,17 +13,17 @@
 <div id="status">connecting...</div>
 <canvas id="c"></canvas>
 <script>
-// rhizo-streamd sends a JSON hello with codec and geometry, then a VP9 keyframe per binary frame
+// WebSocket viewer for the rhizo-streamd JSON hello and VP9 keyframe binary frames
 const statusEl = document.getElementById("status");
 const canvas = document.getElementById("c");
 const ctx2d = canvas.getContext("2d");
 
 window.__rhizoStats = { frames: 0 };
 
-// set the status line's text
+// set statusEl.textContent
 function statLine(s) { statusEl.textContent = s; }
 
-// return the mean RGB of the canvas's left and right halves
+// return the mean RGB of the left and right canvas halves
 function sampleHalves(width, height) {
   const half = width >> 1;
   const left = ctx2d.getImageData(0, 0, half, height).data;
@@ -41,12 +41,12 @@ let decoder = null;
 let width = 0, height = 0;
 let ws = null;
 
-// open the stream socket and draw each VP9 keyframe it sends, counting frames in __rhizoStats
+// open the stream WebSocket, draw each VP9 keyframe and count frames in __rhizoStats
 function connect() {
   ws = new WebSocket("ws://" + location.host + "/stream");
   ws.binaryType = "arraybuffer";
 
-  ws.onopen = () => statLine("connected, awaiting hello");
+  ws.onopen = () => statLine("connected");
 
   ws.onmessage = (ev) => {
     if (typeof ev.data === "string") {
@@ -64,7 +64,7 @@ function connect() {
           statLine("codec=" + hello.codec + " " + width + "x" + height +
                    " frames=" + window.__rhizoStats.frames);
         },
-        error: (e) => statLine("decoder error: " + e.message),
+        error: (e) => statLine("VideoDecoder error " + e.message),
       });
       decoder.configure({ codec: "vp09.00.10.08", codedWidth: width, codedHeight: height });
       return;
@@ -78,10 +78,10 @@ function connect() {
   };
 
   ws.onclose = () => statLine("disconnected");
-  ws.onerror = () => statLine("socket error");
+  ws.onerror = () => statLine("WebSocket error");
 }
 
-// send a pointer event's kind and position, scaled to the stream's geometry, as JSON
+// call ws.send with the pointer kind and position scaled to the stream geometry as JSON
 function sendInput(kind, ev) {
   if (!ws || ws.readyState !== WebSocket.OPEN || !width) return;
   const rect = canvas.getBoundingClientRect();

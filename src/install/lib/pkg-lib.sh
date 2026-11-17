@@ -33,40 +33,40 @@ usr/lib/systemd/system/avahi-daemon.service.d/rhizo-after-policy.conf"
 # set PKG_MODE to the configured SELinux mode
 pkg_read_selinux_mode() {
   if ! PKG_MODE=$("$PKG_SELINUX_MODE_HELPER" --env-file "$PKG_ANDROIDD_ENV" --configured); then
-    echo "[$PROG] cannot read the configured SELinux mode from $PKG_SELINUX_MODE_HELPER" >&2
+    echo "[$PROG] $PKG_SELINUX_MODE_HELPER --configured failed" >&2
     return 1
   fi
   case "$PKG_MODE" in
     host|namespace) ;;
-    *) echo "[$PROG] $PKG_SELINUX_MODE_HELPER --configured printed '$PKG_MODE', which is neither host nor namespace" >&2
+    *) echo "[$PROG] $PKG_SELINUX_MODE_HELPER --configured printed '$PKG_MODE', expected host or namespace" >&2
        return 1 ;;
   esac
 }
 
-# set PKG_BOOT_MODE to this boot's SELinux mode
+# set PKG_BOOT_MODE to the SELinux mode in PKG_SELINUX_MODE_FILE
 pkg_boot_selinux_mode() {
   PKG_BOOT_MODE=""
   if [ -e "$PKG_SELINUX_MODE_FILE" ]; then
     if ! PKG_BOOT_MODE=$(cat "$PKG_SELINUX_MODE_FILE" 2>/dev/null); then
-      echo "[$PROG] cannot read this boot's SELinux mode record $PKG_SELINUX_MODE_FILE" >&2
+      echo "[$PROG] failed to read $PKG_SELINUX_MODE_FILE" >&2
       return 1
     fi
   fi
   [ -n "$PKG_BOOT_MODE" ] || PKG_BOOT_MODE="$PKG_MODE"
   case "$PKG_BOOT_MODE" in
     host|namespace) ;;
-    *) echo "[$PROG] this boot's SELinux mode record $PKG_SELINUX_MODE_FILE reads '$PKG_BOOT_MODE', not host or namespace" >&2
+    *) echo "[$PROG] $PKG_SELINUX_MODE_FILE contains '$PKG_BOOT_MODE', expected host or namespace" >&2
        return 1 ;;
   esac
 }
 
-# remove host-mode links at their old names
+# remove the PKG_HOST_MODE_RENAMED links
 pkg_host_mode_drop_renamed() {
   for pkg_hm_old in $PKG_HOST_MODE_RENAMED; do
     pkg_hm_dst="${RHIZO_PKG_ROOT:-}/$pkg_hm_old"
     [ -L "$pkg_hm_dst" ] && [ "$(readlink "$pkg_hm_dst")" = "$PKG_HOST_MODE_DIR/$pkg_hm_old" ] || continue
     if ! rm -f "$pkg_hm_dst"; then
-      echo "[$PROG] could not remove /$pkg_hm_old, the link of a renamed host-mode file" >&2
+      echo "[$PROG] failed to remove /$pkg_hm_old" >&2
       return 1
     fi
   done
@@ -76,7 +76,7 @@ pkg_host_mode_drop_renamed() {
 pkg_host_mode_links() {
   if ! grep -qx host-mode-links "$RHIZO_INSTALL_RECORD" 2>/dev/null \
      && ! echo host-mode-links >> "$RHIZO_INSTALL_RECORD"; then
-    echo "[$PROG] could not record host-mode-links in $RHIZO_INSTALL_RECORD" >&2
+    echo "[$PROG] failed to write host-mode-links to $RHIZO_INSTALL_RECORD" >&2
     return 1
   fi
   pkg_host_mode_drop_renamed || return 1
@@ -88,20 +88,20 @@ pkg_host_mode_links() {
     esac
     pkg_hm_dst="${RHIZO_PKG_ROOT:-}/$pkg_hm_file"
     if [ ! -f "$pkg_hm_src" ]; then
-      echo "[$PROG] the payload has no $PKG_HOST_MODE_DIR/$pkg_hm_file to link to /$pkg_hm_file" >&2
+      echo "[$PROG] no $PKG_HOST_MODE_DIR/$pkg_hm_file" >&2
       return 1
     fi
     pkg_hm_dir=$(dirname "$pkg_hm_dst")
     while [ ! -d "$pkg_hm_dir" ]; do
       if ! grep -qxF "host-mode-dir:${pkg_hm_dir#"${RHIZO_PKG_ROOT:-}"}" "$RHIZO_INSTALL_RECORD" 2>/dev/null \
          && ! echo "host-mode-dir:${pkg_hm_dir#"${RHIZO_PKG_ROOT:-}"}" >> "$RHIZO_INSTALL_RECORD"; then
-        echo "[$PROG] could not record host-mode-dir:${pkg_hm_dir#"${RHIZO_PKG_ROOT:-}"} in $RHIZO_INSTALL_RECORD" >&2
+        echo "[$PROG] failed to write host-mode-dir:${pkg_hm_dir#"${RHIZO_PKG_ROOT:-}"} to $RHIZO_INSTALL_RECORD" >&2
         return 1
       fi
       pkg_hm_dir=$(dirname "$pkg_hm_dir")
     done
     if ! { mkdir -p "$(dirname "$pkg_hm_dst")" && ln -sfn "$PKG_HOST_MODE_DIR/$pkg_hm_file" "$pkg_hm_dst"; }; then
-      echo "[$PROG] could not link /$pkg_hm_file to $PKG_HOST_MODE_DIR/$pkg_hm_file" >&2
+      echo "[$PROG] failed to link /$pkg_hm_file to $PKG_HOST_MODE_DIR/$pkg_hm_file" >&2
       return 1
     fi
   done
@@ -120,7 +120,7 @@ pkg_host_mode_unlink() {
       continue
     fi
     if ! rm -f "$pkg_hm_dst"; then
-      echo "[$PROG] could not remove /$pkg_hm_file" >&2
+      echo "[$PROG] failed to remove /$pkg_hm_file" >&2
       return 1
     fi
   done
@@ -129,7 +129,7 @@ pkg_host_mode_unlink() {
       continue
     fi
     if [ -d "${RHIZO_PKG_ROOT:-}$pkg_hm_dir" ] && ! rmdir "${RHIZO_PKG_ROOT:-}$pkg_hm_dir"; then
-      echo "[$PROG] could not remove $pkg_hm_dir, which Rhizo made for its host-mode files" >&2
+      echo "[$PROG] failed to remove $pkg_hm_dir" >&2
       return 1
     fi
     pkg_record_drop "host-mode-dir:$pkg_hm_dir" || return 1
@@ -137,7 +137,7 @@ pkg_host_mode_unlink() {
   pkg_record_drop host-mode-links
 }
 
-# apply host mode's links and its pacman or apt edits
+# apply the host-mode links and the pacman or apt edits
 pkg_enter_host_mode() {
   if [ -f "${RHIZO_PKG_ROOT:-}/etc/pacman.conf" ]; then
     pkg_pacman_downloaduser_off || return 1
@@ -149,17 +149,17 @@ pkg_enter_host_mode() {
   fi
 }
 
-# give apt's partial dirs to root
+# chown apt's partial dirs to root
 pkg_apt_partial_root() {
   eval "$(APT_CONFIG='' apt-config shell APT_LISTS Dir::State::lists/d APT_ARCHIVES Dir::Cache::archives/d)"
   if [ -z "$APT_LISTS" ] || [ -z "$APT_ARCHIVES" ]; then
-    echo "[$PROG] apt-config named no lists or archives directory (lists='$APT_LISTS' archives='$APT_ARCHIVES')" >&2
+    echo "[$PROG] apt-config printed no lists or archives directory (lists='$APT_LISTS' archives='$APT_ARCHIVES')" >&2
     return 1
   fi
   for d in "${APT_LISTS}partial" "${APT_LISTS}auxfiles" "${APT_ARCHIVES}partial"; do
     [ -d "$d" ] || continue
     if ! { chown root:root "$d" && chown -R root:root "$d"; }; then
-      echo "[$PROG] could not hand $d to root; apt cannot download under Rhizo's policy until it is" >&2
+      echo "[$PROG] failed to chown $d to root:root" >&2
       return 1
     fi
   done
@@ -180,41 +180,79 @@ pkg_state_dirs_btrfs() {
   pkg_state_subvolume_record
 }
 
-# create the state subvolume and move it
+# create the state subvolume with PKG_CONFIGURE_PENDING_NAME and move the subvolume to PKG_STATE_DIR
 pkg_state_subvolume() {
   state=$PKG_STATE_DIR
   parent=$(dirname "$state")
   new="$parent/.$(basename "$state").new"
   [ "$(stat -f -c %T "$parent")" = btrfs ] || return 0
+  pkg_state_subvolume_recover || return 1
   if [ -d "$state" ] && [ "$(stat -c %d "$state")" != "$(stat -c %d "$parent")" ]; then return 0; fi
-  if [ -d "$state" ] && [ -n "$(ls -A "$state")" ]; then
-    echo "[$PROG] $state already holds files -- left a plain directory"
+  held=
+  if [ -d "$state" ]; then held=$(ls -A "$state"); fi
+  if [ -n "$held" ] && { [ "$held" != "$PKG_CONFIGURE_PENDING_NAME" ] || [ ! -f "$state/$held" ] || [ -L "$state/$held" ]; }; then
+    echo "[$PROG] $state is a non-empty plain directory"
     return 0
   fi
   if ! command -v btrfs >/dev/null 2>&1 || ! command -v chattr >/dev/null 2>&1; then
-    echo "[$PROG] no btrfs or chattr command -- $state left a plain directory; install btrfs-progs and" \
-         "e2fsprogs before rhizo to make it a subvolume"
+    echo "[$PROG] no btrfs or chattr command, $state is a plain directory"
     return 0
   fi
   if ! btrfs subvolume create "$new"; then
-    echo "[$PROG] could not make $new a btrfs subvolume to put in place of $state" >&2
+    echo "[$PROG] btrfs subvolume create $new failed" >&2
     return 1
   fi
   if ! chattr +C "$new"; then
-    echo "[$PROG] could not set NOCOW on the new subvolume $new: chattr +C failed" >&2
+    echo "[$PROG] chattr +C $new failed" >&2
+    pkg_state_subvolume_drop "$new"
+    return 1
+  fi
+  if [ -n "$held" ] && ! mv "$state/$held" "$new/$held"; then
+    echo "[$PROG] failed to move $state/$held to $new/$held" >&2
     pkg_state_subvolume_drop "$new"
     return 1
   fi
   if ! mv -T "$new" "$state"; then
-    echo "[$PROG] could not move the new subvolume $new over $state" >&2
+    echo "[$PROG] failed to move $new to $state" >&2
+    if [ -n "$held" ] && ! mv "$new/$held" "$state/$held"; then
+      echo "[$PROG] failed to move $new/$held to $state/$held" >&2
+      return 1
+    fi
     pkg_state_subvolume_drop "$new"
     return 1
   fi
 }
 
-# delete the given btrfs subvolume
+# move PKG_CONFIGURE_PENDING_NAME from the .new subvolume to PKG_STATE_DIR and delete the .new subvolume
+pkg_state_subvolume_recover() {
+  rec_new="$(dirname "$PKG_STATE_DIR")/.$(basename "$PKG_STATE_DIR").new"
+  rec_marker="$PKG_STATE_DIR/$PKG_CONFIGURE_PENDING_NAME"
+  if [ ! -d "$rec_new" ] || [ -L "$rec_new" ]; then return 0; fi
+  if [ "$(stat -c %i "$rec_new")" != 256 ]; then
+    echo "[$PROG] $rec_new is not a btrfs subvolume" >&2
+    return 1
+  fi
+  if [ -f "$rec_new/$PKG_CONFIGURE_PENDING_NAME" ] && [ ! -L "$rec_new/$PKG_CONFIGURE_PENDING_NAME" ]; then
+    if [ -e "$rec_marker" ] || [ -L "$rec_marker" ]; then
+      rm -f "$rec_new/$PKG_CONFIGURE_PENDING_NAME"
+    elif ! { mkdir -p "$PKG_STATE_DIR" && mv "$rec_new/$PKG_CONFIGURE_PENDING_NAME" "$rec_marker"; }; then
+      echo "[$PROG] failed to move $rec_new/$PKG_CONFIGURE_PENDING_NAME to $rec_marker" >&2
+      return 1
+    else
+      echo "[$PROG] moved $rec_new/$PKG_CONFIGURE_PENDING_NAME to $rec_marker"
+    fi
+  fi
+  if [ -n "$(ls -A "$rec_new")" ]; then
+    echo "[$PROG] $rec_new is not empty" >&2
+    return 1
+  fi
+  pkg_state_subvolume_drop "$rec_new"
+  [ ! -e "$rec_new" ]
+}
+
+# delete the btrfs subvolume $1
 pkg_state_subvolume_drop() {
-  btrfs subvolume delete "$1" || echo "[$PROG] could not delete $1, which stays beside $PKG_STATE_DIR" >&2
+  btrfs subvolume delete "$1" || echo "[$PROG] btrfs subvolume delete $1 failed" >&2
 }
 
 # update the btrfs subvolume record file
@@ -223,16 +261,16 @@ pkg_state_subvolume_record() {
      && [ "$(stat -c %i "$PKG_STATE_DIR")" = 256 ]; then
     if ! { mkdir -p "$(dirname "$PKG_STATE_SUBVOLUME_RECORD")" \
            && echo "$PKG_STATE_DIR" > "$PKG_STATE_SUBVOLUME_RECORD"; }; then
-      echo "[$PROG] could not record $PKG_STATE_DIR as a btrfs subvolume in $PKG_STATE_SUBVOLUME_RECORD" >&2
+      echo "[$PROG] failed to write $PKG_STATE_DIR to $PKG_STATE_SUBVOLUME_RECORD" >&2
       return 1
     fi
   elif ! rm -f "$PKG_STATE_SUBVOLUME_RECORD"; then
-    echo "[$PROG] could not remove $PKG_STATE_SUBVOLUME_RECORD, which no longer matches $PKG_STATE_DIR" >&2
+    echo "[$PROG] failed to remove $PKG_STATE_SUBVOLUME_RECORD" >&2
     return 1
   fi
 }
 
-# create rhizo's directories and drop outdated files
+# create the rhizo directories and remove outdated files
 pkg_state_dirs() {
   mkdir -p /etc/rhizo /var/lib/rhizo /var/cache/rhizo /var/log/rhizo /srv/rhizo
   systemd-tmpfiles --create rhizo-run-root.conf
@@ -246,22 +284,20 @@ pkg_state_dirs() {
     [ -d "$old" ] || continue
     new="/var/lib/rhizo/device-state${old#/var/lib/rhizo/farm-state}"
     if [ ! -e "$new" ]; then
-      mv "$old" "$new" || echo "[$PROG] could not move $old to $new" >&2
+      mv "$old" "$new" || echo "[$PROG] failed to move $old to $new" >&2
     elif cp -R --update=none "$old"/. "$new"/; then
-      rm -r "$old" || echo "[$PROG] could not remove $old after merging it into $new" >&2
+      rm -r "$old" || echo "[$PROG] failed to remove $old" >&2
     else
-      echo "[$PROG] could not merge $old into $new" >&2
+      echo "[$PROG] failed to copy $old to $new" >&2
     fi
   done
 
   if [ ! -e /etc/rhizo/hostfs.conf ]; then
-    echo "[$PROG] no /etc/rhizo/hostfs.conf yet -- rhizo-hostfs.service stays inactive until you create one"
-    echo "[$PROG] share your Downloads/Documents/Pictures/Music/Videos automatically:"
-    echo "[$PROG]   /usr/bin/python3 /usr/lib/rhizo/tools/hostfs.py default-config --as-user <you> --out /etc/rhizo/hostfs.conf"
+    echo "[$PROG] no /etc/rhizo/hostfs.conf"
   fi
 }
 
-# create a system account and its group
+# create a system account and group
 pkg_sys_account() {
   if command -v adduser >/dev/null 2>&1 && [ -f "$PKG_DEBIAN_VERSION" ]; then
     adduser --system --no-create-home --home /nonexistent --shell /usr/sbin/nologin --group "$1"
@@ -278,34 +314,34 @@ pkg_accounts() {
     nb_had_group=0
     getent group rhizo-netbridged >/dev/null 2>&1 && nb_had_group=1
     pkg_sys_account rhizo-netbridged \
-      || { echo "[$PROG] could not create the rhizo-netbridged system account" >&2; exit 1; }
+      || { echo "[$PROG] failed to create the rhizo-netbridged system account" >&2; exit 1; }
     { echo user:rhizo-netbridged
       [ "$nb_had_group" = 1 ] || echo group:rhizo-netbridged
     } >> /var/lib/rhizo/.created-by-install \
-      || { echo "[$PROG] could not record the rhizo-netbridged account in /var/lib/rhizo/.created-by-install" >&2; exit 1; }
-    echo "[$PROG] created system account 'rhizo-netbridged' for the host network daemon"
+      || { echo "[$PROG] failed to write the rhizo-netbridged account to /var/lib/rhizo/.created-by-install" >&2; exit 1; }
+    echo "[$PROG] created system account rhizo-netbridged"
   fi
 
   if ! getent passwd rhizo-uhid >/dev/null 2>&1; then
     uh_had_group=0
     getent group rhizo-uhid >/dev/null 2>&1 && uh_had_group=1
     pkg_sys_account rhizo-uhid \
-      || { echo "[$PROG] could not create the rhizo-uhid system account" >&2; exit 1; }
+      || { echo "[$PROG] failed to create the rhizo-uhid system account" >&2; exit 1; }
     { echo user:rhizo-uhid
       [ "$uh_had_group" = 1 ] || echo group:rhizo-uhid
     } >> /var/lib/rhizo/.created-by-install \
-      || { echo "[$PROG] could not record the rhizo-uhid account in /var/lib/rhizo/.created-by-install" >&2; exit 1; }
+      || { echo "[$PROG] failed to write the rhizo-uhid account to /var/lib/rhizo/.created-by-install" >&2; exit 1; }
     udevadm trigger --subsystem-match=misc --sysname-match=cuse --sysname-match=uhid || true
-    echo "[$PROG] created system account 'rhizo-uhid' for the uhid broker"
+    echo "[$PROG] created system account rhizo-uhid"
   fi
 }
 
-# run rhizo install and grant the desktop user
+# run rhizo install and write the desktop-user drop-ins
 pkg_install_and_grants() {
   # pyc invalidation compares source mtime and size
   find /usr/lib/rhizo -depth -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
   /usr/bin/rhizo install || {
-    echo "[$PROG] 'rhizo install' failed; rhizo will not start until it succeeds" >&2
+    echo "[$PROG] rhizo install failed" >&2
     exit 1
   }
   pkg_read_selinux_mode \
@@ -319,7 +355,7 @@ pkg_install_and_grants() {
 
   owner="$(cat /etc/rhizo/desktop-user 2>/dev/null || true)"
   if [ -z "$owner" ]; then
-    echo "[$PROG] 'rhizo install' left no /etc/rhizo/desktop-user to run the app watcher as" >&2
+    echo "[$PROG] no /etc/rhizo/desktop-user after rhizo install" >&2
     exit 1
   fi
   mkdir -p /etc/systemd/system/rhizo-app-events.service.d
@@ -338,11 +374,11 @@ pkg_install_and_grants() {
 
   if ! id -nG "$owner" | tr ' ' '\n' | grep -qx rhizo; then
     usermod -aG rhizo "$owner"
-    echo "[$PROG] granted '$owner' the rhizo group"
+    echo "[$PROG] added $owner to the rhizo group"
   fi
 }
 
-# move the state of renamed units to their new names
+# move rhizo-appwatch and rhizo-prune unit state to rhizo-app-events and rhizo-remove-entries
 pkg_rename_units() {
   pkg_ru_dir="${RHIZO_PKG_ROOT:-}/etc/systemd/system"
   for pkg_ru_pair in rhizo-appwatch.service:rhizo-app-events.service \
@@ -373,7 +409,7 @@ pkg_enable_core_units() {
               rhizo-display-pool.path rhizo-desktop-attach.path rhizo-session-start.path; do
     case "$(systemctl is-enabled "$unit" 2>/dev/null)" in
       masked|masked-runtime)
-        echo "[$PROG] $unit is masked by the server profile -- left masked, not enabled"
+        echo "[$PROG] $unit is masked"
         continue
         ;;
     esac
@@ -392,14 +428,14 @@ pkg_user_units_and_desktop() {
 
   case "$(systemctl --global is-enabled rhizo-desktop-session.path 2>/dev/null)" in
     masked|masked-runtime)
-      echo "[$PROG] rhizo-desktop-session.path is masked by the server profile -- left masked, not enabled"
+      echo "[$PROG] rhizo-desktop-session.path is masked"
       ;;
     *)
       systemctl --global enable rhizo-desktop-session.path rhizo-desk-notify.path
       if [ "$(systemctl is-active user@1000.service 2>/dev/null)" = active ]; then
         if ! { runuser -u "$owner" -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user daemon-reload \
                && runuser -u "$owner" -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user start rhizo-desktop-session.path rhizo-desk-notify.path; }; then
-          echo "[$PROG] could not start rhizo-desktop-session.path and rhizo-desk-notify.path in $owner's running manager -- session.env and the notification relay appear at $owner's next login" >&2
+          echo "[$PROG] failed to start rhizo-desktop-session.path and rhizo-desk-notify.path in the user manager of $owner" >&2
         fi
       fi
       ;;
@@ -419,7 +455,7 @@ pkg_user_units_and_desktop() {
 pkg_stop_old_payload() {
   if [ -n "${1:-}" ] && [ -s "$TEARDOWN" ]; then
     bash "$TEARDOWN" --stop-payload-processes \
-      || echo "[$PROG] a process an older version started may still run; the next boot's cleanup reaps it" >&2
+      || echo "[$PROG] teardown.sh --stop-payload-processes failed" >&2
   fi
 }
 
@@ -427,22 +463,22 @@ pkg_stop_old_payload() {
 pkg_selinux_switch_notice() {
   case ",$(cat "$PKG_LSM" 2>/dev/null)," in
     *,apparmor,*)
-      echo "[$PROG] REBOOT REQUIRED. selinux replaces apparmor as this machine's"
-      echo "[$PROG] security module, which only a reboot can do. setup finishes"
+      echo "[$PROG] reboot required for selinux"
+      echo "[$PROG] the kernel loads selinux in place of apparmor at the next boot"
       ;;
     *)
-      echo "[$PROG] REBOOT REQUIRED. selinux becomes this machine's security"
-      echo "[$PROG] module, which only a reboot can do. setup finishes"
+      echo "[$PROG] reboot required for selinux"
+      echo "[$PROG] the kernel loads selinux at the next boot"
       ;;
   esac
-  echo "[$PROG] automatically on the way back up; then run: rhizo status"
+  echo "[$PROG] rhizo-prepare.service runs at the next boot"
 }
 
 # print the reboot required message
 pkg_reboot_notice() {
   case "${PKG_MODE:-}" in
     host|namespace) ;;
-    *) echo "[$PROG] the reboot notice needs the configured SELinux mode, which pkg_read_selinux_mode sets" >&2
+    *) echo "[$PROG] PKG_MODE is not host or namespace" >&2
        return 1 ;;
   esac
   pkg_boot_selinux_mode \
@@ -452,43 +488,34 @@ pkg_reboot_notice() {
     mkdir -p "$PKG_VAR_RUN"
     touch "$PKG_VAR_RUN/reboot-required"
     if [ -n "${1:-}" ]; then
-      echo "[$PROG] reboot to finish the upgrade"
+      echo "[$PROG] reboot required for the upgrade"
     else
-      echo "[$PROG] reboot to finish the install"
+      echo "[$PROG] reboot required for the install"
     fi
-    echo "[$PROG] reboot into the Rhizo kernel, the default boot entry now:"
-    echo "[$PROG] Android runs there in its own SELinux namespace, and the"
-    echo "[$PROG] one-time setup runs early on that boot. 'rhizo status' shows"
-    echo "[$PROG] setup: pending-reboot until then."
+    echo "[$PROG] the default boot entry is the Rhizo kernel"
+    echo "[$PROG] rhizo-prepare.service runs at the next boot"
   elif [ -e "$MARK" ]; then
     rm -f "$MARK"
     mkdir -p "$PKG_VAR_RUN"
     touch "$PKG_VAR_RUN/reboot-required"
-    echo "[$PROG] reboot to finish the upgrade"
-    echo "[$PROG] the sandbox was stopped to replace its files and cannot"
-    echo "[$PROG] restart until this machine reboots. Your apps and data are"
-    echo "[$PROG] untouched; reboot when convenient."
+    echo "[$PROG] reboot required for the upgrade"
+    echo "[$PROG] the sandbox starts at the next boot"
   elif [ "$PKG_BOOT_MODE" != namespace ] && [ -d "$PKG_SELINUXFS" ] \
        && [ "$(cat "$PKG_SELINUXFS/enforce" 2>/dev/null)" != 0 ]; then
     mkdir -p "$PKG_VAR_RUN"
     touch "$PKG_VAR_RUN/reboot-required"
-    echo "[$PROG] reboot to finish the upgrade"
-    echo "[$PROG] the sandbox already ran on this boot, so the new version's"
-    echo "[$PROG] one-time setup runs early on the next boot, before Android's"
-    echo "[$PROG] policy loads. Your apps and data are untouched; reboot when"
-    echo "[$PROG] convenient. 'rhizo status' shows setup: pending-reboot until then."
+    echo "[$PROG] reboot required for the upgrade"
+    echo "[$PROG] rhizo-prepare.service runs at the next boot, before rhizo-policy.service"
   elif [ -d "$PKG_SELINUXFS" ]; then
     mkdir -p "$PKG_VAR_RUN"
     touch "$PKG_VAR_RUN/reboot-required"
     if [ -n "${1:-}" ]; then
-      echo "[$PROG] reboot to finish the upgrade"
+      echo "[$PROG] reboot required for the upgrade"
     else
-      echo "[$PROG] reboot to finish the install"
+      echo "[$PROG] reboot required for the install"
     fi
-    echo "[$PROG] Android's security policy loads only at boot, before anyone"
-    echo "[$PROG] logs in, and this boot's logins started without it. The"
-    echo "[$PROG] one-time setup runs early on the next boot; reboot when"
-    echo "[$PROG] convenient. 'rhizo status' shows setup: pending-reboot until then."
+    echo "[$PROG] rhizo-policy.service loads Android's policy before systemd-user-sessions.service"
+    echo "[$PROG] rhizo-prepare.service runs at the next boot"
   fi
 
   if [ "$PKG_MODE" = host ] && [ ! -d "$PKG_SELINUXFS" ]; then
@@ -516,11 +543,11 @@ pkg_pre_replace() {
         for u in $instances; do
           systemctl stop "$u" 2>/dev/null || true
         done
-        echo "[rhizo] stopped the sandbox for the upgrade; it starts again afterwards"
+        echo "[rhizo] stopped the sandbox"
       fi
       if [ -s "$TEARDOWN" ]; then
         bash "$TEARDOWN" --stop-payload-processes \
-          || echo "[rhizo] a process this version started may still run; the next boot's cleanup reaps it" >&2
+          || echo "[rhizo] teardown.sh --stop-payload-processes failed" >&2
       fi
       ;;
     remove)
@@ -561,7 +588,7 @@ pkg_read_profile() {
 # enable the units listed in PKG_UNITS_ENABLE
 pkg_enable_listed_units() {
   if [ -n "$1" ] && [ ! -r "$2" ]; then
-    echo "[$PROG] cannot read $2, the replaced version's unit list -- no unit enabled" >&2
+    echo "[$PROG] failed to read $2" >&2
     return 1
   fi
   failed=
@@ -570,14 +597,14 @@ pkg_enable_listed_units() {
     if [ -n "$1" ] && grep -qxF "$enable_unit" "$2"; then continue; fi
     case "$(systemctl is-enabled "$enable_unit" 2>/dev/null)" in
       masked|masked-runtime)
-        echo "[$PROG] $enable_unit is masked by the $profile profile -- left masked, not enabled"
+        echo "[$PROG] $enable_unit is masked by the $profile profile"
         continue
         ;;
     esac
     systemctl enable "$enable_unit" || failed="$failed $enable_unit"
   done < "$PKG_UNITS_ENABLE"
   if [ -n "$failed" ]; then
-    echo "[$PROG] could not enable:$failed" >&2
+    echo "[$PROG] systemctl enable failed for$failed" >&2
     return 1
   fi
   cp "$PKG_UNITS_ENABLE" "$PKG_UNITS_APPLIED"
@@ -600,7 +627,7 @@ pkg_start_listed_units() {
     fi
   done < "$PKG_UNITS_START"
   if [ -n "$failed" ]; then
-    echo "[$PROG] could not $action:$failed" >&2
+    echo "[$PROG] systemctl $action failed for$failed" >&2
     return 1
   fi
 }
@@ -615,11 +642,10 @@ pkg_stop_listed_units() {
 # apply the rhizo profile to the units
 pkg_unit_policy() {
   pkg_read_profile \
-    || { echo "[$PROG] 'rhizo profile show' names no profile ($profile) to apply again" >&2; return 1; }
+    || { echo "[$PROG] rhizo profile show printed no profile ($profile)" >&2; return 1; }
   /usr/bin/rhizo profile "$profile"
   /usr/lib/rhizo/streamd/capability-sync.sh \
-    || echo "[$PROG] could not sync rhizo-streamd.socket to stream.enabled; it stays as the package manager" \
-            "left it until 'systemctl start rhizo-stream-capability.service' succeeds" >&2
+    || echo "[$PROG] capability-sync.sh failed" >&2
 }
 
 # comment out DownloadUser in pacman.conf
@@ -643,7 +669,7 @@ pkg_record_drop() {
   grep -vxF -- "$1" "$RHIZO_INSTALL_RECORD" > "$RHIZO_INSTALL_RECORD.new"
   if [ "$?" -gt 1 ] || ! mv "$RHIZO_INSTALL_RECORD.new" "$RHIZO_INSTALL_RECORD"; then
     rm -f "$RHIZO_INSTALL_RECORD.new"
-    echo "[$PROG] could not drop $1 from $RHIZO_INSTALL_RECORD" >&2
+    echo "[$PROG] failed to remove $1 from $RHIZO_INSTALL_RECORD" >&2
     return 1
   fi
 }
@@ -654,7 +680,7 @@ pkg_pacman_downloaduser_restore() {
   grep -qx pacman-downloaduser "$RHIZO_INSTALL_RECORD" 2>/dev/null || return 0
   sed -i -E 's/^#([[:space:]]*DownloadUser[[:space:]]*=.*[^[:space:]])[[:space:]]*# rhizo$/\1/' "$conf" || return 1
   grep -Eq '^[[:space:]]*DownloadUser[[:space:]]*=' "$conf" && return 0
-  echo "[$PROG] DownloadUser in $conf is not active and carries no '# rhizo' mark to undo, so it stays as it is" >&2
+  echo "[$PROG] DownloadUser in $conf is commented out without a '# rhizo' mark" >&2
   return 1
 }
 
@@ -662,7 +688,7 @@ PKG_TTY_GROUP_NONE=rhizo-no-tty-group
 PKG_LOGIN_BEGIN="# >>> rhizo: login reopens the tty it gave the account, which root may only do through the account's own group"
 PKG_LOGIN_END="# <<< rhizo"
 
-# give login ttys to the account's group in login.defs
+# set TTYGROUP and TTYPERM in login.defs
 pkg_login_tty_on() {
   conf="${RHIZO_PKG_ROOT:-}/etc/login.defs"
   [ -f "$conf" ] || return 0
@@ -671,7 +697,7 @@ pkg_login_tty_on() {
     return
   fi
   if getent group "$PKG_TTY_GROUP_NONE" >/dev/null; then
-    echo "[$PROG] a group named $PKG_TTY_GROUP_NONE exists: remove or rename that group, then install again" >&2
+    echo "[$PROG] group $PKG_TTY_GROUP_NONE exists" >&2
     return 1
   fi
   pkg_record_token login-defs-tty || return 1
@@ -679,50 +705,50 @@ pkg_login_tty_on() {
   printf '%s\nTTYGROUP\t%s\nTTYPERM\t0660\n%s\n' "$PKG_LOGIN_BEGIN" "$PKG_TTY_GROUP_NONE" "$PKG_LOGIN_END" >> "$conf"
 }
 
-# put login.defs' TTYGROUP and TTYPERM back
+# restore TTYGROUP and TTYPERM in login.defs
 pkg_login_tty_restore() {
   conf="${RHIZO_PKG_ROOT:-}/etc/login.defs"
   grep -qx login-defs-tty "$RHIZO_INSTALL_RECORD" 2>/dev/null || return 0
   [ -f "$conf" ] || return 0
   if grep -qxF "$PKG_LOGIN_BEGIN" "$conf" \
       && ! sed -n "\\|^$PKG_LOGIN_BEGIN\$|,\$p" "$conf" | grep -qxF "$PKG_LOGIN_END"; then
-    echo "[$PROG] $conf has the '# >>> rhizo' line but no '# <<< rhizo' line after it, so nothing is removed:" \
-         "delete the block by hand and uncomment the lines marked '# rhizo'" >&2
+    echo "[$PROG] $conf has a '# >>> rhizo' line without a later '# <<< rhizo' line" >&2
     return 1
   fi
   sed -i -e "\\|^$PKG_LOGIN_BEGIN\$|,\\|^$PKG_LOGIN_END\$|d" \
     -E -e 's/^#([[:space:]]*TTY(GROUP|PERM)[[:space:]].*[^[:space:]])[[:space:]]*# rhizo$/\1/' "$conf"
 }
 
-# save the failed step for rhizo status and exit
+# write the failed step to RHIZO_INSTALL_FAILED and exit
 pkg_configure_exit_after_policy() {
   trap - EXIT
-  echo "[$PROG] $1 failed (exit $2); the unit policy ran after it" >&2
+  echo "[$PROG] $1 failed with exit status $2" >&2
   { echo "$1 $2" > "$RHIZO_INSTALL_FAILED"; } 2>/dev/null || :
   exit "$2"
 }
 
-# save or drop the failed step for rhizo status and exit
+# write or remove RHIZO_INSTALL_FAILED and exit
 pkg_configure_exit() {
   trap - EXIT
   if [ "$1" = 0 ]; then
     rm -f "$RHIZO_INSTALL_FAILED" 2>/dev/null || :
   else
-    echo "[$PROG] $pkg_step failed (exit $1); configuring stopped there" >&2
+    echo "[$PROG] $pkg_step failed with exit status $1" >&2
     { echo "$pkg_step $1" > "$RHIZO_INSTALL_FAILED"; } 2>/dev/null || :
   fi
   exit "$1"
 }
 
-# run the configure the pacman scriptlet left
+# run pkg_configure for PKG_CONFIGURE_PENDING_NAME
 pkg_configure_pending() {
   pkg_pending="$PKG_STATE_DIR/$PKG_CONFIGURE_PENDING_NAME"
+  pkg_state_subvolume_recover || return 1
   if [ ! -f "$pkg_pending" ]; then
-    echo "[$PROG] no $pkg_pending: rhizo's install or upgrade scriptlet left no configure for this hook" >&2
+    echo "[$PROG] no $pkg_pending" >&2
     return 1
   fi
   if ! pkg_pending_from=$(cat "$pkg_pending"); then
-    echo "[$PROG] cannot read $pkg_pending" >&2
+    echo "[$PROG] failed to read $pkg_pending" >&2
     return 1
   fi
   if [ -n "$pkg_pending_from" ]; then
@@ -732,7 +758,7 @@ pkg_configure_pending() {
   fi
   pkg_pending_rc=$?
   if ! rm -f "$pkg_pending" "$PKG_STATE_DIR/.units.enable.replaced"; then
-    echo "[$PROG] could not remove $pkg_pending" >&2
+    echo "[$PROG] failed to remove $pkg_pending" >&2
     pkg_pending_rc=1
   fi
   return "$pkg_pending_rc"

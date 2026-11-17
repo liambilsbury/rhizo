@@ -76,7 +76,7 @@ public class VirtualDeviceService extends Service {
     private Bitmap cameraBitmap;
     private long cameraFrameMtime = -1;
 
-    // return no binder
+    // return null
     @Override
     public IBinder onBind(Intent intent) {
         return null;
@@ -167,7 +167,7 @@ public class VirtualDeviceService extends Service {
         }
     };
 
-    // create the virtual device with its sensors and camera
+    // create the virtual device, virtual sensors and virtual camera
     private void createVirtualDevice(int associationId) {
         VirtualDeviceManager vdm = getSystemService(VirtualDeviceManager.class);
         if (vdm == null) {
@@ -246,7 +246,7 @@ public class VirtualDeviceService extends Service {
         reloadCameraFrame();
     }
 
-    // close the image writer when its stream closes
+    // close imageWriter when cameraStreamId closes
     private void onCameraStreamClosed(int streamId) {
         Logs.i("RHIZO_VIRTUAL_DEVICE camera_stream_closed streamId=" + streamId);
         if (streamId == cameraStreamId && imageWriter != null) {
@@ -271,14 +271,14 @@ public class VirtualDeviceService extends Service {
         return out;
     }
 
-    // send the accelerometer, gyroscope and light values
+    // call sendVector for SENSOR_ACCEL, SENSOR_GYRO and SENSOR_LIGHT
     private void pollSensors() {
         sendVector(Sensor.TYPE_ACCELEROMETER, SENSOR_ACCEL, new String[]{"x", "y", "z"});
         sendVector(Sensor.TYPE_GYROSCOPE, SENSOR_GYRO, new String[]{"x", "y", "z"});
         sendVector(Sensor.TYPE_LIGHT, SENSOR_LIGHT, new String[]{"lux"});
     }
 
-    // send a sensor event from file values
+    // call VirtualSensor.sendEvent with the values parsed from file
     private void sendVector(int sensorType, File file, String[] keys) {
         VirtualSensor sensor = sensorsByType.get(sensorType);
         if (sensor == null || !Boolean.TRUE.equals(sensorEnabled.get(sensorType))) {
@@ -294,7 +294,7 @@ public class VirtualDeviceService extends Service {
             try {
                 values[i] = Float.parseFloat(raw);
             } catch (NumberFormatException e) {
-                Logs.e("RHIZO_VIRTUAL_DEVICE malformed " + file + " key=" + keys[i] + " value=" + raw);
+                Logs.e("RHIZO_VIRTUAL_DEVICE failed to parse " + file + " key=" + keys[i] + " value=" + raw);
                 return;
             }
         }
@@ -303,7 +303,7 @@ public class VirtualDeviceService extends Service {
                 .build());
     }
 
-    // reload the camera frame when its file changed
+    // reload the camera frame when the CAMERA_FRAME mtime changes
     private void pollCameraFrame() {
         if (!CAMERA_FRAME.isFile()) {
             return;
@@ -323,7 +323,7 @@ public class VirtualDeviceService extends Service {
         }
         Bitmap decoded = BitmapFactory.decodeFile(CAMERA_FRAME.getAbsolutePath());
         if (decoded == null) {
-            Logs.e("RHIZO_VIRTUAL_DEVICE cannot decode " + CAMERA_FRAME + " as an image");
+            Logs.e("RHIZO_VIRTUAL_DEVICE failed to decode " + CAMERA_FRAME + " as an image");
             return;
         }
         Bitmap scaled = Bitmap.createScaledBitmap(decoded, cameraStreamWidth, cameraStreamHeight, true);

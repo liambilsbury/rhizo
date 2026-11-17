@@ -88,7 +88,7 @@ def derive_bssid(key, ssid):
 
 
 def machine_key():
-    """return a BSSID key derived one-way from the machine id"""
+    """return HMAC-SHA256 of MACHINE_KEY_LABEL keyed on the machine id"""
     with open(MACHINE_ID_PATH) as f:
         text = f.read(64).strip()
     if len(text) != 32 or text.strip("0123456789abcdef"):
@@ -97,7 +97,7 @@ def machine_key():
 
 
 def load_key(path):
-    """return the BSSID key and its source"""
+    """return the BSSID key and the key source"""
     if not path:
         why = "no --wifi-secret-file given"
     else:
@@ -113,10 +113,10 @@ def load_key(path):
     try:
         key = machine_key()
     except (OSError, ValueError) as e:
-        log("NB_WIFI_NO_SECRET path=%s error=%s -- %s is unusable too (%s): presenting no network",
+        log("NB_WIFI_NO_SECRET path=%s error=%s machine_id=%s machine_id_error=%s",
             path or "-", why, MACHINE_ID_PATH, getattr(e, "strerror", None) or e)
         return None, None
-    log("NB_WIFI_NO_SECRET path=%s error=%s -- keying BSSIDs on %s instead",
+    log("NB_WIFI_NO_SECRET path=%s error=%s key=%s",
         path or "-", why, MACHINE_ID_PATH)
     return key, "machine-id"
 
@@ -132,7 +132,7 @@ def read_state_seq(path):
 
 
 def parse_family(body):
-    """return a generic netlink family's id and named multicast groups"""
+    """return a generic netlink family id and the multicast group ids by group name"""
     attrs = attrs_of(body)
     raw = attrs.get(CTRL_ATTR_FAMILY_ID)
     family = struct.unpack("=H", raw[:2])[0] if raw is not None and len(raw) >= 2 else None
@@ -169,7 +169,7 @@ def parse_station_signal(body):
 
 
 def parse_mlme_ifindex(body):
-    """return the ifindex an nl80211 event names, or None"""
+    """return NL80211_ATTR_IFINDEX of an nl80211 event, or None"""
     return u32_of(attrs_of(body).get(NL80211_ATTR_IFINDEX))
 
 
@@ -177,16 +177,16 @@ class Nl80211Reader:
     """nl80211 queries of the host's wireless interfaces"""
 
     def __init__(self, query):
-        """use a request-reply transport"""
+        """store the NetlinkQuery"""
         self.query = query
         self.family = None
         self.mlme_group = None
 
     def _genl(self, family, cmd, attrs, flags=0):
-        """send a generic netlink read and return its replies"""
+        """call query.request for CTRL_CMD_GETFAMILY or an NL80211_READS cmd and return the replies"""
         if not ((family == GENL_ID_CTRL and cmd == CTRL_CMD_GETFAMILY)
                 or (family is not None and family == self.family and cmd in NL80211_READS)):
-            raise ValueError("refusing generic netlink cmd %d to family %s: the host reader only reads"
+            raise ValueError("generic netlink cmd %d to family %s is not CTRL_CMD_GETFAMILY or in NL80211_READS"
                              % (cmd, family))
         version = 1 if family == GENL_ID_CTRL else 0
         payload = struct.pack(GENL_HDR, cmd, version, 0) + b"".join(attrs)
@@ -265,14 +265,14 @@ def open_mlme_events(group):
 
 
 class WifiMirror:
-    """present the host's current connection through the Rhizo Wi-Fi driver"""
+    """mirror of the host uplink network on the rhizo_wlan driver"""
     name = "wifi"
 
     def __init__(self, cfg, uplinks, wlan=None, reader=None, clock=monotonic, sockets=True,
                  ifname=interface_name):
         """read the BSSID key and prepare the nl80211 reader"""
         if cfg.wifi_mode not in ("mirror", "fixed"):
-            raise ValueError("wifi mode %r presents nothing" % cfg.wifi_mode)
+            raise ValueError("wifi mode %r is not mirror or fixed" % cfg.wifi_mode)
         if wlan is None:
             import nb_wlan
             wlan = nb_wlan
@@ -332,7 +332,7 @@ class WifiMirror:
         self.evaluate(reason)
 
     def _resolve(self):
-        """find nl80211 and join its mlme group"""
+        """resolve nl80211 and join the mlme group"""
         if self.mode != "mirror" or self.reader.family is not None:
             return
         try:
@@ -343,7 +343,7 @@ class WifiMirror:
         self._errors.pop("resolve", None)
         if not found:
             if not self._resolve_tried:
-                log("NB_WIFI_NL80211 found=0 -- every uplink reads as wired until cfg80211 loads")
+                log("NB_WIFI_NL80211 found=0")
             self._resolve_tried = True
             return
         if self.reader.mlme_group is None or not self.use_sockets:
@@ -374,7 +374,7 @@ class WifiMirror:
             self.evaluate(reason)
 
     def deliver(self, data):
-        """feed an mlme datagram and apply it"""
+        """call feed and process for an mlme datagram"""
         self.feed(data)
         self.process()
 
@@ -428,11 +428,11 @@ class WifiMirror:
         return FIXED_SIGNAL_MBM
 
     def _present(self, ssid, signal_mbm):
-        """return an SSID's presented tuple"""
+        """return (True, ssid, bssid, signal_mbm) for ssid"""
         return (True, ssid, derive_bssid(self.key, ssid), signal_mbm)
 
     def compute(self):
-        """return the network to present, its uplink kind and route"""
+        """return the desired network tuple, the uplink kind and the uplink route"""
         if self.key is None:
             return ABSENT, "no-key", None
         if not self.uplinks.known:
@@ -455,7 +455,7 @@ class WifiMirror:
         return self._present(ssid, self._signal(up.ifindex, ssid)), "wireless", up
 
     def evaluate(self, reason, from_poll=False):
-        """present the network of the host's connection"""
+        """apply the network tuple for the host uplink"""
         desired, kind, up = self.compute()
         if desired is None:
             self._arm_retry(RETRY_SECONDS)
@@ -474,7 +474,7 @@ class WifiMirror:
             self._poll_at = None
 
     def _note_reachability(self, desired, kind, seq_before):
-        """re-publish an unchanged SSID when the uplink comes or goes"""
+        """call _write_state for the applied SSID when online flips"""
         a = self.applied
         if a is None or not a[0] or a[:3] != desired[:3]:
             return
@@ -485,11 +485,11 @@ class WifiMirror:
         self._write_state(a[1], "reachability")
 
     def _polls(self):
-        """return True while the driver presents a network"""
+        """return whether applied[0] is True"""
         return self.applied is not None and self.applied[0]
 
     def _signal_polls(self):
-        """return True while the presented network mirrors a wireless uplink"""
+        """return whether mode is mirror and kind is wireless"""
         return self.mode == "mirror" and self.kind == "wireless"
 
     def _differs(self, desired):
@@ -500,7 +500,7 @@ class WifiMirror:
         return desired[0] and abs(desired[3] - a[3]) >= SIGNAL_STEP_MBM
 
     def _driver_available(self):
-        """return True once wlan_available() returns true"""
+        """return whether wlan_available() returned True"""
         if self._available:
             return True
         try:
@@ -510,7 +510,7 @@ class WifiMirror:
             self._available = False
         else:
             if not self._available:
-                self._error("wlan_available", "the Rhizo Wi-Fi driver is not loaded")
+                self._error("wlan_available", "wlan_available() returned False")
         if not self._available:
             self._arm_retry(UNAVAILABLE_RETRY_SECONDS)
             return False
@@ -518,7 +518,7 @@ class WifiMirror:
         return True
 
     def apply(self, desired, reason):
-        """pass a changed network to the driver and record it"""
+        """call wlan.set_state for a differing network and store desired in applied"""
         if not self._differs(desired) or not self._driver_available():
             return
         present, ssid, bssid, signal_mbm = desired
@@ -555,7 +555,7 @@ class WifiMirror:
         return "hidden(len=%d)" % len(ssid)
 
     def _write_state(self, ssid, reason):
-        """publish the presented SSID to the suggestion helper"""
+        """write seq and the SSID hex to the wifi-mirror state file"""
         self.seq += 1
         self._last_write_at = self.clock()
         try:
@@ -566,7 +566,7 @@ class WifiMirror:
         log("NB_WIFI_STATE reason=%s seq=%d path=%s", reason, self.seq, self.state_path)
 
     def _repush(self, mono):
-        """rewrite the state file while Android stays unassociated"""
+        """rewrite the state file while get_state connected is False"""
         a = self.applied
         if a is None or not a[0] or self._last_write_at is None:
             return
@@ -580,21 +580,21 @@ class WifiMirror:
         self._write_state(a[1], "repush")
 
     def _reset_repush(self):
-        """start the re-push backoff over"""
+        """reset the re-push backoff"""
         self._last_repush_at = None
         self._repush_gap = REPUSH_GAP_START_SECONDS
 
     def _error(self, call, e):
-        """log an error once until its call succeeds again"""
+        """log NB_WIFI_ERROR unless _errors[call] equals (errno, str(e))"""
         key = (getattr(e, "errno", None), str(e))
         if self._errors.get(call) == key:
             return
         self._errors[call] = key
-        log("NB_WIFI_ERROR call=%s errno=%s error=%s -- retrying on the next event",
+        log("NB_WIFI_ERROR call=%s errno=%s error=%s",
             call, key[0] if key[0] is not None else "-", sanitize_for_log(key[1]))
 
     def _arm_retry(self, delay):
-        """schedule a retry no later than delay from now"""
+        """set _retry_at to clock() + delay unless _retry_at is earlier"""
         at = self.clock() + delay
         if self._retry_at is None or at < self._retry_at:
             self._retry_at = at
@@ -638,7 +638,7 @@ class WifiMirror:
             self.poll(mono)
 
     def close(self):
-        """stop following the host"""
+        """remove on_routes from the uplinks listeners and close the sockets"""
         try:
             self.uplinks.listeners.remove(self.on_routes)
         except ValueError:
@@ -653,7 +653,7 @@ class WifiMirror:
 
 
 class WifiSupervisor:
-    """run the mirror, rebuilding it while it fails to start"""
+    """supervisor that rebuilds WifiMirror until start succeeds"""
     name = "wifi"
 
     def __init__(self, cfg, uplinks, build=None, clock=monotonic):
@@ -679,7 +679,7 @@ class WifiSupervisor:
                     pass
             failure = str(e) or type(e).__name__
             if failure != self._failure:
-                log("NB_WIFI_FAILED mode=%s error=%s -- retrying every %ds",
+                log("NB_WIFI_FAILED mode=%s error=%s retry_s=%d",
                     self.mode, sanitize_for_log(failure), int(BUILD_RETRY_SECONDS))
             self._failure = failure
             self._retry_at = self.clock() + BUILD_RETRY_SECONDS
@@ -709,7 +709,7 @@ class WifiSupervisor:
         return self._retry_at
 
     def tick(self, mono):
-        """tick the mirror, or try building it again"""
+        """call mirror.tick, or call start when _retry_at is due"""
         if self.mirror is not None:
             self.mirror.tick(mono)
         elif self._retry_at is not None and mono >= self._retry_at:

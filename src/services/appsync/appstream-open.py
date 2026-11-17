@@ -49,7 +49,7 @@ def android_package(component, env):
 
 
 def list_values(path, sections):
-    """return each section's key handlers in a mimeapps-style list"""
+    """return the KEY values under each section of path"""
     found = {s: [] for s in sections}
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -67,7 +67,7 @@ def list_values(path, sections):
 
 
 def other_handlers(env):
-    """return the desktop's ordered appstream:// handlers other than rhizo's"""
+    """return the desktop file paths of the KEY handlers without the rhizo- prefix"""
     desktops = [d.lower() for d in env.get("XDG_CURRENT_DESKTOP", "").split(":") if d]
     lists = [os.path.join(d, f"{name}mimeapps.list") for d in config_dirs(env)
              for name in [f"{x}-" for x in desktops] + [""]]
@@ -92,19 +92,19 @@ def other_handlers(env):
 
 
 def plan(url, env):
-    """return the argv that opens the url, or the reason"""
+    """return (argv or None, reason) for url"""
     m = URL_RE.match(url)
     if not m:
         return None, f"{url!r} is not an appstream:// link"
     pkg = android_package(m.group(1), env)
     if pkg:
-        return ["rhizo", "launch", SETTINGS, f"package:{pkg}"], f"{pkg} is an android app: its page in android's settings"
+        return ["rhizo", "launch", SETTINGS, f"package:{pkg}"], f"{pkg} opens in com.android.settings"
     handlers = other_handlers(env)
     if not handlers:
-        return None, f"no software center handles appstream:// links, so {m.group(1)} has nowhere to open"
+        return None, f"no x-scheme-handler/appstream handler for {m.group(1)}"
     if shutil.which("gio", path=env.get("PATH")):
-        return ["gio", "launch", handlers[0], url], f"{m.group(1)} goes to {handlers[0]}"
-    return exec_argv(handlers[0], url), f"{m.group(1)} goes to {handlers[0]}"
+        return ["gio", "launch", handlers[0], url], f"{m.group(1)} -> {handlers[0]}"
+    return exec_argv(handlers[0], url), f"{m.group(1)} -> {handlers[0]}"
 
 
 def exec_argv(path, url):
@@ -123,7 +123,7 @@ def exec_argv(path, url):
 def main(argv):
     """open an appstream:// link"""
     if len(argv) != 2:
-        log("usage: appstream-open.py <appstream://component-id>")
+        log("appstream-open.py <appstream://component-id>")
         return 2
     cmd, why = plan(argv[1], os.environ)
     log(why)

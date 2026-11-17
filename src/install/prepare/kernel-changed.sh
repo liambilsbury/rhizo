@@ -14,7 +14,7 @@ except (OSError, ValueError, AttributeError):
 PY
 }
 
-# compare the marker kernel with the current kernel
+# return whether the marker or tree kernel differs from the current kernel
 kernel_changed() {
   local marker="$1" current="$2" root="${3:-}" marker_kernel tree
   [[ -s "$marker" ]] || return 1
@@ -47,32 +47,32 @@ if [[ "${1:-}" == --selftest ]]; then
 
   printf 'kernel=6.8.0-136-generic\nversion=0.1.1\n' > "$TMP/prepared-old"
   kernel_changed "$TMP/prepared-old" "6.8.0-140-generic" \
-    || { echo "SELFTEST FAILED: a differing kernel= was not reported as changed" >&2; exit 1; }
+    || { echo "FAIL kernel_changed(kernel=6.8.0-136-generic, 6.8.0-140-generic)" >&2; exit 1; }
 
   printf 'kernel=6.8.0-140-generic\nversion=0.1.1\n' > "$TMP/prepared-same"
   kernel_changed "$TMP/prepared-same" "6.8.0-140-generic" \
-    && { echo "SELFTEST FAILED: a matching kernel= was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! kernel_changed(kernel=6.8.0-140-generic, 6.8.0-140-generic)" >&2; exit 1; }
 
   kernel_changed "$TMP/absent" "6.8.0-140-generic" \
-    && { echo "SELFTEST FAILED: a missing marker was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! kernel_changed(absent marker)" >&2; exit 1; }
 
   printf 'version=0.1.1\n' > "$TMP/prepared-no-kernel-line"
   kernel_changed "$TMP/prepared-no-kernel-line" "6.8.0-140-generic" \
-    && { echo "SELFTEST FAILED: a marker with no kernel= line was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! kernel_changed(marker without kernel=)" >&2; exit 1; }
 
   mkdir -p "$TMP/root/abc123def456"
   ln -s abc123def456 "$TMP/root/current"
   printf '{"kernel": "6.8.0-136-generic"}' > "$TMP/root/abc123def456/manifest.json"
   printf 'kernel=6.8.0-142-generic\nversion=0.1.2\n' > "$TMP/prepared-moved"
   kernel_changed "$TMP/prepared-moved" "6.8.0-142-generic" "$TMP/root" \
-    || { echo "SELFTEST FAILED: a tree still naming the old kernel under a moved marker was not reported as changed" >&2; exit 1; }
+    || { echo "FAIL kernel_changed(marker kernel=6.8.0-142-generic, tree kernel 6.8.0-136-generic)" >&2; exit 1; }
 
   printf '{"kernel": "6.8.0-142-generic"}' > "$TMP/root/abc123def456/manifest.json"
   kernel_changed "$TMP/prepared-moved" "6.8.0-142-generic" "$TMP/root" \
-    && { echo "SELFTEST FAILED: a tree and a marker both on this kernel were reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! kernel_changed(marker and tree kernel 6.8.0-142-generic)" >&2; exit 1; }
 
   kernel_changed "$TMP/prepared-moved" "6.8.0-142-generic" "$TMP/no-tree" \
-    && { echo "SELFTEST FAILED: a host with no prepared tree was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! kernel_changed(no prepared tree)" >&2; exit 1; }
 
   printf '0.1.4\n' > "$TMP/VERSION"
   condition() {
@@ -81,20 +81,20 @@ if [[ "${1:-}" == --selftest ]]; then
       bash "$0"
   }
   condition "kernel=$(uname -r)"$'\nversion=0.1.4\n' \
-    && { echo "SELFTEST FAILED: a marker naming this payload's version was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! condition(version=0.1.4, VERSION 0.1.4)" >&2; exit 1; }
   condition "kernel=$(uname -r)"$'\nversion=0.1.3\n' \
-    || { echo "SELFTEST FAILED: a marker naming another payload's version was not reported as changed" >&2; exit 1; }
+    || { echo "FAIL condition(version=0.1.3, VERSION 0.1.4)" >&2; exit 1; }
   condition "kernel=$(uname -r)"$'\n' \
-    && { echo "SELFTEST FAILED: a marker with no version= line was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! condition(marker without version=)" >&2; exit 1; }
   condition "kernel=$(uname -r)"$'\nversion=\n' \
-    && { echo "SELFTEST FAILED: a marker with an empty version= was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! condition(version= empty)" >&2; exit 1; }
   rm "$TMP/VERSION"
   condition "kernel=$(uname -r)"$'\nversion=0.1.3\n' \
-    && { echo "SELFTEST FAILED: a payload with no VERSION file was reported as changed" >&2; exit 1; }
+    && { echo "FAIL ! condition(version=0.1.3 without VERSION)" >&2; exit 1; }
   condition "kernel=0.0.0-not-this-kernel"$'\nversion=0.1.4\n' \
-    || { echo "SELFTEST FAILED: a differing kernel= with no VERSION file was not reported as changed" >&2; exit 1; }
+    || { echo "FAIL condition(kernel=0.0.0-not-this-kernel without VERSION)" >&2; exit 1; }
 
-  echo "rhizo-kernel-changed --selftest: ok (13 cases)"
+  echo "13 cases ok"
   exit 0
 fi
 

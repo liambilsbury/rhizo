@@ -11,7 +11,7 @@ import java.util.List;
 
 // reflection calls for VirtualDeviceManager
 final class Vdm {
-    // forbid instances
+    // private constructor
     private Vdm() {}
 
     static Object createVirtualDevice(VirtualDeviceManager vdm, int associationId, VirtualDeviceParams params)

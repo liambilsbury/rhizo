@@ -1,7 +1,7 @@
 # shellcheck shell=sh
-# unfreeze the Android stack cgroup
+# Android stack cgroup unfreeze helpers
 
-# print the cgroup path of the stack
+# print the stack cgroup path of pid $1
 rhizo_stack_cgroup() {
   _ipath=$(sed -n 's|^0::||p' "/proc/$1/cgroup" 2>/dev/null)
   [ -n "$_ipath" ] || return 1
@@ -15,12 +15,12 @@ rhizo_stack_cgroup() {
   return 1
 }
 
-# return success for a frozen cgroup
+# return whether cgroup.freeze of $1 is 1
 rhizo_stack_frozen() {
   [ "$(cat "$1/cgroup.freeze" 2>/dev/null)" = "1" ]
 }
 
-# match a pid_* path under uid_*
+# return whether $1 is a pid_* path under uid_*
 rhizo_is_stock_freeze_leaf() {
   _leaf="${1##*/}"
   _parent="${1%/*}"
@@ -31,7 +31,7 @@ rhizo_is_stock_freeze_leaf() {
   return 1
 }
 
-# print the frozen non-stock cgroups under the root
+# print the cgroups under $1 with cgroup.freeze 1, less uid_*/pid_* leaves
 rhizo_foreign_frozen() {
   _root="$1"
   for _p1 in "$_root"/*/ "$_root"/*/*/ "$_root"/*/*/*/ "$_root"/*/*/*/*/ "$_root"/*/*/*/*/*/ "$_root"/*/*/*/*/*/*/; do
@@ -47,7 +47,7 @@ _RHIZO_POLL_FAST_S=0.01
 _RHIZO_POLL_SLOW_S=0.05
 _RHIZO_POLL_FAST_ITERS=100
 
-# wait a poll interval
+# sleep the fast or slow poll tick
 rhizo_poll_tick() {
   if [ "$1" -lt "$_RHIZO_POLL_FAST_ITERS" ]; then
     sleep "$_RHIZO_POLL_FAST_S"
@@ -56,7 +56,7 @@ rhizo_poll_tick() {
   fi
 }
 
-# check cgroup.events for frozen 0
+# return whether cgroup.events of $1 has frozen 0
 _rhizo_frozen_clear() {
   [ -r "$1/cgroup.events" ] || return 1
   while read -r _fk _fv; do
@@ -65,7 +65,7 @@ _rhizo_frozen_clear() {
   return 1
 }
 
-# unfreeze the cgroup
+# unfreeze cgroup $1 and wait for frozen 0
 rhizo_unfreeze() {
   _cg="$1"; _deadline="${2:-30}"
   _unit=""
@@ -90,7 +90,7 @@ rhizo_unfreeze() {
   return 1
 }
 
-# poll the servicemanager process state
+# wait for servicemanager in state R or S
 rhizo_wait_servicemanager() {
   _deadline="${1:-20}"
   _total=$((_RHIZO_POLL_FAST_ITERS + (_deadline - 1) * 20))
@@ -118,14 +118,14 @@ rhizo_wait_servicemanager() {
   return 1
 }
 
-# unfreeze the stack cgroup
+# unfreeze the stack cgroup of pid $1 and the rhizo_foreign_frozen cgroups
 rhizo_unfreeze_gate() {
   _cg=$(rhizo_stack_cgroup "$1") || return 0
   rhizo_stack_frozen "$_cg" || return 0
   rhizo_unfreeze "$_cg" 30 || return 1
   rhizo_wait_servicemanager 20 || return 1
   for _fcg in $(rhizo_foreign_frozen "$_cg"); do
-    rhizo_unfreeze "$_fcg" 10 || { echo "rhizo_unfreeze_gate: $_fcg would not unfreeze" >&2; return 1; }
+    rhizo_unfreeze "$_fcg" 10 || { echo "failed to unfreeze $_fcg" >&2; return 1; }
   done
   return 0
 }

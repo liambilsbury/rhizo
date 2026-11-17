@@ -17,7 +17,7 @@ EVENT_HDR = struct.Struct("iIII")
 
 
 def log(msg):
-    """print a message with the service name prefix"""
+    """print msg with the [rhizo-app-events] tag"""
     print(f"[rhizo-app-events] {msg}", flush=True)
 
 
@@ -34,8 +34,8 @@ class Inotify:
         wd = self.libc.inotify_add_watch(self.fd, path.encode(), MASK)
         if wd < 0:
             err = ctypes.get_errno()
-            raise OSError(err, f"inotify_add_watch({path}) failed: {os.strerror(err)}"
-                               + (" -- not running as the directory's owner" if err == 13 else ""))
+            raise OSError(err, f"inotify_add_watch({path}) failed ({os.strerror(err)})"
+                               + (" errno=EACCES" if err == 13 else ""))
         return wd
 
     def read_events(self):
@@ -50,7 +50,7 @@ class Inotify:
 
 
 def touch(path):
-    """write the time to the trigger file"""
+    """write time.time() to path"""
     with open(path, "w") as fh:
         fh.write(f"{time.time()}\n")
         fh.flush()
@@ -85,11 +85,11 @@ def main():
             ino = Inotify()
             wd = ino.add(watch_dir)
         except OSError as e:
-            log(f"could not watch {watch_dir}: {e}; retrying in 2s")
+            log(f"failed to watch {watch_dir} ({e})")
             time.sleep(2)
             continue
 
-        log(f"watch established on {watch_dir} (wd={wd}, ino={os.stat(watch_dir).st_ino})")
+        log(f"inotify_add_watch {watch_dir} wd={wd} ino={os.stat(watch_dir).st_ino}")
         touch(trigger)
 
         try:
@@ -101,9 +101,9 @@ def main():
                         enqueue(queue, name)
                     touch(trigger)
         except StopIteration:
-            log(f"{watch_dir} was replaced (new mount?); re-arming")
+            log(f"IN_DELETE_SELF or IN_MOVE_SELF on {watch_dir}")
         except OSError as e:
-            log(f"read error on the watch: {e}; re-arming")
+            log(f"failed to read inotify events ({e})")
         finally:
             try:
                 os.close(ino.fd)

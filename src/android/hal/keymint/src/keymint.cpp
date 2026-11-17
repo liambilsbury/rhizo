@@ -27,7 +27,7 @@ constexpr int32_t kErrInvalidInputLength = -21;
 
 // return a service-specific error status
 ScopedAStatus kmError(int32_t code) { return ScopedAStatus::fromServiceSpecificError(code); }
-// return the unimplemented error status
+// return ErrorCode::UNIMPLEMENTED
 ScopedAStatus unimplemented() { return kmError(kErrUnimplemented); }
 
 // write a message to the kernel log
@@ -376,12 +376,12 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
   // ignore the extra entropy
   ScopedAStatus addRngEntropy(const std::vector<uint8_t>&) override { return ScopedAStatus::ok(); }
 
-  // generate a random AES key and return its blob
+  // generate a random AES key and return the key blob
   ScopedAStatus generateKey(const std::vector<KeyParameter>& params,
                              const std::optional<AttestationKey>&, KeyCreationResult* out) override {
     const KeyParameter* alg = findParam(params, Tag::ALGORITHM);
     if (!alg || (Algorithm)getIntValue(*alg) != Algorithm::AES) {
-      klog("generateKey: only AES supported in this build");
+      klog("Tag::ALGORITHM is not Algorithm::AES in generateKey");
       return kmError(kErrUnsupportedAlgorithm);
     }
     const KeyParameter* ksz = findParam(params, Tag::KEY_SIZE);
@@ -392,7 +392,7 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
     out->keyCharacteristics.resize(1);
     out->keyCharacteristics[0].securityLevel = SecurityLevel::SOFTWARE;
     out->keyCharacteristics[0].authorizations = params;
-    klog("generateKey: AES key generated");
+    klog("generateKey returned an AES key blob");
     return ScopedAStatus::ok();
   }
 
@@ -402,18 +402,18 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
                            KeyCreationResult* out) override {
     const KeyParameter* alg = findParam(params, Tag::ALGORITHM);
     if (!alg || (Algorithm)getIntValue(*alg) != Algorithm::AES) {
-      klog("importKey: only AES supported in this build");
+      klog("Tag::ALGORITHM is not Algorithm::AES in importKey");
       return kmError(kErrUnsupportedAlgorithm);
     }
     out->keyBlob = serializeBlob(keyData, params);
     out->keyCharacteristics.resize(1);
     out->keyCharacteristics[0].securityLevel = SecurityLevel::SOFTWARE;
     out->keyCharacteristics[0].authorizations = params;
-    klog("importKey: AES key imported");
+    klog("importKey returned an AES key blob");
     return ScopedAStatus::ok();
   }
 
-  // report that wrapped key import is unimplemented
+  // return ErrorCode::UNIMPLEMENTED
   ScopedAStatus importWrappedKey(const std::vector<uint8_t>&, const std::vector<uint8_t>&,
                                   const std::vector<uint8_t>&, const std::vector<KeyParameter>&,
                                   int64_t, int64_t, KeyCreationResult*) override { return unimplemented(); }
@@ -427,7 +427,7 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
   ScopedAStatus deleteKey(const std::vector<uint8_t>&) override { return ScopedAStatus::ok(); }
   // ignore deleting all keys
   ScopedAStatus deleteAllKeys() override { return ScopedAStatus::ok(); }
-  // report that destroying attestation ids is unimplemented
+  // return ErrorCode::UNIMPLEMENTED
   ScopedAStatus destroyAttestationIds() override { return unimplemented(); }
 
   // start a cipher operation on a key blob
@@ -437,7 +437,7 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
     std::vector<uint8_t> key;
     std::vector<KeyParameter> stored;
     if (!deserializeBlob(keyBlob, &key, &stored)) {
-      klog("begin: invalid/forged keyBlob");
+      klog("deserializeBlob failed in begin");
       return kmError(kErrInvalidKeyBlob);
     }
     const KeyParameter* bm = findParam(inParams, Tag::BLOCK_MODE);
@@ -459,7 +459,7 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
     int tagLenBytes = macLen ? (getIntValue(*macLen) / 8) : 16;
     out->challenge = 0;
     out->operation = ndk::SharedRefBase::make<RhizoOperation>(std::move(key), mode, encrypt, iv, tagLenBytes);
-    klog("begin: operation started");
+    klog("begin created a RhizoOperation");
     return ScopedAStatus::ok();
   }
 
@@ -468,7 +468,7 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
   // ignore the end of early boot
   ScopedAStatus earlyBootEnded() override { return ScopedAStatus::ok(); }
 
-  // report that storage key conversion is unimplemented
+  // return ErrorCode::UNIMPLEMENTED
   ScopedAStatus convertStorageKeyToEphemeral(const std::vector<uint8_t>&,
                                               std::vector<uint8_t>*) override { return unimplemented(); }
   // return the stored parameters of a key blob
@@ -483,9 +483,9 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
     (*out)[0].authorizations = stored;
     return ScopedAStatus::ok();
   }
-  // report that the root of trust challenge is unimplemented
+  // return ErrorCode::UNIMPLEMENTED
   ScopedAStatus getRootOfTrustChallenge(std::array<uint8_t, 16>*) override { return unimplemented(); }
-  // report that the root of trust is unimplemented
+  // return ErrorCode::UNIMPLEMENTED
   ScopedAStatus getRootOfTrust(const std::array<uint8_t, 16>&, std::vector<uint8_t>*) override { return unimplemented(); }
   // ignore the root of trust
   ScopedAStatus sendRootOfTrust(const std::vector<uint8_t>&) override { return ScopedAStatus::ok(); }
@@ -495,29 +495,25 @@ class RhizoKeyMintDevice : public BnKeyMintDevice {
 
 // register the keymint device and join the binder thread pool
 int main() {
-  klog("main() entered");
   try {
     auto device = ndk::SharedRefBase::make<RhizoKeyMintDevice>();
-    klog("device object constructed");
     const std::string instance = std::string(RhizoKeyMintDevice::descriptor) + "/default";
-    klog(("registering as " + instance).c_str());
     binder_status_t status = AServiceManager_addService(device->asBinder().get(), instance.c_str());
     if (status != STATUS_OK) {
       char buf[128];
-      snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+      snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
       klog(buf);
       return 1;
     }
-    klog("registered, joining thread pool");
     ABinderProcess_setThreadPoolMaxThreadCount(0);
     ABinderProcess_joinThreadPool();
-    klog("joinThreadPool RETURNED (unexpected)");
+    klog("ABinderProcess_joinThreadPool returned");
     return 0;
   } catch (const std::exception& e) {
-    klog((std::string("EXCEPTION: ") + e.what()).c_str());
+    klog((std::string("std::exception what=") + e.what()).c_str());
     return 2;
   } catch (...) {
-    klog("UNKNOWN EXCEPTION");
+    klog("unknown exception");
     return 3;
   }
 }

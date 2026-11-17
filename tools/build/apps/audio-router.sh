@@ -1,5 +1,5 @@
 #!/bin/bash
-# build RhizoAudioRouter.apk
+# var/share/RhizoAudioRouter.apk RHIZO_ANDROID_SDK=
 # shellcheck disable=SC2046
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
@@ -13,17 +13,14 @@ android_debug_keystore || exit 1
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
-echo "[build-audio-router] aapt2 link"
 "$AAPT2" link -o "$WORK/base.apk" --manifest "$SRC/AndroidManifest.xml" \
   -I "$ANDROID_JAR" --min-sdk-version 26 --target-sdk-version 34
 
-echo "[build-audio-router] javac (with @SystemApi stubs) + d8 (without them)"
 mkdir -p "$WORK/classes"
 javac -source 8 -target 8 -nowarn -Xlint:none -bootclasspath "$ANDROID_JAR" \
   -d "$WORK/classes" $(find "$SRC/src" "$SRC/stubs" -name '*.java')
 "$D8" --release --min-api 26 --output "$WORK" $(find "$WORK/classes/com/rhizo" -name '*.class')
 
-echo "[build-audio-router] packing dex, aligning, signing"
 cp "$WORK/base.apk" "$WORK/unsigned.apk"
 ( cd "$WORK" && zip -q unsigned.apk classes.dex )
 "$ZIPALIGN" -p 4 "$WORK/unsigned.apk" "$WORK/aligned.apk"
@@ -33,7 +30,7 @@ cp "$WORK/base.apk" "$WORK/unsigned.apk"
 
 dex_strings=$(unzip -p "$WORK/signed.apk" classes.dex | strings)
 if grep -q "Landroid/media/audiopolicy/AudioPolicy;.*stub" <<<"$dex_strings"; then
-  echo "[build-audio-router] FAIL: stub classes leaked into the dex" >&2
+  echo "classes.dex has an AudioPolicy stub string" >&2
   exit 1
 fi
 
@@ -41,7 +38,7 @@ cp --remove-destination "$WORK/signed.apk" "$SHARE/RhizoAudioRouter.apk"
 pkg=$("$AAPT2" dump badging "$SHARE/RhizoAudioRouter.apk" | grep -m1 "^package:" \
   | sed "s/^package: name='\([^']*\)'.*/\1/")
 [[ "$pkg" == "com.rhizo.audiorouter" ]] || {
-  echo "[build-audio-router] FAIL: unexpected package '$pkg'" >&2; exit 1; }
-echo "[build-audio-router] OK -> var/share/RhizoAudioRouter.apk ($pkg)"
+  echo "package name is '$pkg', expected com.rhizo.audiorouter" >&2; exit 1; }
+echo "wrote var/share/RhizoAudioRouter.apk ($pkg)"
 
 ./tools/build/stamps.py stamp RhizoAudioRouter.apk

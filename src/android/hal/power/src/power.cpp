@@ -42,12 +42,12 @@ class RhizoPowerHintSession : public BnPowerHintSession {
 
   int32_t sid() const { return sid_; }
 
-  // send the target work duration for the session
+  // call RtdLink::Target with targetDurationNanos
   ScopedAStatus updateTargetWorkDuration(int64_t targetDurationNanos) override {
     link_->Target(sid_, targetDurationNanos);
     return ScopedAStatus::ok();
   }
-  // send the actual work durations for the session
+  // call RtdLink::Actual with the durationNanos values
   ScopedAStatus reportActualWorkDuration(const std::vector<WorkDuration>& durations) override {
     std::vector<int64_t> nanos;
     nanos.reserve(durations.size());
@@ -55,17 +55,17 @@ class RhizoPowerHintSession : public BnPowerHintSession {
     link_->Actual(sid_, nanos);
     return ScopedAStatus::ok();
   }
-  // send a pause for the session
+  // call RtdLink::SetPaused with true
   ScopedAStatus pause() override {
     link_->SetPaused(sid_, true);
     return ScopedAStatus::ok();
   }
-  // send a resume for the session
+  // call RtdLink::SetPaused with false
   ScopedAStatus resume() override {
     link_->SetPaused(sid_, false);
     return ScopedAStatus::ok();
   }
-  // send a close for the session and log it
+  // call RtdLink::Close and log the close
   ScopedAStatus close() override {
     link_->Close(sid_);
     char buf[64];
@@ -73,7 +73,7 @@ class RhizoPowerHintSession : public BnPowerHintSession {
     klog(buf);
     return ScopedAStatus::ok();
   }
-  // send the session thread ids to rhizo-rtd
+  // call RtdLink::Threads with tids
   ScopedAStatus setThreads(const std::vector<int32_t>& tids) override {
     if (tids.empty()) {
       return ScopedAStatus::fromExceptionCode(EX_ILLEGAL_ARGUMENT);
@@ -85,7 +85,7 @@ class RhizoPowerHintSession : public BnPowerHintSession {
   ScopedAStatus sendHint(SessionHint) override { return ScopedAStatus::ok(); }
   // ignore the session mode
   ScopedAStatus setMode(SessionMode, bool) override { return ScopedAStatus::ok(); }
-  // return a session config holding the session id
+  // return a session config with the session id
   ScopedAStatus getSessionConfig(SessionConfig* out) override {
     *out = SessionConfig();
     out->id = sid_;
@@ -108,7 +108,7 @@ class RhizoPower : public BnPower {
   }
   // ignore the boost
   ScopedAStatus setBoost(Boost, int32_t) override { return ScopedAStatus::ok(); }
-  // report that boosts are unsupported
+  // return false for a boost
   ScopedAStatus isBoostSupported(Boost, bool* out) override { *out = false; return ScopedAStatus::ok(); }
 
   // open a hint session on rhizo-rtd
@@ -125,7 +125,7 @@ class RhizoPower : public BnPower {
     *out = 16666667;
     return ScopedAStatus::ok();
   }
-  // open a hint session and return its config
+  // open a hint session and return the session config
   ScopedAStatus createHintSessionWithConfig(int32_t tgid, int32_t uid,
                                             const std::vector<int32_t>& tids, int64_t durationNanos,
                                             SessionTag, SessionConfig* config,
@@ -138,7 +138,7 @@ class RhizoPower : public BnPower {
     *out = session;
     return ScopedAStatus::ok();
   }
-  // return unsupported for session channels
+  // return EX_UNSUPPORTED_OPERATION for a session channel
   ScopedAStatus getSessionChannel(int32_t, int32_t, ChannelConfig*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
@@ -171,7 +171,7 @@ class RhizoPower : public BnPower {
         headroom_.Query(average, params.calculationWindowMillis));
     return ScopedAStatus::ok();
   }
-  // report that GPU headroom is unsupported
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus getGpuHeadroom(const GpuHeadroomParams&, GpuHeadroomResult*) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
@@ -207,19 +207,17 @@ class RhizoPower : public BnPower {
 
 // register the power service and join the binder thread pool
 int main() {
-  klog("main() entered");
   auto device = ndk::SharedRefBase::make<RhizoPower>();
   const std::string instance = std::string(RhizoPower::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(device->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

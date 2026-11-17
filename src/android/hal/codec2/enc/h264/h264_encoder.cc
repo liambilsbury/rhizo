@@ -70,7 +70,7 @@ Status H264Encoder::Init() {
   Status s = Probe();
   if (s != Status::kOk) return s;
   if (driver_.virgl && !driver_.virgl_host_radeonsi) {
-    EncLog("h264 encoder: virgl host is not radeonsi, refused");
+    EncLog("h264 encoder unsupported on virgl without radeonsi");
     return Status::kUnsupported;
   }
   s = ChooseRateControl();
@@ -81,17 +81,17 @@ Status H264Encoder::Init() {
   const uint32_t wmbs = coded.width / 16;
   const uint32_t hmbs = coded.height / 16;
   if (wmbs > (config_.width + 15) / 16 || hmbs > (config_.height + 15) / 16)
-    EncLog("h264 encoder: %ux%u coded as %ux%u, the driver's smallest picture being %ux%u", config_.width,
+    EncLog("h264 encoder %ux%u coded=%ux%u min_coded=%ux%u", config_.width,
            config_.height, coded.width, coded.height, config_.min_coded_width, config_.min_coded_height);
   const double fps = static_cast<double>(config_.framerate_num) / config_.framerate_den;
   const uint32_t rc_bitrate = config_.rate_control == EncoderConfig::RateControl::kCq ? 0 : config_.bitrate;
   const uint32_t level = h264enc::ChooseLevel(profile_idc, config_.level, wmbs, hmbs, fps, rc_bitrate);
   if (level == 0) {
-    EncLog("h264 encoder: %ux%u at %.2f fps and %u bit/s fits no level", config_.width, config_.height, fps,
+    EncLog("%ux%u at %.2f fps and %u bit/s fits no h264 level", config_.width, config_.height, fps,
            config_.bitrate);
     return Status::kUnsupported;
   }
-  if (level != config_.level) EncLog("h264 encoder: level %u asked, %u signalled", config_.level, level);
+  if (level != config_.level) EncLog("h264 config_.level=%u signalled=%u", config_.level, level);
   const h264enc::LevelLimits* lim = h264enc::FindLevel(level);
   max_bitrate_ = static_cast<uint32_t>((profile_idc == 100 ? 1500ull : 1200ull) * lim->max_br);
 
@@ -279,7 +279,7 @@ NalClass H264Encoder::Classify(const uint8_t* nal, size_t size) const {
   if (size < 1) return NalClass::kOther;
   const uint32_t type = nal[0] & 31;
   if (type == h264enc::kNalSps || type == h264enc::kNalPps) return NalClass::kParameterSet;
-  // radeonsi behind virgl writes nal_unit_type 0 in its slices
+  // radeonsi behind virgl writes nal_unit_type 0 in slice NAL units
   if (type == h264enc::kNalSlice || type == h264enc::kNalIdrSlice || type == 0) return NalClass::kSlice;
   return NalClass::kOther;
 }
@@ -304,11 +304,11 @@ Status H264Encoder::FixSlice(const EncPicture& pic, const uint8_t* nal, size_t s
   if (pic.idr && intent.idr_pic_id == 0) {
     uint32_t bits = 0;
     if (!h264enc::LearnFrameNumBits(nal, size, driver_syntax_, intent, &bits)) {
-      EncLog("h264 encoder: the driver's IDR slice header fits no frame_num width");
+      EncLog("h264 IDR slice header from the driver fits no frame_num width");
       return Status::kVaError;
     }
     if (bits != driver_syntax_.log2_max_frame_num)
-      EncLog("h264 encoder: the driver writes frame_num in %u bits", bits);
+      EncLog("driver writes h264 frame_num in %u bits", bits);
     driver_syntax_.log2_max_frame_num = bits;
   }
   h264enc::FixResult r = h264enc::FixSlice(nal, size, driver_syntax_, syntax_, intent, out);

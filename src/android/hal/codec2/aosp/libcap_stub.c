@@ -1,4 +1,4 @@
-// fail the libcap calls minijail links with ENOSYS
+// libcap stubs for minijail that fail with ENOSYS
 
 #include <errno.h>
 #include <stddef.h>

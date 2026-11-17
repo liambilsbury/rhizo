@@ -1,5 +1,5 @@
 #!/bin/bash
-# build mapper.rhizo.so for ABIs
+# var/share/gfx_hal/mapper.rhizo.so var/share/gfx_hal_32/mapper.rhizo.so RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
@@ -14,7 +14,7 @@ COMMON_ARGS=(
 
 if [[ -n "${RHIZO_HAL_ABI:-}" ]]; then
   tools/build/hal/hal.sh mapper.rhizo.so "${COMMON_ARGS[@]}" --abi "$RHIZO_HAL_ABI" --stage "${RHIZO_HAL_STAGE:-gfx_hal}"
-  echo "[build-mapper] --abi $RHIZO_HAL_ABI set -- skipping the 32-bit (x86) companion"
+  echo "no gfx_hal_32/mapper.rhizo.so for RHIZO_HAL_ABI=$RHIZO_HAL_ABI"
 else
   tools/build/hal/hal.sh mapper.rhizo.so "${COMMON_ARGS[@]}" --stage gfx_hal
   tools/build/hal/hal.sh mapper.rhizo.so "${COMMON_ARGS[@]}" --abi x86 --stage gfx_hal_32

@@ -1,7 +1,7 @@
 #!/bin/sh
-# write the kernel log to a rotating file
+# dmesg -w capture to a rotating log file
 set -u
-LOG="${1:?usage: rhizo-avc-capture.sh <logfile>}"
+LOG="${1:?rhizo-avc-capture.sh <logfile>}"
 exec 9<"$(dirname "$LOG")"
 flock -n 9 || exit 0
 CAP="${RHIZO_AVC_CAP_BYTES:-268435456}"

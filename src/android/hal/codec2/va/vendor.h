@@ -9,7 +9,7 @@
 
 namespace rhizo::c2va {
 
-// return whether a VA vendor string names virgl
+// return whether vendor contains " for virgl"
 inline bool IsVirglVendor(const char* vendor) { return vendor && strstr(vendor, " for virgl") != nullptr; }
 
 bool IsVirgl(VADisplay display);

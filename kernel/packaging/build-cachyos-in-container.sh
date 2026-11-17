@@ -1,9 +1,9 @@
 #!/bin/bash
-# build the CachyOS kernel packages in an Arch container
+# CachyOS kernel package build in an Arch container
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/../.." && pwd)
 cache=$(cd "${RHIZO_KERNEL_CACHE:-$HOME/.cache/rhizo/kernel}" && pwd)
-out=${1:?usage: build-cachyos-in-container.sh <outdir> [distro-config]} cfg=${2:-$cache/config-cachyos}
+out=${1:?build-cachyos-in-container.sh <outdir> [distro-config]} cfg=${2:-$cache/config-cachyos}
 cfg=$(cd "$(dirname "$cfg")" && pwd)/$(basename "$cfg")
 mkdir -p "$out"; out=$(cd "$out" && pwd)
 mounts=(-v "$root:$root:ro" -v "$cache:$cache" -v "$out:$out")

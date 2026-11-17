@@ -35,7 +35,7 @@ const char* StatusName(Status s) {
   return "status-unknown";
 }
 
-// return whether a profile carries 10-bit samples
+// return whether a profile has 10-bit samples
 bool TenBitOnly(VAProfile p) {
   return p == VAProfileHEVCMain10 || p == VAProfileVP9Profile2 || p == VAProfileH264High10;
 }
@@ -47,7 +47,7 @@ const FunctionalClip* ClipFor(Codec codec, uint32_t depth) {
   return nullptr;
 }
 
-// decode a clip and compare its frames with the reference MD5s
+// decode a clip and compare the decoded frames with the reference MD5s
 std::string DecodeAndCompare(const FunctionalClip& clip, VaDevice& device) {
   std::vector<Unit> units;
   if (clip.framing == ClipFraming::kAnnexB) {
@@ -71,7 +71,7 @@ std::string DecodeAndCompare(const FunctionalClip& clip, VaDevice& device) {
   cb.output = [&](const Frame& f) {
     if (first_error.empty() && (f.crop.width != clip.width || f.crop.height != clip.height)) {
       first_error = "frame " + std::to_string(digests.size()) + " is " + std::to_string(f.crop.width) + "x" +
-                    std::to_string(f.crop.height) + ", want " + std::to_string(clip.width) + "x" +
+                    std::to_string(f.crop.height) + ", expected " + std::to_string(clip.width) + "x" +
                     std::to_string(clip.height);
     }
     if (first_error.empty() && f.bit_depth != clip.bit_depth) {
@@ -84,7 +84,7 @@ std::string DecodeAndCompare(const FunctionalClip& clip, VaDevice& device) {
                 w, h, bps};
       Status st = session->ToYuv(f, d);
       if (st != Status::kOk) {
-        first_error = std::string("ToYuv: ") + StatusName(st);
+        first_error = std::string("ToYuv returned ") + StatusName(st);
       } else {
         if (bps == 2) {
           for (size_t i = 0; i + 1 < planes.size(); i += 2) {
@@ -104,22 +104,22 @@ std::string DecodeAndCompare(const FunctionalClip& clip, VaDevice& device) {
   cb.skip = [](uint64_t) {};
   Status st = Status::kOk;
   std::unique_ptr<DecodeSession> owned = DecodeSession::Create(clip.codec, std::move(cb), &st, device);
-  if (!owned) return std::string("no decode session: ") + StatusName(st);
+  if (!owned) return std::string("DecodeSession::Create returned ") + StatusName(st);
   session = owned.get();
   for (size_t i = 0; i < units.size(); i++) {
     st = session->Decode(units[i].data.data(), units[i].data.size(), i, units[i].codec_config);
-    if (st != Status::kOk) return "input " + std::to_string(i) + ": " + StatusName(st);
+    if (st != Status::kOk) return "Decode of input " + std::to_string(i) + " returned " + StatusName(st);
   }
   st = session->Drain();
-  if (st != Status::kOk) return std::string("drain: ") + StatusName(st);
+  if (st != Status::kOk) return std::string("Drain returned ") + StatusName(st);
   owned.reset();
   if (!first_error.empty()) return first_error;
   if (digests.size() != clip.frames) {
-    return std::to_string(digests.size()) + " frames out, want " + std::to_string(clip.frames);
+    return std::to_string(digests.size()) + " frames out, expected " + std::to_string(clip.frames);
   }
   for (uint32_t i = 0; i < clip.frames; i++) {
     if (digests[i] != clip.md5[i]) {
-      return "frame " + std::to_string(i) + " differs from the reference (md5 " + digests[i].substr(0, 8) + ", want " +
+      return "frame " + std::to_string(i) + " differs from the reference (md5 " + digests[i].substr(0, 8) + ", ref " +
              std::string(clip.md5[i]).substr(0, 8) + ")";
     }
   }
@@ -164,13 +164,13 @@ FunctionalReport ApplyFunctionalChecks(std::vector<ComponentCaps>* components, s
   std::vector<ComponentCaps> kept;
   auto run = [&](const FunctionalClip* clip) -> std::string {
     if (!clip) return "no embedded clip";
-    if (report.wedged) return "not checked: an earlier clip timed out";
+    if (report.wedged) return "not checked after an earlier clip timed out";
     double c0 = NowMs();
     bool timed_out = false;
     std::string v = CheckClip(*clip, device, options.clip_timeout_ms, &timed_out);
     if (timed_out) report.wedged = true;
     char line[512];
-    snprintf(line, sizeof(line), "%s: %s (%.0f ms)", clip->name, v.c_str(), NowMs() - c0);
+    snprintf(line, sizeof(line), "%s %s (%.0f ms)", clip->name, v.c_str(), NowMs() - c0);
     report.log.push_back(line);
     return v;
   };
@@ -191,7 +191,7 @@ FunctionalReport ApplyFunctionalChecks(std::vector<ComponentCaps>* components, s
     if (has10) {
       std::string ten = run(ClipFor(c.codec, 10));
       if (ten != "ok") {
-        DroppedComponent d{c.name, {}, {10}, "10-bit: " + ten};
+        DroppedComponent d{c.name, {}, {10}, "10-bit " + ten};
         std::vector<VAProfile> left;
         for (VAProfile p : c.va_profiles) (TenBitOnly(p) ? d.va_profiles : left).push_back(p);
         c.va_profiles = left;

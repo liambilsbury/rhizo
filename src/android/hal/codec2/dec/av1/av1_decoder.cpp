@@ -244,7 +244,7 @@ using av1::SequenceHeader;
 using av1::TileSpan;
 using av1::kNumRefFrames;
 
-// a decoded picture and its grained copy
+// a decoded surface and the film-grain surface
 struct Picture {
   explicit Picture(DecoderHost* h) : host(h) {}
   ~Picture() {
@@ -645,7 +645,7 @@ Status Av1Decoder::SubmitFrame(const uint8_t* buffer) {
   return note;
 }
 
-// return true when the current surfaces hold the stream
+// return true when the current surfaces fit the stream
 bool Av1Decoder::FitsSurfaces(const StreamInfo& info) {
   if (info.profile != info_.profile || info.rt_format != info_.rt_format || info.min_surfaces != info_.min_surfaces) {
     return false;
@@ -655,7 +655,7 @@ bool Av1Decoder::FitsSurfaces(const StreamInfo& info) {
   return info.coded_width <= w && info.coded_height <= h;
 }
 
-// return true when the driver applies film grain
+// return the cached DriverAppliesGrain result for the VA vendor string
 bool Av1Decoder::GrainApplies() {
   if (grain_applies_ < 0) grain_applies_ = av1::DriverAppliesGrain(vaQueryVendorString(host_->display())) ? 1 : 0;
   return grain_applies_ == 1;

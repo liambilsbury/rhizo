@@ -1,4 +1,4 @@
-// serve a host directory over a /dev/fuse descriptor
+// FUSE server for a host directory on a /dev/fuse descriptor
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -74,29 +74,29 @@ static _Alignas(8) uint8_t g_inbuf[IN_BUF_SIZE];
 
 static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 
-// write a log line with a level
-static void logf_line(const char *level, const char *fmt, va_list ap) {
+// write a log line
+static void logf_line(const char *fmt, va_list ap) {
     FILE *out = g_log ? g_log : stderr;
     pthread_mutex_lock(&g_log_lock);
-    fprintf(out, "[rhizo-hostfsd] %s: ", level);
+    fputs("[rhizo-hostfsd] ", out);
     vfprintf(out, fmt, ap);
     fputc('\n', out);
     fflush(out);
     pthread_mutex_unlock(&g_log_lock);
 }
 
-// log an info message
+// call logf_line with fmt
 static void rz_log(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    logf_line("info", fmt, ap);
+    logf_line(fmt, ap);
     va_end(ap);
 }
 
 static void logf_err(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    logf_line("error", fmt, ap);
+    logf_line(fmt, ap);
     va_end(ap);
 }
 
@@ -150,7 +150,7 @@ static void budget_init(void) {
     g_max_inodes = (uint32_t)inodes;
 }
 
-// raise RLIMIT_NOFILE to its hard limit
+// raise RLIMIT_NOFILE rlim_cur to rlim_max
 static void raise_nofile(void) {
     struct rlimit rl;
     if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return;
@@ -158,7 +158,7 @@ static void raise_nofile(void) {
     rlim_t was = rl.rlim_cur;
     rl.rlim_cur = rl.rlim_max;
     if (setrlimit(RLIMIT_NOFILE, &rl) == 0) {
-        rz_log("RLIMIT_NOFILE raised from %ju to its hard limit %ju",
+        rz_log("raised RLIMIT_NOFILE from %ju to rlim_max %ju",
              (uintmax_t)was, (uintmax_t)rl.rlim_max);
     }
 }
@@ -245,7 +245,7 @@ static struct inode *inode_register(dev_t dev, ino_t ino, int path_fd, int is_di
     struct inode *n = calloc(1, sizeof(*n));
     if (!n) {
         close(path_fd);
-        logf_err("out of memory allocating an inode: refusing the lookup");
+        logf_err("calloc failed for an inode");
         *err = ENOMEM;
         return NULL;
     }
@@ -277,21 +277,21 @@ static void inode_forget(uint64_t nodeid, uint64_t n) {
     }
 }
 
-// open the root directory and create its inode
+// open --root and create the root inode
 static void inode_table_init(const char *root_path) {
     budget_init();
     int fd = open(root_path, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) {
-        logf_err("cannot open --root %s: %s", root_path, strerror(errno));
+        logf_err("failed to open --root %s (%s)", root_path, strerror(errno));
         exit(1);
     }
     struct stat st;
     if (fstatat(fd, "", &st, AT_EMPTY_PATH) < 0) {
-        logf_err("cannot stat --root %s: %s", root_path, strerror(errno));
+        logf_err("failed to stat --root %s (%s)", root_path, strerror(errno));
         exit(1);
     }
     struct inode *n = calloc(1, sizeof(*n));
-    if (!n) { logf_err("out of memory"); exit(1); }
+    if (!n) { logf_err("calloc failed"); exit(1); }
     n->nodeid = FUSE_ROOT_ID;
     n->dev = st.st_dev;
     n->ino = st.st_ino;
@@ -306,7 +306,7 @@ static void inode_table_init(const char *root_path) {
 }
 
 
-// validate a path component name
+// return whether name is a path component
 static int name_ok(const char *name) {
     if (!name || name[0] == '\0') return 0;
     if (strchr(name, '/') != NULL) return 0;
@@ -394,7 +394,7 @@ static void set_entry_times(struct fuse_entry_out *eo) {
 
 static pthread_mutex_t g_fuse_write_lock = PTHREAD_MUTEX_INITIALIZER;
 
-// send a reply to /dev/fuse
+// write a reply to /dev/fuse
 static void raw_reply(uint64_t unique, int32_t error, const void *data, uint32_t data_len) {
     struct iovec body = { .iov_base = (void *)data, .iov_len = data_len };
 
@@ -407,7 +407,7 @@ static void raw_reply(uint64_t unique, int32_t error, const void *data, uint32_t
     if (err == ENOENT) {
         return;
     }
-    logf_err("write(/dev/fuse) failed for unique=%" PRIu64 ": %s", unique, strerror(err));
+    logf_err("write(/dev/fuse) failed for unique=%" PRIu64 " (%s)", unique, strerror(err));
 }
 
 // reply with success and data
@@ -494,7 +494,7 @@ static struct handle *handle_get(uint64_t fh, enum handle_kind kind) {
     return h;
 }
 
-// close the handle and free its slot
+// close the handle fd or DIR and free the handle slot
 static void handle_put(uint64_t fh) {
     uint32_t idx = (uint32_t)(fh & 0xffffffffu);
     pthread_mutex_lock(&g_handle_lock);
@@ -514,7 +514,7 @@ static void handle_put(uint64_t fh) {
     pthread_mutex_unlock(&g_handle_lock);
 }
 
-// return whether a directory offset was issued by this handle
+// return whether h->offs contains off
 static int dir_off_issued(const struct handle *h, uint64_t off) {
     for (uint32_t i = 0; i < h->off_count; i++) {
         if (h->offs[i] == off) return 1;
@@ -532,7 +532,7 @@ static void dir_off_record(struct handle *h, uint64_t off) {
 }
 
 
-// reply to the FUSE_INIT request
+// reply to FUSE_INIT
 static void op_init(const struct fuse_in_header *in, const uint8_t *body, uint32_t body_len) {
     struct fuse_init_in kin;
     memset(&kin, 0, sizeof(kin));
@@ -562,15 +562,15 @@ static void op_init(const struct fuse_in_header *in, const uint8_t *body, uint32
     out.map_alignment = 0;
     out.flags2 = 0;
 
-    rz_log("INIT: kernel major=%u minor=%u -> negotiated major=%u minor=%u, max_write=%u",
+    rz_log("FUSE_INIT kernel major=%u minor=%u -> negotiated major=%u minor=%u max_write=%u",
          kin.major, kin.minor, out.major, out.minor, out.max_write);
 
     reply_ok(in->unique, &out, sizeof(out));
 }
 
-// mark the daemon to exit
+// reply to FUSE_DESTROY and set g_destroy_requested
 static void op_destroy(const struct fuse_in_header *in) {
-    rz_log("DESTROY received, will exit after replying");
+    rz_log("FUSE_DESTROY");
     reply_ok(in->unique, NULL, 0);
     g_destroy_requested = 1;
 }
@@ -697,7 +697,7 @@ static void op_setattr(const struct fuse_in_header *in, const uint8_t *body, uin
     reply_ok(in->unique, &out, sizeof(out));
 }
 
-// mask the kernel open flags
+// return the O_ACCMODE, O_APPEND and O_TRUNC bits of flags with O_CLOEXEC
 static int sanitize_open_flags(uint32_t flags) {
     int real = (int)(flags & O_ACCMODE);
     if (flags & O_APPEND) real |= O_APPEND;
@@ -706,7 +706,7 @@ static int sanitize_open_flags(uint32_t flags) {
     return real;
 }
 
-// open a file and return its handle
+// open a file and reply with a file handle
 static void op_open(const struct fuse_in_header *in, const uint8_t *body, uint32_t body_len) {
     if (body_len < sizeof(struct fuse_open_in)) { reply_err(in->unique, EINVAL); return; }
     const struct fuse_open_in *oi = (const struct fuse_open_in *)body;
@@ -892,17 +892,17 @@ static void op_statfs(const struct fuse_in_header *in) {
     reply_ok(in->unique, &out, sizeof(out));
 }
 
-// reply success to the access request
+// reply 0 to FUSE_ACCESS
 static void op_access(const struct fuse_in_header *in) {
     reply_ok(in->unique, NULL, 0);
 }
 
-// reply ENOSYS to the xattr request
+// reply ENOSYS to the xattr opcodes
 static void op_xattr_enosys(const struct fuse_in_header *in) {
     reply_err(in->unique, ENOSYS);
 }
 
-// open a directory and return its handle
+// open a directory and reply with a directory handle
 static void op_opendir(const struct fuse_in_header *in, const uint8_t *body, uint32_t body_len) {
     (void)body;
     if (body_len < sizeof(struct fuse_open_in)) { reply_err(in->unique, EINVAL); return; }
@@ -1036,7 +1036,7 @@ static void op_fsyncdir(const struct fuse_in_header *in, const uint8_t *body, ui
 }
 
 
-// read or write request
+// FUSE_READ or FUSE_WRITE work item
 struct io_request {
     uint64_t unique;
     uint64_t fh;
@@ -1092,7 +1092,7 @@ static void wait_for_io_workers(void) {
     pthread_mutex_unlock(&g_io_count_lock);
 }
 
-// pin a file handle and return its fd
+// pin a file handle and return the handle fd
 static int resolve_and_pin_file(uint64_t fh, uint32_t *idx_out, int *fd_out) {
     uint32_t idx = (uint32_t)(fh & 0xffffffffu);
     uint32_t gen = (uint32_t)(fh >> 32);
@@ -1193,7 +1193,7 @@ static void *io_worker(void *argp) {
     return NULL;
 }
 
-// start a detached thread for the request
+// start a detached io_worker thread for req
 static int spawn_io_worker(struct io_request *req) {
     io_thread_begin();
     pthread_attr_t attr;
@@ -1206,7 +1206,7 @@ static int spawn_io_worker(struct io_request *req) {
     return 0;
 }
 
-// read the file into the reply
+// start an io_worker for FUSE_READ
 static void op_read(const struct fuse_in_header *in, const uint8_t *body, uint32_t body_len) {
     if (body_len < sizeof(struct fuse_read_in)) { reply_err(in->unique, EINVAL); return; }
     const struct fuse_read_in *ri = (const struct fuse_read_in *)body;
@@ -1239,7 +1239,7 @@ static void op_read(const struct fuse_in_header *in, const uint8_t *body, uint32
     }
 }
 
-// write data to a file
+// start an io_worker for FUSE_WRITE
 static void op_write(const struct fuse_in_header *in, const uint8_t *body, uint32_t body_len) {
     if (body_len < sizeof(struct fuse_write_in)) { reply_err(in->unique, EINVAL); return; }
     const struct fuse_write_in *wi = (const struct fuse_write_in *)body;
@@ -1294,7 +1294,7 @@ static void op_release(const struct fuse_in_header *in, const uint8_t *body, uin
     reply_ok(in->unique, NULL, 0);
 }
 
-// reply success to the flush request
+// reply 0 to FUSE_FLUSH
 static void op_flush(const struct fuse_in_header *in, const uint8_t *body, uint32_t body_len) {
     (void)body;
     (void)body_len;
@@ -1313,7 +1313,7 @@ static void op_fsync(const struct fuse_in_header *in, const uint8_t *body, uint3
     reply_ok(in->unique, NULL, 0);
 }
 
-// ignore the interrupt request
+// ignore FUSE_INTERRUPT
 static void op_interrupt(const struct fuse_in_header *in) {
     (void)in;
 }
@@ -1367,7 +1367,7 @@ static void dispatch(const struct fuse_in_header *in, const uint8_t *body, uint3
 #define SYS_poll SYS_ppoll
 #define SYS_chmod SYS_fchmodat
 #else
-#error "rhizo-hostfsd: no seccomp syscall set for this architecture"
+#error "no g_seccomp_allow for the target architecture"
 #endif
 
 #define X32_BIT 0x40000000u
@@ -1413,7 +1413,7 @@ static int seccomp_install(void) {
     size_t n_allow = sizeof(g_seccomp_allow) / sizeof(g_seccomp_allow[0]);
     size_t n = 0, cap = 2 * n_allow + 8;
     struct sock_filter *f = calloc(cap, sizeof(*f));
-    if (!f) { logf_err("seccomp: out of memory building the filter"); return -1; }
+    if (!f) { logf_err("calloc failed for the seccomp filter"); return -1; }
 
     f[n++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
     f[n++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, RHIZO_SECCOMP_ARCH, 1, 0);
@@ -1430,12 +1430,12 @@ static int seccomp_install(void) {
 
     struct sock_fprog prog = { .len = (unsigned short)n, .filter = f };
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        logf_err("seccomp: PR_SET_NO_NEW_PRIVS failed: %s", strerror(errno));
+        logf_err("prctl(PR_SET_NO_NEW_PRIVS) failed (%s)", strerror(errno));
         free(f);
         return -1;
     }
     if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog, 0, 0) != 0) {
-        logf_err("seccomp: PR_SET_SECCOMP failed: %s", strerror(errno));
+        logf_err("prctl(PR_SET_SECCOMP) failed (%s)", strerror(errno));
         free(f);
         return -1;
     }
@@ -1443,15 +1443,15 @@ static int seccomp_install(void) {
 
     int mode = seccomp_mode();
     if (mode != 2) {
-        logf_err("seccomp: filter did not attach (Seccomp: %d in /proc/self/status, want 2)", mode);
+        logf_err("/proc/self/status Seccomp=%d, expected 2", mode);
         return -1;
     }
-    rz_log("seccomp: filter attached, %zu syscalls allowed in %zu BPF instructions", n_allow, n);
+    rz_log("seccomp filter set allowed_syscalls=%zu bpf_instructions=%zu", n_allow, n);
     return 0;
 }
 
 
-// read and dispatch FUSE requests
+// read and dispatch FUSE messages from /dev/fuse
 static void serve_forever(void) {
     for (;;) {
         ssize_t n;
@@ -1461,31 +1461,31 @@ static void serve_forever(void) {
 
         if (n < 0) {
             if (errno == ENODEV) {
-                rz_log("device unmounted (ENODEV), exiting cleanly");
+                rz_log("read(/dev/fuse) returned ENODEV");
                 break;
             }
             if (errno == EAGAIN) continue;
-            logf_err("read(/dev/fuse) failed: %s", strerror(errno));
+            logf_err("read(/dev/fuse) failed (%s)", strerror(errno));
             break;
         }
         if (n == 0) {
-            rz_log("read(/dev/fuse) returned EOF, exiting");
+            rz_log("read(/dev/fuse) returned EOF");
             break;
         }
         if ((size_t)n < sizeof(struct fuse_in_header)) {
-            logf_err("short read from /dev/fuse: %zd bytes (need at least %zu)",
+            logf_err("read(/dev/fuse) returned %zd bytes < %zu",
                       n, sizeof(struct fuse_in_header));
             continue;
         }
 
         const struct fuse_in_header *in = (const struct fuse_in_header *)g_inbuf;
         if (in->len > (uint32_t)n) {
-            logf_err("truncated request unique=%" PRIu64 " opcode=%u: header says %u bytes, got %zd",
+            logf_err("fuse_in_header unique=%" PRIu64 " opcode=%u len=%u exceeds %zd bytes",
                       in->unique, in->opcode, in->len, n);
             continue;
         }
         if (in->len < sizeof(struct fuse_in_header)) {
-            logf_err("malformed request unique=%" PRIu64 ": len=%u smaller than header",
+            logf_err("fuse_in_header unique=%" PRIu64 " len=%u < sizeof(struct fuse_in_header)",
                       in->unique, in->len);
             continue;
         }
@@ -1507,19 +1507,19 @@ static int g_selftest_failures = 0;
 #define SELFTEST_CHECK(cond, msg) \
     do { \
         if (!(cond)) { \
-            fprintf(stderr, "SELFTEST FAIL: %s (%s:%d)\n", msg, __FILE__, __LINE__); \
+            fprintf(stderr, "FAIL %s (%s:%d)\n", msg, __FILE__, __LINE__); \
             g_selftest_failures++; \
         } else { \
-            fprintf(stderr, "SELFTEST OK:   %s\n", msg); \
+            fprintf(stderr, "ok %s\n", msg); \
         } \
     } while (0)
 
 // write a file with the given content for the selftest
 static void write_file(const char *path, const char *content) {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) { fprintf(stderr, "selftest setup: open(%s) failed: %s\n", path, strerror(errno)); exit(1); }
+    if (fd < 0) { fprintf(stderr, "open(%s) failed (%s)\n", path, strerror(errno)); exit(1); }
     size_t len = strlen(content);
-    if (write(fd, content, len) != (ssize_t)len) { fprintf(stderr, "selftest setup: write(%s) failed\n", path); exit(1); }
+    if (write(fd, content, len) != (ssize_t)len) { fprintf(stderr, "write(%s) failed\n", path); exit(1); }
     close(fd);
 }
 
@@ -1534,9 +1534,9 @@ static uint32_t g_st_reply_len = 0;
 static int32_t g_st_reply_error = 0;
 static uint32_t g_st_uid = 0, g_st_gid = 0, g_st_pid = 0;
 
-// print a selftest setup failure and exit
+// print what and strerror(errno) and call _exit(1)
 static void st_fatal(const char *what) {
-    fprintf(stderr, "selftest setup: %s failed: %s\n", what, strerror(errno));
+    fprintf(stderr, "%s failed (%s)\n", what, strerror(errno));
     _exit(1);
 }
 
@@ -1570,9 +1570,9 @@ static char *st_setup(char *tmpl) {
     return scratch;
 }
 
-// build a request and dispatch it
+// build a FUSE message and call dispatch
 static uint64_t st_send(uint32_t opcode, uint64_t nodeid, const void *body, size_t body_len) {
-    if (sizeof(struct fuse_in_header) + body_len > IN_BUF_SIZE) st_fatal("request larger than the read buffer");
+    if (sizeof(struct fuse_in_header) + body_len > IN_BUF_SIZE) st_fatal("sizeof(fuse_in_header) + body_len <= IN_BUF_SIZE");
     struct fuse_in_header *ih = (struct fuse_in_header *)g_st_req;
     memset(ih, 0, sizeof(*ih));
     ih->len = (uint32_t)(sizeof(*ih) + body_len);
@@ -1587,9 +1587,9 @@ static uint64_t st_send(uint32_t opcode, uint64_t nodeid, const void *body, size
     return ih->unique;
 }
 
-// send a request and read its reply
+// call st_send and read the reply
 static void st_call(uint32_t opcode, uint64_t nodeid, const void *body, size_t body_len) {
-    if (ftruncate(g_st_replyfd, 0) != 0 || lseek(g_st_replyfd, 0, SEEK_SET) != 0) st_fatal("reply file reset");
+    if (ftruncate(g_st_replyfd, 0) != 0 || lseek(g_st_replyfd, 0, SEEK_SET) != 0) st_fatal("reply file ftruncate");
     g_st_reply_len = 0;
     g_st_reply_error = 0;
 
@@ -1597,20 +1597,20 @@ static void st_call(uint32_t opcode, uint64_t nodeid, const void *body, size_t b
     wait_for_io_workers();
 
     off_t end = lseek(g_st_replyfd, 0, SEEK_END);
-    if (end < 0) st_fatal("reply file seek");
+    if (end < 0) st_fatal("reply file lseek(SEEK_END)");
     if (end == 0) return;
-    if (lseek(g_st_replyfd, 0, SEEK_SET) != 0) st_fatal("reply file rewind");
+    if (lseek(g_st_replyfd, 0, SEEK_SET) != 0) st_fatal("reply file lseek(SEEK_SET)");
     ssize_t got = read(g_st_replyfd, g_st_reply, IN_BUF_SIZE);
-    if (got < (ssize_t)sizeof(struct fuse_out_header)) st_fatal("reply shorter than its own header");
+    if (got < (ssize_t)sizeof(struct fuse_out_header)) st_fatal("got >= sizeof(struct fuse_out_header)");
     const struct fuse_out_header *oh = (const struct fuse_out_header *)g_st_reply;
     g_st_reply_error = oh->error;
     g_st_reply_len = (uint32_t)got - (uint32_t)sizeof(*oh);
     if (oh->len != (uint32_t)got) {
-        fprintf(stderr, "SELFTEST FAIL: reply header claims %u bytes, %zd landed on the fd\n", oh->len, got);
+        fprintf(stderr, "FAIL oh->len %u != %zd bytes read from the reply fd\n", oh->len, got);
         g_selftest_failures++;
     }
     if (oh->unique != unique) {
-        fprintf(stderr, "SELFTEST FAIL: reply unique=%" PRIu64 " does not answer request %" PRIu64 "\n",
+        fprintf(stderr, "FAIL reply unique=%" PRIu64 " != message unique=%" PRIu64 "\n",
                 oh->unique, unique);
         g_selftest_failures++;
     }
@@ -1621,12 +1621,12 @@ static int st_errno(void) { return g_st_reply_error < 0 ? -g_st_reply_error : 0;
 // return the body of the last selftest reply
 static const void *st_body(void) { return g_st_reply + sizeof(struct fuse_out_header); }
 
-// send a LOOKUP request in the selftest
+// call st_call with FUSE_LOOKUP
 static void st_lookup(uint64_t parent, const char *name) {
     st_call(FUSE_LOOKUP, parent, name, strlen(name) + 1);
 }
 
-// send a FORGET request in the selftest
+// call st_call with FUSE_FORGET
 static void st_forget(uint64_t nodeid, uint64_t nlookup) {
     struct fuse_forget_in fi;
     memset(&fi, 0, sizeof(fi));
@@ -1634,11 +1634,11 @@ static void st_forget(uint64_t nodeid, uint64_t nlookup) {
     st_call(FUSE_FORGET, nodeid, &fi, sizeof(fi));
 }
 
-// send a CREATE request in the selftest
+// call st_call with FUSE_CREATE
 static void st_create(uint64_t parent, const char *name, uint32_t flags) {
     uint8_t buf[sizeof(struct fuse_create_in) + NAME_MAX_LEN + 2];
     size_t n = strlen(name) + 1;
-    if (n > NAME_MAX_LEN + 1) st_fatal("selftest name too long");
+    if (n > NAME_MAX_LEN + 1) st_fatal("strlen(name) <= NAME_MAX_LEN");
     struct fuse_create_in ci;
     memset(&ci, 0, sizeof(ci));
     ci.flags = flags;
@@ -1648,7 +1648,7 @@ static void st_create(uint64_t parent, const char *name, uint32_t flags) {
     st_call(FUSE_CREATE, parent, buf, sizeof(ci) + n);
 }
 
-// send an open request in the selftest
+// call st_call with an open opcode
 static void st_open(uint32_t opcode, uint64_t nodeid, uint32_t flags, size_t body_len) {
     struct fuse_open_in oi;
     memset(&oi, 0, sizeof(oi));
@@ -1656,7 +1656,7 @@ static void st_open(uint32_t opcode, uint64_t nodeid, uint32_t flags, size_t bod
     st_call(opcode, nodeid, &oi, body_len);
 }
 
-// send a read request in the selftest
+// call st_call with a read opcode
 static void st_read(uint32_t opcode, uint64_t nodeid, uint64_t fh, uint64_t offset, uint32_t size) {
     struct fuse_read_in ri;
     memset(&ri, 0, sizeof(ri));
@@ -1666,10 +1666,10 @@ static void st_read(uint32_t opcode, uint64_t nodeid, uint64_t fh, uint64_t offs
     st_call(opcode, nodeid, &ri, sizeof(ri));
 }
 
-// send a WRITE request in the selftest
+// call st_call with FUSE_WRITE
 static void st_write(uint64_t nodeid, uint64_t fh, uint64_t offset, const char *data, uint32_t len) {
     uint8_t buf[sizeof(struct fuse_write_in) + 128];
-    if (len > 128) st_fatal("selftest write too long");
+    if (len > 128) st_fatal("len <= 128");
     struct fuse_write_in wi;
     memset(&wi, 0, sizeof(wi));
     wi.fh = fh;
@@ -1680,7 +1680,7 @@ static void st_write(uint64_t nodeid, uint64_t fh, uint64_t offset, const char *
     st_call(FUSE_WRITE, nodeid, buf, sizeof(wi) + len);
 }
 
-// send a release request in the selftest
+// call st_call with a release opcode
 static void st_release(uint32_t opcode, uint64_t nodeid, uint64_t fh) {
     struct fuse_release_in rl;
     memset(&rl, 0, sizeof(rl));
@@ -1688,7 +1688,7 @@ static void st_release(uint32_t opcode, uint64_t nodeid, uint64_t fh) {
     st_call(opcode, nodeid, &rl, sizeof(rl));
 }
 
-// send an fsync request in the selftest
+// call st_call with an fsync opcode
 static void st_fsync(uint32_t opcode, uint64_t nodeid, uint64_t fh) {
     struct fuse_fsync_in fs;
     memset(&fs, 0, sizeof(fs));
@@ -1722,7 +1722,7 @@ static size_t st_slurp(const char *path, char *buf, size_t cap) {
 static void st_group(const char *label, void (*fn)(void)) {
     fflush(NULL);
     pid_t pid = fork();
-    if (pid < 0) { SELFTEST_CHECK(0, "fork a dispatch-selftest group"); return; }
+    if (pid < 0) { SELFTEST_CHECK(0, "fork() >= 0"); return; }
     if (pid == 0) {
         alarm(20);
         g_selftest_failures = 0;
@@ -1733,17 +1733,17 @@ static void st_group(const char *label, void (*fn)(void)) {
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) { }
     if (WIFSIGNALED(status)) {
-        fprintf(stderr, "SELFTEST FAIL: dispatch group '%s' died on signal %d\n", label, WTERMSIG(status));
+        fprintf(stderr, "FAIL group '%s' killed by signal %d\n", label, WTERMSIG(status));
         g_selftest_failures++;
     } else if (!WIFEXITED(status)) {
-        fprintf(stderr, "SELFTEST FAIL: dispatch group '%s' did not exit normally\n", label);
+        fprintf(stderr, "FAIL group '%s' WIFEXITED(status) == 0\n", label);
         g_selftest_failures++;
     } else {
         g_selftest_failures += WEXITSTATUS(status);
     }
 }
 
-// test CREATE onto symlinks and free names
+// test CREATE onto symlinks, made.txt, a/b and ..
 static void st_group_create(void) {
     char tmpl[] = "/tmp/rhizo-hostfsd-selftest-create-XXXXXX";
     char *scratch = st_setup(tmpl);
@@ -1768,55 +1768,55 @@ static void st_group_create(void) {
     inode_table_init(root);
 
     struct stat before, after;
-    if (stat(secret, &before) != 0) st_fatal("stat the outside file");
+    if (stat(secret, &before) != 0) st_fatal("stat(secret.txt)");
 
     st_create(FUSE_ROOT_ID, "onto_secret", O_WRONLY | O_CREAT | O_TRUNC);
-    SELFTEST_CHECK(st_errno() != 0, "dispatch: CREATE onto a symlinked name is refused");
+    SELFTEST_CHECK(st_errno() != 0, "CREATE onto_secret symlink errno != 0");
     SELFTEST_CHECK(stat(secret, &after) == 0 && after.st_size == before.st_size,
-                   "dispatch: a refused CREATE did not truncate the symlink's target outside the share");
+                   "CREATE onto_secret symlink secret.txt st_size == before.st_size");
     SELFTEST_CHECK(lstat(path, &after) == 0 && S_ISLNK(after.st_mode),
-                   "dispatch: a refused CREATE left the symlink itself in place");
+                   "CREATE onto_secret symlink S_ISLNK(lstat(onto_secret))");
 
     st_create(FUSE_ROOT_ID, "onto_new", O_WRONLY | O_CREAT);
-    SELFTEST_CHECK(st_errno() != 0, "dispatch: CREATE onto a dangling symlink is refused");
+    SELFTEST_CHECK(st_errno() != 0, "CREATE onto_new dangling symlink errno != 0");
     SELFTEST_CHECK(access(stolen, F_OK) != 0,
-                   "dispatch: a refused CREATE did not create the symlink's target outside the share");
+                   "CREATE onto_new dangling symlink access(created-by-symlink.txt) != 0");
 
     st_create(FUSE_ROOT_ID, "made.txt", O_WRONLY | O_CREAT | O_EXCL);
     int made_ok = (st_errno() == 0 &&
                    g_st_reply_len == sizeof(struct fuse_entry_out) + sizeof(struct fuse_open_out));
-    SELFTEST_CHECK(made_ok, "dispatch: CREATE of a free name succeeds and answers entry+open");
+    SELFTEST_CHECK(made_ok, "CREATE made.txt errno == 0 && reply len == fuse_entry_out + fuse_open_out");
     if (made_ok) {
         const struct fuse_entry_out *eo = st_body();
         const struct fuse_open_out *oo =
             (const struct fuse_open_out *)((const uint8_t *)st_body() + sizeof(*eo));
         uint64_t nodeid = eo->nodeid;
         uint64_t fh = oo->fh;
-        SELFTEST_CHECK(nodeid > FUSE_ROOT_ID, "dispatch: a created file is registered under a new nodeid");
+        SELFTEST_CHECK(nodeid > FUSE_ROOT_ID, "CREATE made.txt nodeid > FUSE_ROOT_ID");
         SELFTEST_CHECK(eo->attr.uid == g_cfg.uid && (eo->attr.mode & 07777) == g_cfg.file_mode,
-                       "dispatch: a created file reports the configured uid and file-mode");
+                       "CREATE made.txt attr.uid == g_cfg.uid && attr.mode == g_cfg.file_mode");
         st_write(nodeid, fh, 0, "landed", 6);
         SELFTEST_CHECK(st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_write_out) &&
                            ((const struct fuse_write_out *)st_body())->size == 6,
-                       "dispatch: WRITE through a CREATE handle acknowledges every byte");
+                       "WRITE 6 bytes with the CREATE fh fuse_write_out.size == 6");
         st_release(FUSE_RELEASE, nodeid, fh);
-        SELFTEST_CHECK(st_errno() == 0, "dispatch: RELEASE of a CREATE handle succeeds");
+        SELFTEST_CHECK(st_errno() == 0, "RELEASE of the CREATE fh errno == 0");
         char got[16];
         snprintf(path, sizeof(path), "%s/made.txt", root);
         size_t n = st_slurp(path, got, sizeof(got));
         SELFTEST_CHECK(n == 6 && memcmp(got, "landed", 6) == 0,
-                       "dispatch: the bytes written through a CREATE handle are on disk under --root");
+                       "--root/made.txt == \"landed\"");
     }
 
     st_create(FUSE_ROOT_ID, "a/b", O_WRONLY | O_CREAT);
-    SELFTEST_CHECK(st_errno() == EACCES, "dispatch: CREATE of a name containing '/' is refused");
+    SELFTEST_CHECK(st_errno() == EACCES, "CREATE a/b errno == EACCES");
     st_create(FUSE_ROOT_ID, "..", O_WRONLY | O_CREAT);
-    SELFTEST_CHECK(st_errno() == EACCES, "dispatch: CREATE of \"..\" is refused");
+    SELFTEST_CHECK(st_errno() == EACCES, "CREATE .. errno == EACCES");
 
     st_rm_rf(scratch);
 }
 
-// collect names from the reply directory entries
+// copy each fuse_dirent name in the reply to names[] and return the entry count
 static int st_dirents(char names[][NAME_MAX_LEN + 1], int cap, uint64_t *last_off) {
     const uint8_t *p = st_body();
     uint32_t off = 0;
@@ -1840,27 +1840,27 @@ static int st_dirents(char names[][NAME_MAX_LEN + 1], int cap, uint64_t *last_of
 static uint64_t g_st_case_fh = 0;
 static uint64_t g_st_case_dh = 0;
 
-// check that a file handle used as a directory handle is refused
+// call READDIR with a file handle
 static void st_case_file_fh_as_dir(void) {
     st_read(FUSE_READDIR, FUSE_ROOT_ID, g_st_case_fh, 0, 4096);
-    SELFTEST_CHECK(st_errno() == EBADF, "dispatch: a file handle used as a directory handle is refused");
+    SELFTEST_CHECK(st_errno() == EBADF, "READDIR with a file fh errno == EBADF");
 }
 
-// check that FSYNCDIR with handle 0 is refused
+// call FSYNCDIR with fh 0
 static void st_case_fsyncdir_zero_fh(void) {
     st_fsync(FUSE_FSYNCDIR, FUSE_ROOT_ID, 0);
-    SELFTEST_CHECK(st_errno() == EBADF, "dispatch: FSYNCDIR with fh=0 is refused, not dereferenced");
+    SELFTEST_CHECK(st_errno() == EBADF, "FSYNCDIR with fh=0 errno == EBADF");
 }
 
-// check that a released directory handle is refused
+// call READDIR with a released directory handle
 static void st_case_released_dir_fh(void) {
     st_read(FUSE_READDIR, FUSE_ROOT_ID, g_st_case_dh, 0, 4096);
-    SELFTEST_CHECK(st_errno() == EBADF, "dispatch: a released directory handle is refused");
+    SELFTEST_CHECK(st_errno() == EBADF, "READDIR with a released dh errno == EBADF");
 }
 
 #define ST_SECRET "SECRET-BYTES-NO-APP-MAY-EVER-SEE"
 
-// test file and directory handle requests
+// test file and directory handle opcodes
 static void st_group_handles(void) {
     char tmpl[] = "/tmp/rhizo-hostfsd-selftest-handles-XXXXXX";
     char *scratch = st_setup(tmpl);
@@ -1883,41 +1883,41 @@ static void st_group_handles(void) {
     st_lookup(FUSE_ROOT_ID, "hello.txt");
     if (st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_entry_out))
         hello = ((const struct fuse_entry_out *)st_body())->nodeid;
-    SELFTEST_CHECK(hello > FUSE_ROOT_ID, "dispatch: LOOKUP of a real file answers a nodeid");
+    SELFTEST_CHECK(hello > FUSE_ROOT_ID, "LOOKUP hello.txt nodeid > FUSE_ROOT_ID");
 
     uint64_t fh = 0;
     st_open(FUSE_OPEN, hello, O_RDONLY, sizeof(struct fuse_open_in));
     if (st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_open_out))
         fh = ((const struct fuse_open_out *)st_body())->fh;
     SELFTEST_CHECK(st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_open_out),
-                   "dispatch: OPEN of a real file answers a handle");
+                   "OPEN hello.txt errno == 0 && reply len == sizeof(struct fuse_open_out)");
     st_read(FUSE_READ, hello, fh, 0, 64);
     SELFTEST_CHECK(st_errno() == 0 && g_st_reply_len == 11 && memcmp(st_body(), "hello world", 11) == 0,
-                   "dispatch: READ through an issued handle returns the file's real bytes");
+                   "READ hello.txt fh == \"hello world\"");
 
     int secret_fd = open(secret, O_RDWR);
-    if (secret_fd < 0) st_fatal("open the outside file");
+    if (secret_fd < 0) st_fatal("open(secret.txt)");
 
     st_read(FUSE_READ, hello, (uint64_t)secret_fd, 0, 64);
     SELFTEST_CHECK(st_errno() == EBADF,
-                   "dispatch: a forged fh naming a descriptor the daemon holds for itself is refused by READ");
+                   "READ with fh=secret_fd errno == EBADF");
     SELFTEST_CHECK(!(st_errno() == 0 && g_st_reply_len >= strlen(ST_SECRET) &&
                      memcmp(st_body(), ST_SECRET, strlen(ST_SECRET)) == 0),
-                   "dispatch: a forged fh did not read back a file outside the share");
+                   "READ with fh=secret_fd reply != ST_SECRET");
 
     st_write(hello, (uint64_t)secret_fd, 0, "PWNED", 5);
-    SELFTEST_CHECK(st_errno() == EBADF, "dispatch: a forged fh is refused by WRITE");
+    SELFTEST_CHECK(st_errno() == EBADF, "WRITE with fh=secret_fd errno == EBADF");
     char got[80];
     size_t n = st_slurp(secret, got, sizeof(got));
     SELFTEST_CHECK(n == strlen(ST_SECRET) && memcmp(got, ST_SECRET, n) == 0,
-                   "dispatch: a forged fh did not overwrite a file outside the share");
+                   "secret.txt == ST_SECRET after WRITE with fh=secret_fd");
 
     st_release(FUSE_RELEASE, hello, (uint64_t)secret_fd);
     SELFTEST_CHECK(fcntl(secret_fd, F_GETFD) >= 0,
-                   "dispatch: a forged fh did not close a descriptor the daemon holds for itself");
+                   "fcntl(secret_fd, F_GETFD) >= 0 after RELEASE with fh=secret_fd");
 
     st_release(FUSE_RELEASE, hello, fh);
-    SELFTEST_CHECK(st_errno() == 0, "dispatch: RELEASE of an issued handle succeeds");
+    SELFTEST_CHECK(st_errno() == 0, "RELEASE hello.txt fh errno == 0");
     close(secret_fd);
     char secret2[160];
     snprintf(secret2, sizeof(secret2), "%s/secret2.txt", outside);
@@ -1925,10 +1925,10 @@ static void st_group_handles(void) {
     int reclaimed = open(secret2, O_RDONLY);
     st_read(FUSE_READ, hello, fh, 0, 64);
     SELFTEST_CHECK(st_errno() == EBADF,
-                   "dispatch: a released fh is refused, not replayed against whatever took its number");
+                   "READ with a released fh errno == EBADF");
     SELFTEST_CHECK(!(st_errno() == 0 && g_st_reply_len >= strlen(ST_SECRET) &&
                      memcmp(st_body(), ST_SECRET, strlen(ST_SECRET)) == 0),
-                   "dispatch: a released fh did not read back the file that took its number");
+                   "READ with a released fh reply != ST_SECRET");
     if (reclaimed >= 0) close(reclaimed);
 
     uint64_t dh = 0;
@@ -1936,13 +1936,13 @@ static void st_group_handles(void) {
     if (st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_open_out))
         dh = ((const struct fuse_open_out *)st_body())->fh;
     SELFTEST_CHECK(st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_open_out),
-                   "dispatch: OPENDIR answers a handle");
+                   "OPENDIR root errno == 0 && reply len == sizeof(struct fuse_open_out)");
 
     char names[16][NAME_MAX_LEN + 1];
     st_read(FUSE_READDIR, FUSE_ROOT_ID, dh, 0, 4096);
     int listed = st_dirents(names, 16, NULL);
     SELFTEST_CHECK(st_errno() == 0 && listed == 5,
-                   "dispatch: READDIR lists every entry of the root in one buffer");
+                   "READDIR root size 4096 entries == 5");
 
     uint64_t off = 0;
     int total = 0, rounds = 0, hello_seen = 0, refused = 0;
@@ -1956,15 +1956,15 @@ static void st_group_handles(void) {
         total += got_n;
     }
     SELFTEST_CHECK(!refused && rounds > 1 && rounds < 64 && total == 5 && hello_seen == 1,
-                   "dispatch: a READDIR resumed on its own last offset lists the directory exactly once");
+                   "READDIR root size 96 from each last d->off entries == 5 && hello.txt count == 1");
 
     st_read(FUSE_READDIR, FUSE_ROOT_ID, dh, 0x5eed5eed5eedULL, 4096);
     SELFTEST_CHECK(st_errno() == EINVAL,
-                   "dispatch: a READDIR offset this daemon never issued is refused, not fed to seekdir");
+                   "READDIR at offset 0x5eed5eed5eed errno == EINVAL");
 
     st_read(FUSE_READDIR, FUSE_ROOT_ID, dh, 0, 4096);
     SELFTEST_CHECK(st_errno() == 0 && st_dirents(names, 16, NULL) == 5,
-                   "dispatch: READDIR at offset 0 rewinds and lists the directory again");
+                   "READDIR root at offset 0 entries == 5");
 
     g_st_case_fh = fh;
     st_open(FUSE_OPEN, hello, O_RDONLY, sizeof(struct fuse_open_in));
@@ -1974,14 +1974,14 @@ static void st_group_handles(void) {
     st_group("FSYNCDIR with fh=0", st_case_fsyncdir_zero_fh);
 
     st_fsync(FUSE_FSYNC, hello, g_st_case_fh);
-    SELFTEST_CHECK(st_errno() == 0, "dispatch: FSYNC through an issued file handle succeeds");
+    SELFTEST_CHECK(st_errno() == 0, "FSYNC hello.txt fh errno == 0");
     st_release(FUSE_RELEASE, hello, g_st_case_fh);
-    SELFTEST_CHECK(st_errno() == 0, "dispatch: RELEASE of that file handle succeeds");
+    SELFTEST_CHECK(st_errno() == 0, "RELEASE hello.txt second fh errno == 0");
 
     st_fsync(FUSE_FSYNCDIR, FUSE_ROOT_ID, dh);
-    SELFTEST_CHECK(st_errno() == 0, "dispatch: FSYNCDIR through an issued directory handle succeeds");
+    SELFTEST_CHECK(st_errno() == 0, "FSYNCDIR root dh errno == 0");
     st_release(FUSE_RELEASEDIR, FUSE_ROOT_ID, dh);
-    SELFTEST_CHECK(st_errno() == 0, "dispatch: RELEASEDIR of an issued handle succeeds");
+    SELFTEST_CHECK(st_errno() == 0, "RELEASEDIR root dh errno == 0");
     g_st_case_dh = dh;
     st_group("released directory handle", st_case_released_dir_fh);
 
@@ -2018,7 +2018,7 @@ static void st_group_fd_bound(void) {
 
     struct rlimit rl;
     if (getrlimit(RLIMIT_NOFILE, &rl) != 0) st_fatal("getrlimit");
-    if (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < 96) st_fatal("a hard RLIMIT_NOFILE under 96");
+    if (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < 96) st_fatal("rlim_max >= 96");
     rl.rlim_cur = 96;
     if (setrlimit(RLIMIT_NOFILE, &rl) != 0) st_fatal("setrlimit");
 
@@ -2039,27 +2039,27 @@ static void st_group_fd_bound(void) {
         }
     }
     SELFTEST_CHECK(registered >= 16 && refused > 0 && other == 0,
-                   "dispatch: LOOKUP fills the inode table to its bound and then refuses with EMFILE");
+                   "300 LOOKUPs at RLIMIT_NOFILE 96 registered >= 16 && EMFILE > 0 && other == 0");
 
     int probe = open("/dev/null", O_RDONLY);
     SELFTEST_CHECK(probe >= 0,
-                   "dispatch: descriptors remain for real work once the inode bound has engaged");
+                   "open(/dev/null) >= 0 at the inode bound");
     if (probe >= 0) close(probe);
 
     st_open(FUSE_OPEN, first, O_RDONLY, sizeof(struct fuse_open_in));
     int open_ok = (st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_open_out));
-    SELFTEST_CHECK(open_ok, "dispatch: an OPEN still succeeds once the inode bound has engaged");
+    SELFTEST_CHECK(open_ok, "OPEN f000 errno == 0 at the inode bound");
     if (open_ok) {
         uint64_t fh = ((const struct fuse_open_out *)st_body())->fh;
         st_read(FUSE_READ, first, fh, 0, 8);
         SELFTEST_CHECK(st_errno() == 0 && g_st_reply_len == 1,
-                       "dispatch: that OPEN's handle still reads the file's bytes");
+                       "READ f000 fh reply len == 1 at the inode bound");
         st_release(FUSE_RELEASE, first, fh);
     }
 
     st_lookup(FUSE_ROOT_ID, "f000");
     SELFTEST_CHECK(st_errno() == 0,
-                   "dispatch: a LOOKUP of an already-registered name still succeeds at the bound");
+                   "LOOKUP f000 errno == 0 at the inode bound");
 
     uint64_t dh = 0;
     st_open(FUSE_OPENDIR, FUSE_ROOT_ID, O_RDONLY, sizeof(struct fuse_open_in));
@@ -2067,12 +2067,12 @@ static void st_group_fd_bound(void) {
         dh = ((const struct fuse_open_out *)st_body())->fh;
     st_read(FUSE_READDIRPLUS, FUSE_ROOT_ID, dh, 0, 4096);
     SELFTEST_CHECK(st_errno() == 0 && st_direntplus_count() > 0,
-                   "dispatch: READDIRPLUS still lists names once the inode bound has engaged");
+                   "READDIRPLUS root entries > 0 at the inode bound");
     if (dh) st_release(FUSE_RELEASEDIR, FUSE_ROOT_ID, dh);
 
     st_forget(first, 2);
     st_lookup(FUSE_ROOT_ID, "f299");
-    SELFTEST_CHECK(st_errno() == 0, "dispatch: forgetting an inode returns its budget to the table");
+    SELFTEST_CHECK(st_errno() == 0, "LOOKUP f299 errno == 0 after FORGET of f000");
 
     st_rm_rf(scratch);
 }
@@ -2089,27 +2089,27 @@ static void st_group_opendir_len(void) {
     inode_table_init(root);
 
     st_open(FUSE_OPENDIR, FUSE_ROOT_ID, O_RDONLY, 0);
-    SELFTEST_CHECK(st_errno() == EINVAL, "dispatch: OPENDIR with an empty body is refused EINVAL");
+    SELFTEST_CHECK(st_errno() == EINVAL, "OPENDIR with body_len 0 errno == EINVAL");
     st_open(FUSE_OPENDIR, FUSE_ROOT_ID, O_RDONLY, sizeof(struct fuse_open_in) - 1);
     SELFTEST_CHECK(st_errno() == EINVAL,
-                   "dispatch: OPENDIR with a body shorter than fuse_open_in is refused EINVAL");
+                   "OPENDIR with body_len sizeof(struct fuse_open_in) - 1 errno == EINVAL");
 
     uint64_t dh = 0;
     st_open(FUSE_OPENDIR, FUSE_ROOT_ID, O_RDONLY, sizeof(struct fuse_open_in));
     int ok = (st_errno() == 0 && g_st_reply_len == sizeof(struct fuse_open_out));
     if (ok) dh = ((const struct fuse_open_out *)st_body())->fh;
-    SELFTEST_CHECK(ok, "dispatch: OPENDIR with a whole body answers a handle");
+    SELFTEST_CHECK(ok, "OPENDIR with body_len sizeof(struct fuse_open_in) errno == 0");
     char names[16][NAME_MAX_LEN + 1];
     st_read(FUSE_READDIR, FUSE_ROOT_ID, dh, 0, 4096);
     SELFTEST_CHECK(st_errno() == 0 && st_dirents(names, 16, NULL) == 3,
-                   "dispatch: that handle lists the directory");
+                   "READDIR with that dh entries == 3");
     st_release(FUSE_RELEASEDIR, FUSE_ROOT_ID, dh);
 
     uint64_t file = 0;
     st_lookup(FUSE_ROOT_ID, "hello.txt");
     if (st_errno() == 0) file = ((const struct fuse_entry_out *)st_body())->nodeid;
     st_open(FUSE_OPENDIR, file, O_RDONLY, sizeof(struct fuse_open_in));
-    SELFTEST_CHECK(st_errno() == ENOTDIR, "dispatch: OPENDIR of a file is refused ENOTDIR");
+    SELFTEST_CHECK(st_errno() == ENOTDIR, "OPENDIR hello.txt errno == ENOTDIR");
 
     st_rm_rf(scratch);
 }
@@ -2142,7 +2142,7 @@ static void st_group_short_reply(void) {
     close(data_pipe[0]);
     close(count_pipe[1]);
     int flags = fcntl(data_pipe[1], F_GETFL);
-    if (flags < 0 || fcntl(data_pipe[1], F_SETFL, flags | O_NONBLOCK) != 0) st_fatal("O_NONBLOCK");
+    if (flags < 0 || fcntl(data_pipe[1], F_SETFL, flags | O_NONBLOCK) != 0) st_fatal("fcntl(F_SETFL, O_NONBLOCK)");
 
     g_fuse_fd = data_pipe[1];
     raw_reply(4242, 0, payload, payload_len);
@@ -2153,18 +2153,18 @@ static void st_group_short_reply(void) {
     while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) { }
     SELFTEST_CHECK(got == (ssize_t)sizeof(total) &&
                        total == payload_len + sizeof(struct fuse_out_header),
-                   "dispatch: a reply larger than the descriptor takes at once is written whole");
+                   "raw_reply(40000 bytes) to a 4096-byte O_NONBLOCK pipe writes 40000 + sizeof(fuse_out_header) bytes");
     free(payload);
 }
 
 static uint64_t g_st_seccomp_dir = 0;
 static uint64_t g_st_seccomp_file = 0;
 
-// run FUSE requests under the seccomp filter
+// call each FUSE opcode under the seccomp filter
 static void st_case_seccomp_sweep(void) {
-    SELFTEST_CHECK(seccomp_install() == 0, "dispatch: the seccomp filter installs");
+    SELFTEST_CHECK(seccomp_install() == 0, "seccomp_install() == 0");
     SELFTEST_CHECK(seccomp_mode() == 2,
-                   "dispatch: the seccomp filter is attached, by the kernel's own Seccomp: line");
+                   "/proc/self/status Seccomp == 2");
 
     char names[32][NAME_MAX_LEN + 1];
 
@@ -2175,20 +2175,20 @@ static void st_case_seccomp_sweep(void) {
     ii.max_readahead = 65536;
     st_call(FUSE_INIT, 0, &ii, sizeof(ii));
     SELFTEST_CHECK(st_errno() == 0 && g_st_reply_len >= sizeof(struct fuse_init_out),
-                   "seccomp: INIT is answered under the filter");
+                   "INIT under seccomp errno == 0");
 
     st_call(FUSE_GETATTR, FUSE_ROOT_ID, NULL, 0);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: GETATTR is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "GETATTR under seccomp errno == 0");
     st_call(FUSE_STATFS, FUSE_ROOT_ID, NULL, 0);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: STATFS is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "STATFS under seccomp errno == 0");
     st_call(FUSE_ACCESS, FUSE_ROOT_ID, NULL, 0);
     st_call(FUSE_GETXATTR, FUSE_ROOT_ID, NULL, 0);
     st_call(FUSE_INTERRUPT, FUSE_ROOT_ID, NULL, 0);
     st_call(0xffff, FUSE_ROOT_ID, NULL, 0);
-    SELFTEST_CHECK(st_errno() == ENOSYS, "seccomp: an unknown opcode is answered ENOSYS under the filter");
+    SELFTEST_CHECK(st_errno() == ENOSYS, "opcode 0xffff under seccomp errno == ENOSYS");
 
     st_lookup(FUSE_ROOT_ID, "hello.txt");
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: LOOKUP is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "LOOKUP under seccomp errno == 0");
 
     struct fuse_setattr_in sa;
     memset(&sa, 0, sizeof(sa));
@@ -2198,7 +2198,7 @@ static void st_case_seccomp_sweep(void) {
     sa.atime = 1000000;
     sa.mtime = 1000000;
     st_call(FUSE_SETATTR, g_st_seccomp_file, &sa, sizeof(sa));
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: SETATTR truncates, chmods and stamps under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "SETATTR size, mode, atime and mtime under seccomp errno == 0");
 
     uint64_t fh = 0;
     st_open(FUSE_OPEN, g_st_seccomp_file, O_RDWR, sizeof(struct fuse_open_in));
@@ -2206,12 +2206,12 @@ static void st_case_seccomp_sweep(void) {
     st_write(g_st_seccomp_file, fh, 0, "abcd", 4);
     st_read(FUSE_READ, g_st_seccomp_file, fh, 0, 16);
     SELFTEST_CHECK(st_errno() == 0 && g_st_reply_len == 4,
-                   "seccomp: OPEN, WRITE and READ round-trip under the filter");
+                   "OPEN, WRITE and READ under seccomp reply len == 4");
     st_fsync(FUSE_FSYNC, g_st_seccomp_file, fh);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: FSYNC is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "FSYNC under seccomp errno == 0");
     st_call(FUSE_FLUSH, g_st_seccomp_file, &sa, sizeof(struct fuse_flush_in));
     st_release(FUSE_RELEASE, g_st_seccomp_file, fh);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: FLUSH and RELEASE are answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "FLUSH and RELEASE under seccomp errno == 0");
 
     uint64_t dh = 0;
     st_open(FUSE_OPENDIR, FUSE_ROOT_ID, O_RDONLY, sizeof(struct fuse_open_in));
@@ -2220,13 +2220,13 @@ static void st_case_seccomp_sweep(void) {
     int listed = st_dirents(names, 32, NULL);
     st_read(FUSE_READDIRPLUS, FUSE_ROOT_ID, dh, 0, 4096);
     SELFTEST_CHECK(listed > 0 && st_errno() == 0 && st_direntplus_count() > 0,
-                   "seccomp: READDIR and READDIRPLUS list under the filter");
+                   "READDIR and READDIRPLUS under seccomp entries > 0");
     st_fsync(FUSE_FSYNCDIR, FUSE_ROOT_ID, dh);
     st_release(FUSE_RELEASEDIR, FUSE_ROOT_ID, dh);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: FSYNCDIR and RELEASEDIR are answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "FSYNCDIR and RELEASEDIR under seccomp errno == 0");
 
     st_create(FUSE_ROOT_ID, "created", O_WRONLY | O_CREAT | O_EXCL);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: CREATE is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "CREATE under seccomp errno == 0");
     if (st_errno() == 0) {
         const struct fuse_entry_out *eo = st_body();
         const struct fuse_open_out *oo =
@@ -2241,7 +2241,7 @@ static void st_case_seccomp_sweep(void) {
     memcpy(mk, &mi, sizeof(mi));
     memcpy(mk + sizeof(mi), "newdir", 7);
     st_call(FUSE_MKDIR, FUSE_ROOT_ID, mk, sizeof(mi) + 7);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: MKDIR is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "MKDIR under seccomp errno == 0");
 
     uint8_t rn[sizeof(struct fuse_rename2_in) + 24];
     struct fuse_rename_in ri1;
@@ -2250,7 +2250,7 @@ static void st_case_seccomp_sweep(void) {
     memcpy(rn, &ri1, sizeof(ri1));
     memcpy(rn + sizeof(ri1), "newdir\0renamed", 15);
     st_call(FUSE_RENAME, FUSE_ROOT_ID, rn, sizeof(ri1) + 15);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: RENAME is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "RENAME under seccomp errno == 0");
 
     struct fuse_rename2_in ri2;
     memset(&ri2, 0, sizeof(ri2));
@@ -2259,19 +2259,19 @@ static void st_case_seccomp_sweep(void) {
     memcpy(rn, &ri2, sizeof(ri2));
     memcpy(rn + sizeof(ri2), "renamed\0back", 13);
     st_call(FUSE_RENAME2, FUSE_ROOT_ID, rn, sizeof(ri2) + 13);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: RENAME2 is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "RENAME2 under seccomp errno == 0");
 
     st_call(FUSE_RMDIR, FUSE_ROOT_ID, "back", 5);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: RMDIR is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "RMDIR under seccomp errno == 0");
     st_call(FUSE_UNLINK, FUSE_ROOT_ID, "created", 8);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: UNLINK is answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "UNLINK under seccomp errno == 0");
 
     st_forget(g_st_seccomp_dir, 1);
     struct fuse_batch_forget_in bf;
     memset(&bf, 0, sizeof(bf));
     st_call(FUSE_BATCH_FORGET, 0, &bf, sizeof(bf));
     st_call(FUSE_DESTROY, 0, NULL, 0);
-    SELFTEST_CHECK(st_errno() == 0, "seccomp: FORGET, BATCH_FORGET and DESTROY are answered under the filter");
+    SELFTEST_CHECK(st_errno() == 0, "FORGET, BATCH_FORGET and DESTROY under seccomp errno == 0");
 }
 
 // run the selftest group for the seccomp filter
@@ -2292,7 +2292,7 @@ static void st_group_seccomp(void) {
     st_lookup(FUSE_ROOT_ID, "sub");
     if (st_errno() == 0) g_st_seccomp_dir = ((const struct fuse_entry_out *)st_body())->nodeid;
     SELFTEST_CHECK(g_st_seccomp_file && g_st_seccomp_dir,
-                   "dispatch: the seccomp sweep has a file and a directory to work on");
+                   "LOOKUP hello.txt and sub nodeid != 0");
 
     st_group("seccomp opcode sweep", st_case_seccomp_sweep);
     st_rm_rf(scratch);
@@ -2305,7 +2305,7 @@ static void st_case_concurrent_io(uint64_t file_a, uint64_t file_b) {
     if (st_errno() == 0) fh_a = ((const struct fuse_open_out *)st_body())->fh;
     st_open(FUSE_OPEN, file_b, O_RDONLY, sizeof(struct fuse_open_in));
     if (st_errno() == 0) fh_b = ((const struct fuse_open_out *)st_body())->fh;
-    SELFTEST_CHECK(fh_a && fh_b, "dispatch: concurrent-io has two open handles to work on");
+    SELFTEST_CHECK(fh_a && fh_b, "OPEN a.txt and b.txt fh != 0");
 
     g_st_track_order = 1;
     g_st_order_n = 0;
@@ -2332,7 +2332,7 @@ static void st_case_concurrent_io(uint64_t file_a, uint64_t file_b) {
         if (!seen) usleep(1000);
     }
     SELFTEST_CHECK(seen && g_st_order[0] == fh_b,
-                   "dispatch: a slow READ does not block a concurrent READ on a different handle");
+                   "g_st_order[0] == fh_b while READ of fh_a is gated");
 
     pthread_mutex_lock(&g_st_gate_lock);
     g_st_gate_open = 1;
@@ -2364,7 +2364,7 @@ static void st_group_concurrent_io(void) {
     uint64_t file_a = st_errno() == 0 ? ((const struct fuse_entry_out *)st_body())->nodeid : 0;
     st_lookup(FUSE_ROOT_ID, "b.txt");
     uint64_t file_b = st_errno() == 0 ? ((const struct fuse_entry_out *)st_body())->nodeid : 0;
-    SELFTEST_CHECK(file_a && file_b, "dispatch: concurrent-io has two files to look up");
+    SELFTEST_CHECK(file_a && file_b, "LOOKUP a.txt and b.txt nodeid != 0");
 
     st_case_concurrent_io(file_a, file_b);
     st_rm_rf(scratch);
@@ -2380,23 +2380,23 @@ static void selftest_run(void) {
     st_group("concurrent io", st_group_concurrent_io);
 
     SELFTEST_CHECK(st_no_new_privs() == 1,
-                   "no_new_privs is set on the process the kernel sees, before anything else runs");
+                   "/proc/self/status NoNewPrivs == 1");
 
     char tmpl[] = "/tmp/rhizo-hostfsd-selftest-XXXXXX";
     char *root = mkdtemp(tmpl);
-    if (!root) { fprintf(stderr, "selftest: mkdtemp failed: %s\n", strerror(errno)); exit(1); }
-    fprintf(stderr, "SELFTEST: using temp root %s\n", root);
+    if (!root) { fprintf(stderr, "mkdtemp failed (%s)\n", strerror(errno)); exit(1); }
+    fprintf(stderr, "SELFTEST root=%s\n", root);
 
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/hello.txt", root);
     write_file(path, "hello world");
 
     snprintf(path, sizeof(path), "%s/sub", root);
-    if (mkdir(path, 0755) != 0) { fprintf(stderr, "selftest setup: mkdir sub failed\n"); exit(1); }
+    if (mkdir(path, 0755) != 0) { fprintf(stderr, "mkdir(sub) failed\n"); exit(1); }
 
     char outside_tmpl[] = "/tmp/rhizo-hostfsd-selftest-outside-XXXXXX";
     char *outside = mkdtemp(outside_tmpl);
-    if (!outside) { fprintf(stderr, "selftest setup: mkdtemp outside failed\n"); exit(1); }
+    if (!outside) { fprintf(stderr, "mkdtemp(outside) failed\n"); exit(1); }
     char outside_secret[PATH_MAX];
     snprintf(outside_secret, sizeof(outside_secret), "%s/secret.txt", outside);
     write_file(outside_secret, "should never be reachable through root");
@@ -2404,13 +2404,13 @@ static void selftest_run(void) {
     char link_target[PATH_MAX];
     snprintf(link_target, sizeof(link_target), "../%s/secret.txt", strrchr(outside, '/') + 1);
     snprintf(path, sizeof(path), "%s/escape_link", root);
-    if (symlink(link_target, path) != 0) { fprintf(stderr, "selftest setup: symlink failed\n"); exit(1); }
+    if (symlink(link_target, path) != 0) { fprintf(stderr, "symlink(escape_link) failed\n"); exit(1); }
 
     char hardlink_path[PATH_MAX];
     snprintf(hardlink_path, sizeof(hardlink_path), "%s/hello2.txt", root);
     char hello_path[PATH_MAX];
     snprintf(hello_path, sizeof(hello_path), "%s/hello.txt", root);
-    if (link(hello_path, hardlink_path) != 0) { fprintf(stderr, "selftest setup: link failed\n"); exit(1); }
+    if (link(hello_path, hardlink_path) != 0) { fprintf(stderr, "link(hello2.txt) failed\n"); exit(1); }
 
     g_cfg.uid = 7777;
     g_cfg.gid = 8888;
@@ -2418,69 +2418,72 @@ static void selftest_run(void) {
     g_cfg.dir_mode = 0750;
     inode_table_init(root);
 
-    SELFTEST_CHECK(name_ok("hello.txt") == 1, "name_ok accepts a plain name");
-    SELFTEST_CHECK(name_ok("..") == 0, "name_ok rejects \"..\"");
-    SELFTEST_CHECK(name_ok(".") == 0, "name_ok rejects \".\"");
-    SELFTEST_CHECK(name_ok("a/b") == 0, "name_ok rejects an embedded '/'");
-    SELFTEST_CHECK(name_ok("") == 0, "name_ok rejects an empty name");
+    SELFTEST_CHECK(name_ok("hello.txt") == 1, "name_ok(\"hello.txt\") == 1");
+    SELFTEST_CHECK(name_ok("..") == 0, "name_ok(\"..\") == 0");
+    SELFTEST_CHECK(name_ok(".") == 0, "name_ok(\".\") == 0");
+    SELFTEST_CHECK(name_ok("a/b") == 0, "name_ok(\"a/b\") == 0");
+    SELFTEST_CHECK(name_ok("") == 0, "name_ok(\"\") == 0");
 
     struct inode *child;
     struct stat st;
     int rc = resolve_and_register(g_root, "..", &child, &st);
-    SELFTEST_CHECK(rc == ENOENT, "resolve_and_register refuses \"..\" as a child name");
+    SELFTEST_CHECK(rc == ENOENT, "resolve_and_register(root, \"..\") == ENOENT");
 
     rc = resolve_and_register(g_root, "../etc/passwd", &child, &st);
-    SELFTEST_CHECK(rc == ENOENT, "resolve_and_register refuses a name containing '/'");
+    SELFTEST_CHECK(rc == ENOENT, "resolve_and_register(root, \"../etc/passwd\") == ENOENT");
 
     rc = resolve_and_register(g_root, "escape_link", &child, &st);
-    SELFTEST_CHECK(rc == ENOENT, "resolve_and_register refuses a symlink instead of following it out of root");
+    SELFTEST_CHECK(rc == ENOENT, "resolve_and_register(root, \"escape_link\") == ENOENT");
 
     struct inode *hello = NULL;
     rc = resolve_and_register(g_root, "hello.txt", &hello, &st);
-    SELFTEST_CHECK(rc == 0 && hello != NULL, "resolve_and_register succeeds for a real file");
+    SELFTEST_CHECK(rc == 0 && hello != NULL, "resolve_and_register(root, \"hello.txt\") == 0");
     if (hello) {
-        SELFTEST_CHECK(hello->refcount == 1, "first lookup has refcount 1");
+        SELFTEST_CHECK(hello->refcount == 1, "hello->refcount == 1");
         uint64_t hello_nodeid = hello->nodeid;
 
         struct inode *sub = NULL;
         rc = resolve_and_register(g_root, "sub", &sub, &st);
-        SELFTEST_CHECK(rc == 0 && sub != NULL && sub->is_dir == 1, "resolve_and_register succeeds for a real directory");
+        SELFTEST_CHECK(rc == 0 && sub != NULL && sub->is_dir == 1,
+                       "resolve_and_register(root, \"sub\") == 0 && sub->is_dir == 1");
 
         struct fuse_attr attr;
         fill_fuse_attr(&attr, hello, &st);
         struct stat hello_st;
-        SELFTEST_CHECK(fstatat(hello->path_fd, "", &hello_st, AT_EMPTY_PATH) == 0, "fstatat on hello's path_fd succeeds");
+        SELFTEST_CHECK(fstatat(hello->path_fd, "", &hello_st, AT_EMPTY_PATH) == 0,
+                       "fstatat(hello->path_fd, \"\", AT_EMPTY_PATH) == 0");
         fill_fuse_attr(&attr, hello, &hello_st);
-        SELFTEST_CHECK(attr.uid == 7777 && attr.gid == 8888, "reported attrs use the configured uid/gid, not the real ones");
-        SELFTEST_CHECK((attr.mode & 07777) == 0640, "reported mode uses the configured file-mode");
-        SELFTEST_CHECK(hello_st.st_uid == getuid(), "the real on-disk owner is untouched (still the process's own uid)");
+        SELFTEST_CHECK(attr.uid == 7777 && attr.gid == 8888, "attr.uid == 7777 && attr.gid == 8888");
+        SELFTEST_CHECK((attr.mode & 07777) == 0640, "(attr.mode & 07777) == 0640");
+        SELFTEST_CHECK(hello_st.st_uid == getuid(), "hello_st.st_uid == getuid()");
 
         struct inode *hello2 = NULL;
         rc = resolve_and_register(g_root, "hello2.txt", &hello2, &st);
-        SELFTEST_CHECK(rc == 0 && hello2 == hello, "a hardlink resolves to the SAME nodeid as the original name");
-        SELFTEST_CHECK(hello->refcount == 2, "refcount reflects both lookups after the hardlink resolve");
+        SELFTEST_CHECK(rc == 0 && hello2 == hello, "resolve_and_register(root, \"hello2.txt\") == hello");
+        SELFTEST_CHECK(hello->refcount == 2, "hello->refcount == 2");
 
         inode_forget(hello_nodeid, 2);
         struct inode *hello_again = NULL;
         rc = resolve_and_register(g_root, "hello.txt", &hello_again, &st);
-        SELFTEST_CHECK(rc == 0 && hello_again != NULL, "hello.txt resolves again after being fully forgotten");
-        SELFTEST_CHECK(hello_again->nodeid != hello_nodeid, "a fully-forgotten inode is freed: re-lookup allocates a new nodeid");
+        SELFTEST_CHECK(rc == 0 && hello_again != NULL,
+                       "resolve_and_register(root, \"hello.txt\") == 0 after inode_forget(hello, 2)");
+        SELFTEST_CHECK(hello_again->nodeid != hello_nodeid, "hello_again->nodeid != hello_nodeid");
     }
 
     struct inode *w = NULL;
     rc = resolve_and_register(g_root, "hello.txt", &w, &st);
-    SELFTEST_CHECK(rc == 0, "re-resolve hello.txt for I/O test");
+    SELFTEST_CHECK(rc == 0, "resolve_and_register(root, \"hello.txt\") == 0 for reopen_via_procpath");
     if (w) {
         int fd = reopen_via_procpath(w->path_fd, O_RDWR, 0);
-        SELFTEST_CHECK(fd >= 0, "reopen_via_procpath opens a real read/write fd");
+        SELFTEST_CHECK(fd >= 0, "reopen_via_procpath(w->path_fd, O_RDWR) >= 0");
         if (fd >= 0) {
             char buf[32];
             ssize_t r = pread(fd, buf, sizeof(buf), 0);
             SELFTEST_CHECK(r == (ssize_t)strlen("hello world") && memcmp(buf, "hello world", (size_t)r) == 0,
-                            "pread through the reopened fd returns the real file's exact bytes");
-            SELFTEST_CHECK(ftruncate(fd, 5) == 0, "ftruncate through the reopened fd succeeds");
+                            "pread(fd) == \"hello world\"");
+            SELFTEST_CHECK(ftruncate(fd, 5) == 0, "ftruncate(fd, 5) == 0");
             struct stat trunc_st;
-            SELFTEST_CHECK(fstat(fd, &trunc_st) == 0 && trunc_st.st_size == 5, "truncate took effect for real, on disk");
+            SELFTEST_CHECK(fstat(fd, &trunc_st) == 0 && trunc_st.st_size == 5, "fstat(fd).st_size == 5");
             close(fd);
         }
     }
@@ -2488,35 +2491,35 @@ static void selftest_run(void) {
     if (mkdirat(g_root->path_fd, "newdir", 0750) == 0) {
         struct inode *nd = NULL;
         rc = resolve_and_register(g_root, "newdir", &nd, &st);
-        SELFTEST_CHECK(rc == 0 && nd && nd->is_dir, "mkdirat + resolve_and_register sees the new directory");
+        SELFTEST_CHECK(rc == 0 && nd && nd->is_dir, "resolve_and_register(root, \"newdir\") == 0 && nd->is_dir");
         SELFTEST_CHECK(renameat2(g_root->path_fd, "newdir", g_root->path_fd, "renamed_dir", 0) == 0,
-                        "renameat2 through retained parent fds succeeds");
+                        "renameat2(root, \"newdir\", root, \"renamed_dir\", 0) == 0");
         SELFTEST_CHECK(unlinkat(g_root->path_fd, "renamed_dir", AT_REMOVEDIR) == 0,
-                        "unlinkat(AT_REMOVEDIR) removes the renamed directory");
+                        "unlinkat(root, \"renamed_dir\", AT_REMOVEDIR) == 0");
     } else {
-        SELFTEST_CHECK(0, "mkdirat for rename/rmdir test");
+        SELFTEST_CHECK(0, "mkdirat(root, \"newdir\", 0750) == 0");
     }
 
-    SELFTEST_CHECK(name_ok("..") == 0, "name_ok still rejects \"..\" before any mkdirat/unlinkat/renameat2 call would run");
+    SELFTEST_CHECK(name_ok("..") == 0, "name_ok(\"..\") == 0 after mkdirat, renameat2 and unlinkat");
 
     st_rm_rf(root);
     st_rm_rf(outside);
 
     if (g_selftest_failures > 0) {
-        fprintf(stderr, "SELFTEST: %d assertion(s) FAILED\n", g_selftest_failures);
+        fprintf(stderr, "SELFTEST failures=%d\n", g_selftest_failures);
         exit(1);
     }
-    fprintf(stderr, "SELFTEST: all assertions passed\n");
+    fprintf(stderr, "SELFTEST failures=0\n");
 }
 
 
 // print the usage text to stderr
 static void usage(const char *argv0) {
     fprintf(stderr,
-        "usage: %s --fd N --root DIR [--uid N] [--gid N] [--file-mode OCTAL]\n"
-        "          [--dir-mode OCTAL] [--foreground] [--log PATH]\n"
-        "       %s --selftest\n"
-        "       %s --help\n",
+        "%s --fd N --root DIR [--uid N] [--gid N] [--file-mode OCTAL]\n"
+        "    [--dir-mode OCTAL] [--foreground] [--log PATH]\n"
+        "%s --selftest\n"
+        "%s --help\n",
         argv0, argv0, argv0);
 }
 
@@ -2542,7 +2545,7 @@ int main(int argc, char **argv) {
     };
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        fprintf(stderr, "rhizo-hostfsd: PR_SET_NO_NEW_PRIVS failed: %s\n", strerror(errno));
+        fprintf(stderr, "prctl(PR_SET_NO_NEW_PRIVS) failed (%s)\n", strerror(errno));
     }
 
     int do_selftest = 0;
@@ -2571,19 +2574,19 @@ int main(int argc, char **argv) {
     }
 
     if (!have_fd || !have_root) {
-        fprintf(stderr, "rhizo-hostfsd: --fd and --root are required\n");
+        fprintf(stderr, "--fd and --root are required\n");
         usage(argv[0]);
         return 2;
     }
     if (g_cfg.fd < 0) {
-        fprintf(stderr, "rhizo-hostfsd: --fd must be a non-negative integer\n");
+        fprintf(stderr, "--fd is negative\n");
         return 2;
     }
 
     if (g_cfg.fd <= 2) {
         int moved = fcntl(g_cfg.fd, F_DUPFD_CLOEXEC, 3);
         if (moved < 0) {
-            fprintf(stderr, "rhizo-hostfsd: could not move --fd %d out of the stdio range: %s\n",
+            fprintf(stderr, "fcntl(F_DUPFD_CLOEXEC) failed for --fd %d (%s)\n",
                     g_cfg.fd, strerror(errno));
             return 1;
         }
@@ -2595,7 +2598,7 @@ int main(int argc, char **argv) {
     if (g_cfg.log_path) {
         g_log = fopen(g_cfg.log_path, "a");
         if (!g_log) {
-            fprintf(stderr, "rhizo-hostfsd: cannot open --log %s: %s\n", g_cfg.log_path, strerror(errno));
+            fprintf(stderr, "failed to open --log %s (%s)\n", g_cfg.log_path, strerror(errno));
             return 1;
         }
         setlinebuf(g_log);
@@ -2606,7 +2609,7 @@ int main(int argc, char **argv) {
     if (!g_cfg.foreground) {
         pid_t pid = fork();
         if (pid < 0) {
-            logf_err("fork failed: %s", strerror(errno));
+            logf_err("fork failed (%s)", strerror(errno));
             return 1;
         }
         if (pid > 0) {
@@ -2615,7 +2618,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (setsid() < 0) {
-            logf_err("setsid failed: %s", strerror(errno));
+            logf_err("setsid failed (%s)", strerror(errno));
             _exit(1);
         }
         int devnull = open("/dev/null", O_RDWR);
@@ -2627,21 +2630,20 @@ int main(int argc, char **argv) {
         }
     }
 
-    rz_log("starting: root=%s uid=%u gid=%u file_mode=0%o dir_mode=0%o fd=%d",
+    rz_log("root=%s uid=%u gid=%u file_mode=0%o dir_mode=0%o fd=%d",
          g_cfg.root, g_cfg.uid, g_cfg.gid, g_cfg.file_mode, g_cfg.dir_mode, g_fuse_fd);
 
     raise_nofile();
     inode_table_init(g_cfg.root);
-    rz_log("descriptor budget: at most %u live inodes and %u open handles",
+    rz_log("max_inodes=%u max_handles=%u",
          g_max_inodes, g_max_handles);
 
     if (seccomp_install() != 0) {
-        logf_err("refusing to serve without the syscall filter");
+        logf_err("seccomp_install failed");
         return 1;
     }
     serve_forever();
 
-    rz_log("exiting");
     if (g_log) fclose(g_log);
     return 0;
 }

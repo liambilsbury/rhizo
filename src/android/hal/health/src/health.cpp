@@ -30,7 +30,7 @@ bool parseBatteryLevel(const std::map<std::string, std::string>& state, int* out
   long v = strtol(it->second.c_str(), &end, 10);
   if (end == it->second.c_str() || *end != '\0' || v < 0 || v > 100) {
     char buf[192];
-    snprintf(buf, sizeof(buf), "device-state.conf: bad battery_level '%s' (want an integer 0-100), ignoring",
+    snprintf(buf, sizeof(buf), "failed to parse battery_level '%s' in device-state.conf as an integer 0-100",
              it->second.c_str());
     klog(buf);
     return false;
@@ -47,7 +47,7 @@ bool parseBatteryCharging(const std::map<std::string, std::string>& state, bool*
   if (it->second == "discharging") { *charging = false; return true; }
   char buf[192];
   snprintf(buf, sizeof(buf),
-           "device-state.conf: bad battery_charging '%s' (want 'charging' or 'discharging'), ignoring",
+           "failed to parse battery_charging '%s' in device-state.conf as charging or discharging",
            it->second.c_str());
   klog(buf);
   return false;
@@ -91,9 +91,9 @@ HealthInfo MakeHealthInfo() {
 // software HAL for IHealth
 class RhizoHealth : public BnHealth {
  public:
-  // use the host source or the operator's device state
+  // store the host source
   explicit RhizoHealth(std::shared_ptr<rhizo_health_host::Source> host) : host_(std::move(host)) {}
-  // add a callback and send it the current health info
+  // add a callback and call healthInfoChanged on the callback with healthInfo()
   ScopedAStatus registerCallback(const std::shared_ptr<IHealthInfoCallback>& cb) override {
     {
       std::lock_guard<std::mutex> lg(mutex_);
@@ -114,7 +114,7 @@ class RhizoHealth : public BnHealth {
     callbacks_.erase(it);
     return ScopedAStatus::ok();
   }
-  // send the health info to all of the callbacks
+  // call broadcast and return ok
   ScopedAStatus update() override {
     broadcast();
     return ScopedAStatus::ok();
@@ -170,11 +170,11 @@ class RhizoHealth : public BnHealth {
     *out = healthInfo();
     return ScopedAStatus::ok();
   }
-  // reject a charging policy change
+  // return EX_UNSUPPORTED_OPERATION
   ScopedAStatus setChargingPolicy(BatteryChargingPolicy) override {
     return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
   }
-  // return the default charging policy
+  // return BatteryChargingPolicy::DEFAULT
   ScopedAStatus getChargingPolicy(BatteryChargingPolicy* out) override {
     *out = BatteryChargingPolicy::DEFAULT;
     return ScopedAStatus::ok();
@@ -193,7 +193,7 @@ class RhizoHealth : public BnHealth {
  private:
   // build the health info from the host or device state
   HealthInfo healthInfo() { return host_ ? rhizo_health_host::InfoOf(host_->read()) : MakeHealthInfo(); }
-  // send the health info to the callbacks
+  // call healthInfoChanged on each callback with healthInfo()
   void broadcast() {
     std::vector<std::shared_ptr<IHealthInfoCallback>> cbs;
     {
@@ -222,25 +222,23 @@ bool parseSource(int argc, char** argv, std::shared_ptr<rhizo_health_host::Sourc
 
 // register the health service and join the binder thread pool
 int main(int argc, char** argv) {
-  klog("main() entered");
   std::shared_ptr<rhizo_health_host::Source> host;
   if (!parseSource(argc, argv, &host)) {
-    klog("usage: rhizo-health-service [--source host], refusing to start");
+    klog("rhizo-health-service [--source host]");
     return 2;
   }
-  klog(host ? "source host" : "source operator");
+  klog(host ? "source=host-battery" : "source=device-state.conf");
   auto device = ndk::SharedRefBase::make<RhizoHealth>(host);
   const std::string instance = std::string(RhizoHealth::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(device->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

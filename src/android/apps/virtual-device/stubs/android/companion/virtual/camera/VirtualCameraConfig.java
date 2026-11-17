@@ -4,7 +4,7 @@ import java.util.concurrent.Executor;
 
 // compile-time stub of VirtualCameraConfig
 public final class VirtualCameraConfig {
-    // forbid direct construction
+    // private constructor
     private VirtualCameraConfig() {}
 
     public static final class Builder {

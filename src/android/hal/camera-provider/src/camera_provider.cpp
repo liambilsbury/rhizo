@@ -1,4 +1,4 @@
-// serve ICameraProvider/internal/0 with a camera id per host camera
+// ICameraProvider/internal/0 service with a camera id per host camera
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -57,18 +57,18 @@ class CameraProvider : public BnCameraProvider {
       : client_(std::make_unique<CameradClient>(CameradClient::DefaultSocketPath(),
                                                 [this](const std::vector<HostCamera>& c) { onList(c); })) {}
 
-  // connect to camerad and await the first camera list
+  // start notifierLoop and client_, then wait up to kFirstListWaitMs for a LIST
   void start() {
     notifier_ = std::thread([this] { notifierLoop(); });
     client_->start();
     if (client_->waitForFirstList(kFirstListWaitMs)) {
-      klogf("first camera list received");
+      klogf("camera list received");
     } else {
-      klogf("no camera list within %d ms; cameras are reported as they appear", kFirstListWaitMs);
+      klogf("no camera list within %d ms", kFirstListWaitMs);
     }
   }
 
-  // set the callback and replay the present cameras to it
+  // set the callback and queue CameraDeviceStatus::PRESENT for each registered camera
   ScopedAStatus setCallback(const std::shared_ptr<ICameraProviderCallback>& callback) override {
     if (callback == nullptr) return Error(Status::ILLEGAL_ARGUMENT);
     std::lock_guard<std::mutex> lk(mu_);
@@ -117,12 +117,12 @@ class CameraProvider : public BnCameraProvider {
   }
 
  private:
-  // report the cameras a new camerad list adds and removes
+  // queue a CameraDeviceStatus for each RegistryChange of a camerad LIST
   void onList(const std::vector<HostCamera>& cameras) {
     std::lock_guard<std::mutex> lk(mu_);
     for (const RegistryChange& c : registry_.apply(cameras)) {
       if (!c.added) {
-        klogf("camera %s not present: %s", c.id.c_str(), c.why);
+        klogf("camera %s NOT_PRESENT (%s)", c.id.c_str(), c.why);
         auto it = contexts_.find(c.id);
         if (it != contexts_.end()) {
           it->second->present = false;
@@ -139,11 +139,11 @@ class CameraProvider : public BnCameraProvider {
       ctx->shape = ShapeFor(c.host.modes);
       ctx->characteristics = BuildCharacteristics(ctx->shape);
       if (!ValidMetadataBlob(ctx->characteristics)) {
-        klogf("camera %s ('%s'): characteristics did not validate; not reported", c.id.c_str(), c.host.name.c_str());
+        klogf("ValidMetadataBlob failed for camera %s ('%s')", c.id.c_str(), c.host.name.c_str());
         registry_.reject(c.id);
         continue;
       }
-      klogf("camera %s present: '%s' key=%s host facing %s (reported EXTERNAL), %zu modes, largest %dx%d, %zu sizes",
+      klogf("camera %s name='%s' key=%s host_facing=%s lens_facing=EXTERNAL modes=%zu largest=%dx%d sizes=%zu",
             c.id.c_str(), c.host.name.c_str(), c.host.key.c_str(), FacingName(c.host.facing), c.host.modes.size(),
             ctx->shape.arrayWidth, ctx->shape.arrayHeight, ctx->shape.sizes.size());
       contexts_[c.id] = ctx;
@@ -152,7 +152,7 @@ class CameraProvider : public BnCameraProvider {
     eventsCv_.notify_all();
   }
 
-  // send queued status changes to the callback
+  // call cameraDeviceStatusChange for each queued status
   void notifierLoop() {
     for (;;) {
       std::pair<std::string, CameraDeviceStatus> ev;
@@ -168,7 +168,7 @@ class CameraProvider : public BnCameraProvider {
       }
       ScopedAStatus s = cb->cameraDeviceStatusChange(ev.first, ev.second);
       klogf("%s %s -> cameraserver%s", ev.first.c_str(),
-            ev.second == CameraDeviceStatus::PRESENT ? "PRESENT" : "NOT_PRESENT", s.isOk() ? "" : " (failed)");
+            ev.second == CameraDeviceStatus::PRESENT ? "PRESENT" : "NOT_PRESENT", s.isOk() ? "" : " failed");
     }
   }
 
@@ -191,7 +191,7 @@ class CameraProvider : public BnCameraProvider {
 // register the provider and join the binder thread pool
 int main() {
   using rhizo::camera::klogf;
-  klogf("main() entered, pid=%d, camerad socket %s", getpid(),
+  klogf("pid=%d camerad_socket=%s", getpid(),
         rhizo::camera::CameradClient::DefaultSocketPath().c_str());
   ABinderProcess_setThreadPoolMaxThreadCount(rhizo::camera::kBinderThreads);
   auto provider = ndk::SharedRefBase::make<rhizo::camera::CameraProvider>();
@@ -199,12 +199,11 @@ int main() {
   const std::string instance = std::string(rhizo::camera::CameraProvider::descriptor) + "/internal/0";
   binder_status_t status = AServiceManager_addService(provider->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
-    klogf("addService %s FAILED status=%d", instance.c_str(), status);
+    klogf("AServiceManager_addService %s failed with status %d", instance.c_str(), status);
     return 1;
   }
-  klogf("registered %s, joining thread pool", instance.c_str());
   ABinderProcess_startThreadPool();
   ABinderProcess_joinThreadPool();
-  klogf("joinThreadPool RETURNED (unexpected)");
+  klogf("ABinderProcess_joinThreadPool returned");
   return 1;
 }

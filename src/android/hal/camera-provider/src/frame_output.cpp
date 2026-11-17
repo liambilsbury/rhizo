@@ -17,7 +17,7 @@ constexpr size_t kMaxApp1Payload = 65535 - 2;
 constexpr int32_t kMinJpegQuality = 40;
 constexpr int32_t kQualityStep = 15;
 
-// a TIFF directory entry and its value bytes
+// a TIFF directory entry with value bytes
 struct IfdEntry {
   uint16_t tag;
   uint16_t type;
@@ -62,7 +62,7 @@ IfdEntry Undefined(uint16_t tag, const char (&bytes)[5]) {
   return {tag, kTypeUndefined, 4, std::vector<uint8_t>(bytes, bytes + 4)};
 }
 
-// return the size of an IFD with its out-of-line values
+// return the size of an IFD with out-of-line values
 size_t IfdSize(const std::vector<IfdEntry>& entries) {
   size_t size = 2 + 12 * entries.size() + 4;
   for (const IfdEntry& e : entries) {
@@ -71,7 +71,7 @@ size_t IfdSize(const std::vector<IfdEntry>& entries) {
   return size;
 }
 
-// write an IFD followed by its out-of-line values
+// write an IFD followed by the IFD's out-of-line values
 void WriteIfd(std::vector<uint8_t>& tiff, size_t at, const std::vector<IfdEntry>& entries, uint32_t next) {
   size_t values = at + 2 + 12 * entries.size() + 4;
   PutU16(tiff, at, static_cast<uint16_t>(entries.size()));
@@ -92,7 +92,7 @@ void WriteIfd(std::vector<uint8_t>& tiff, size_t at, const std::vector<IfdEntry>
   PutU32(tiff, pos, next);
 }
 
-// build the Exif TIFF, or empty when too large
+// build the Exif TIFF, or empty past kMaxApp1Payload
 std::vector<uint8_t> BuildTiff(const ExifInfo& info, const uint8_t* thumbnail, size_t thumbnailSize) {
   std::vector<IfdEntry> ifd0 = {
       Ascii(0x010F, info.make),
@@ -149,7 +149,7 @@ std::vector<uint8_t> BuildTiff(const ExifInfo& info, const uint8_t* thumbnail, s
   return tiff;
 }
 
-// return the descending JPEG qualities from a requested quality
+// return the descending JPEG qualities from asked
 std::vector<int32_t> Qualities(int32_t asked) {
   std::vector<int32_t> out = {std::clamp(asked, 1, 100)};
   for (int32_t q = out[0] - kQualityStep; q >= kMinJpegQuality; q -= kQualityStep) out.push_back(q);
@@ -174,7 +174,7 @@ uint16_t ExifOrientation(int32_t degrees) {
   }
 }
 
-// build an Exif APP1 segment, or empty when it cannot fit
+// build an Exif APP1 segment, or empty when BuildTiff returns empty
 std::vector<uint8_t> BuildExifApp1(const ExifInfo& info, const uint8_t* thumbnail, size_t thumbnailSize) {
   std::vector<uint8_t> tiff = BuildTiff(info, thumbnail, thumbnailSize);
   if (tiff.empty()) return {};
@@ -185,7 +185,7 @@ std::vector<uint8_t> BuildExifApp1(const ExifInfo& info, const uint8_t* thumbnai
   return seg;
 }
 
-// write a JPEG with its CameraBlob trailer, or return -1
+// write a JPEG with a CameraBlob trailer, or return -1
 ssize_t WriteJpegBlob(const I420View& image, int quality, const std::vector<uint8_t>& app1, uint8_t* blob,
                       size_t blobSize) {
   size_t a = app1.size();
@@ -202,7 +202,7 @@ ssize_t WriteJpegBlob(const I420View& image, int quality, const std::vector<uint
   return static_cast<ssize_t>(total);
 }
 
-// halve a crop of src until within twice dst's size
+// halve a crop of src while the crop exceeds twice dst's size
 I420View StepDown(const I420View& src, Rect* crop, int32_t dstWidth, int32_t dstHeight, Scratch& s) {
   I420View view = src;
   bool intoA = true;

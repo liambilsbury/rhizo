@@ -1,8 +1,8 @@
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index bf0a2e634..1842f134b 100644
+index 765ef4673..7249786f9 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -784,15 +784,70 @@ static bool sb_labels_by_transition(const struct cred_security_struct *crsec,
+@@ -785,15 +785,70 @@ static bool sb_labels_by_transition(const struct cred_security_struct *crsec,
  	       sb_behavior_seen(crsec, sb) == SECURITY_FS_USE_TRANS;
  }
  
@@ -74,7 +74,7 @@ index bf0a2e634..1842f134b 100644
  }
  
  /* return @sid with each ancestor of @state's transition from @task_sid to its own label of @sb */
-@@ -977,6 +1032,15 @@ static int bad_option(struct superblock_security_struct *sbsec, char flag,
+@@ -980,6 +1035,15 @@ static int bad_option(struct superblock_security_struct *sbsec, char flag,
  	return 0;
  }
  
@@ -90,7 +90,7 @@ index bf0a2e634..1842f134b 100644
  /*
   * Allow filesystems with binary mount data to explicitly set mount point
   * labeling information.
-@@ -1087,7 +1151,7 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
+@@ -1097,7 +1161,7 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
  
  	sbsec->creator_sid = creator_sid;
  	if (current_selinux_state != init_selinux_state)
@@ -99,7 +99,7 @@ index bf0a2e634..1842f134b 100644
  
  	if (strcmp(sb->s_type->name, "proc") == 0)
  		sbsec->flags |= SE_SBPROC | SE_SBGENFS;
-@@ -1383,6 +1447,10 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
+@@ -1393,6 +1457,10 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
  	newsbsec->flags = oldsbsec->flags;
  	if (current_selinux_state != init_selinux_state)
  		newsbsec->flags |= SE_SBNSLABEL;
@@ -110,7 +110,7 @@ index bf0a2e634..1842f134b 100644
  
  	newsbsec->sid = oldsbsec->sid;
  	newsbsec->def_sid = oldsbsec->def_sid;
-@@ -2446,8 +2514,8 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+@@ -2464,8 +2532,8 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
  {
  	const struct superblock_security_struct *sbsec =
  						selinux_superblock(dir->i_sb);
@@ -120,7 +120,7 @@ index bf0a2e634..1842f134b 100644
  	struct level_trans_arg arg = {
  		.tsid = dsec->sid, .tclass = tclass, .name = name,
  		.sb = dir->i_sb,
-@@ -2469,9 +2537,10 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+@@ -2487,9 +2555,10 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
  		   crsec->create_sid) {
  		*_new_isid = security_sid_primary(crsec->create_sid);
  		/* records the kernel built from the original caller's chain stay */
@@ -134,7 +134,7 @@ index bf0a2e634..1842f134b 100644
  			return 0;
  		}
  	} else {
-@@ -2482,10 +2551,13 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+@@ -2500,10 +2569,13 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
  			return rc;
  	}
  
@@ -150,7 +150,7 @@ index bf0a2e634..1842f134b 100644
  	return 0;
  }
  
-@@ -3302,6 +3374,14 @@ static void selinux_bprm_committed_creds(const struct linux_binprm *bprm)
+@@ -3320,6 +3392,14 @@ static void selinux_bprm_committed_creds(const struct linux_binprm *bprm)
  
  /* superblock security operations */
  
@@ -165,7 +165,7 @@ index bf0a2e634..1842f134b 100644
  static int selinux_sb_alloc_security(struct super_block *sb)
  {
  	struct superblock_security_struct *sbsec = selinux_superblock(sb);
-@@ -8721,6 +8801,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
+@@ -8793,6 +8873,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
  	LSM_HOOK_INIT(bprm_committing_creds, selinux_bprm_committing_creds),
  	LSM_HOOK_INIT(bprm_committed_creds, selinux_bprm_committed_creds),
  
@@ -174,10 +174,10 @@ index bf0a2e634..1842f134b 100644
  	LSM_HOOK_INIT(sb_mnt_opts_compat, selinux_sb_mnt_opts_compat),
  	LSM_HOOK_INIT(sb_remount, selinux_sb_remount),
 diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
-index 06653b8e1..3e89f0ffa 100644
+index 5fa843ced..3fac17ec6 100644
 --- a/security/selinux/include/objsec.h
 +++ b/security/selinux/include/objsec.h
-@@ -110,6 +110,7 @@ struct superblock_security_struct {
+@@ -116,6 +116,7 @@ struct superblock_security_struct {
  	u32 creator_sid; /* SID of privileged process */
  	unsigned short behavior; /* labeling behavior */
  	unsigned short flags; /* which mount options were specified */

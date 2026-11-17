@@ -100,15 +100,15 @@ class VideoEncoder : public android::SimpleC2Component {
 
  private:
   c2_status_t Open();
-  // publish the level that the csd's parameter sets signal
+  // publish the level_idc or general_level_idc of the csd's SPS
   void PublishSignalledLevel(const uint8_t* csd, size_t size);
   // handle coded output on the component's thread
   void OnOutput(const uint8_t* data, size_t size, uint64_t tag, int64_t pts, bool keyframe, bool codec_config);
   c2va::Status EncodeInput(const C2ConstGraphicBlock& block, uint64_t tag, int64_t pts, bool keyframe);
-  // finish a work item with its buffer and pending updates
+  // finish a work item with the output buffer and pending updates
   void Complete(uint64_t tag, const std::shared_ptr<C2Buffer>& buffer);
   static c2_status_t C2Status(c2va::Status status);
-  // send changed or forced resource needs to the client
+  // queue changed or forced C2ResourcesNeededTuning in updates_
   void RestateNeeds(bool force);
 
   std::shared_ptr<EncoderIntf> intf_;

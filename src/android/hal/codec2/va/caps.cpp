@@ -125,7 +125,7 @@ const char* ProfileName(VAProfile profile) {
 
 std::vector<ComponentCaps> QueryComponents(VADisplay dpy) {
   std::vector<ComponentCaps> out;
-  // virglrenderer's encode reference pictures are always 8-bit
+  // virglrenderer's encode reference pictures are 8-bit
   const bool virgl = IsVirgl(dpy);
   int max_profiles = vaMaxNumProfiles(dpy);
   if (max_profiles <= 0) return out;
@@ -148,7 +148,7 @@ std::vector<ComponentCaps> QueryComponents(VADisplay dpy) {
     for (VAProfile p : c.profiles) {
       if (std::find(listed.begin(), listed.end(), p) == listed.end()) continue;
       if (virgl && c.kind == Kind::kEncoder && TenBitOnly(p)) {
-        Logf("%s: %s left out behind virgl (the host's encode reference pictures are 8-bit)", c.name,
+        Logf("%s %s skipped on virgl", c.name,
              ProfileName(p));
         continue;
       }
@@ -163,7 +163,7 @@ std::vector<ComponentCaps> QueryComponents(VADisplay dpy) {
       VAConfigID config = VA_INVALID_ID;
       VAStatus st = vaCreateConfig(dpy, p, want, nullptr, 0, &config);
       if (st != VA_STATUS_SUCCESS) {
-        Logf("%s: %s offered but its config does not create: %s", c.name, ProfileName(p), vaErrorStr(st));
+        Logf("%s vaCreateConfig %s failed (%s)", c.name, ProfileName(p), vaErrorStr(st));
         continue;
       }
       Limits l = ConfigLimits(dpy, config, p, want);
@@ -176,7 +176,7 @@ std::vector<ComponentCaps> QueryComponents(VADisplay dpy) {
       }
       vaDestroyConfig(dpy, config);
       if (l.max_w == 0 || l.max_h == 0) {
-        Logf("%s: %s reports no maximum size, left out", c.name, ProfileName(p));
+        Logf("%s %s has no maximum size, skipped", c.name, ProfileName(p));
         continue;
       }
       caps.va_rate_controls = first ? rc_bits : (caps.va_rate_controls & rc_bits);
@@ -203,7 +203,7 @@ std::vector<ComponentCaps> QueryComponents(VADisplay dpy) {
     }
     if (caps.va_profiles.empty()) continue;
     if (c.kind == Kind::kEncoder && caps.va_rate_controls == 0) {
-      Logf("%s: no CBR, VBR or CQP rate control, left out", c.name);
+      Logf("%s has no CBR, VBR or CQP rate control, skipped", c.name);
       continue;
     }
     caps.min_from_driver = any_min;
@@ -213,7 +213,7 @@ std::vector<ComponentCaps> QueryComponents(VADisplay dpy) {
       caps.min_height = std::max(caps.min_height, c.floor_height);
     }
     if (caps.min_width > caps.max_width || caps.min_height > caps.max_height) {
-      Logf("%s: minimum %ux%u above maximum %ux%u, left out", c.name, caps.min_width, caps.min_height,
+      Logf("%s minimum %ux%u above maximum %ux%u, skipped", c.name, caps.min_width, caps.min_height,
            caps.max_width, caps.max_height);
       continue;
     }
@@ -221,16 +221,16 @@ std::vector<ComponentCaps> QueryComponents(VADisplay dpy) {
         c.kind == Kind::kEncoder ? kEncoderDeclaredMin : std::max(caps.min_width, caps.min_height);
     const uint32_t square_max = std::min(caps.max_width, caps.max_height);
     if (square_min > square_max) {
-      Logf("%s: no size within %ux%u..%ux%u both ways round, left out", c.name, caps.min_width, caps.min_height,
+      Logf("%s has no square size within %ux%u..%ux%u, skipped", c.name, caps.min_width, caps.min_height,
            caps.max_width, caps.max_height);
       continue;
     }
     if (caps.min_width != square_min || caps.min_height != square_min || caps.max_width != square_max ||
         caps.max_height != square_max) {
-      Logf("%s: %ux%u..%ux%u declared as %ux%u..%ux%u%s", c.name, caps.min_width, caps.min_height, caps.max_width,
+      Logf("%s %ux%u..%ux%u declared as %ux%u..%ux%u%s", c.name, caps.min_width, caps.min_height, caps.max_width,
            caps.max_height, square_min, square_min, square_max, square_max,
-           c.kind == Kind::kEncoder ? ", a smaller picture coded padded up to the driver's minimum"
-                                    : ", the sizes both orientations hold");
+           c.kind == Kind::kEncoder ? ", smaller pictures padded to the driver minimum"
+                                    : ", square bounds of both orientations");
     }
     caps.coded_min_width = c.kind == Kind::kEncoder ? caps.min_width : square_min;
     caps.coded_min_height = c.kind == Kind::kEncoder ? caps.min_height : square_min;

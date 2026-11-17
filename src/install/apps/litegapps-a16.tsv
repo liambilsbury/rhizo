@@ -1,4 +1,4 @@
-# member (nested archives as outer!inner!path)	dest relative to /product	sha256 of the member
+# member as outer!inner!path	dest under /product	sha256
 files/files.tar.xz!x86_64/36/system/product/priv-app/GmsCore/GmsCore.apk	priv-app/GmsCore/GmsCore.apk	51c4c8ef83f586139cfc678c4daff8fcab059c0a30e1470e19f3657b0cb1bf8f
 files/files.tar.xz!x86_64/36/system/system_ext/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk	priv-app/GoogleServicesFramework/GoogleServicesFramework.apk	472635abc238f82498960f4fc5e387058d61b34b4210027e7a35fd9cfddef07e
 files/files.tar.xz!x86_64/36/system/product/priv-app/Phonesky/Phonesky.apk	priv-app/Phonesky/Phonesky.apk	f8927c214b64ba7155d2d515406b7d39fe429a7cacd285ab96b2115042c9252f

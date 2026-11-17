@@ -1,9 +1,9 @@
 #!/bin/sh
-# check the capability policy for a unit
+# capability policy check with exit status 0 for an allowed capability
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# print the usage line and exit with status 255
-usage() { echo "usage: $0 <capability> | --any <capability>..." >&2; exit 255; }
+# print the synopsis and exit with status 255
+usage() { echo "$0 <capability> | --any <capability>..." >&2; exit 255; }
 if [ "${1:-}" = --any ]; then
   shift
   [ $# -ge 1 ] || usage

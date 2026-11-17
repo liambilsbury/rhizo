@@ -35,11 +35,11 @@ def render(sources):
     lines = [BEGIN]
     for src, _, _ in SOURCES:
         lines.append("# %s sha256=%s" % (src, hashlib.sha256(sources[src]).hexdigest()))
-    lines.append("rhizo_teardown_write() {  # rhizo_teardown_write <dir>")
+    lines.append("rhizo_teardown_write() {")
     for src, name, delim in SOURCES:
         encoded = base64.encodebytes(sources[src]).decode("ascii").rstrip("\n")
         if delim in encoded:
-            raise ValueError("%s's base64 contains its own delimiter %s" % (src, delim))
+            raise ValueError("base64 of %s contains delimiter %s" % (src, delim))
         if "/" in name:
             lines.append("  mkdir -p \"$1/%s\" || return 1" % os.path.dirname(name))
         lines.append("  base64 -d > \"$1/%s\" <<'%s' || return 1" % (name, delim))
@@ -58,7 +58,7 @@ def splice(postrm_text, block):
     begins = [i for i, l in enumerate(lines) if l == BEGIN]
     ends = [i for i, l in enumerate(lines) if l == END]
     if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
-        raise ValueError("%s needs exactly one %r line and one %r line after it" % (TEMPLATE, BEGIN, END))
+        raise ValueError("%s has no single %r line followed by one %r line" % (TEMPLATE, BEGIN, END))
     head = "\n".join(lines[:begins[0]])
     tail = "\n".join(lines[ends[0] + 1:])
     return (head + "\n" if head else "") + block + tail
@@ -72,22 +72,22 @@ def postrm_text(root=ROOT):
 
 
 def main():
-    """write debian/rhizo.postrm from its template"""
+    """write debian/rhizo.postrm from debian/rhizo.postrm.in"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true", required=True)
     ap.add_argument("--root", default=ROOT)
-    ap.add_argument("--out", help="where to write the postrm (default: debian/rhizo.postrm under --root)")
+    ap.add_argument("--out", help="postrm path, default debian/rhizo.postrm under --root")
     args = ap.parse_args()
     out = args.out or os.path.join(args.root, POSTRM)
     try:
         text = postrm_text(args.root)
     except (OSError, ValueError) as e:
-        print("FAIL: embed-teardown: %s" % e, file=sys.stderr)
+        print("%s" % e, file=sys.stderr)
         return 1
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(text)
     os.chmod(out, 0o755)
-    print("embed-teardown: wrote %s" % out)
+    print("wrote %s" % out)
     return 0
 
 

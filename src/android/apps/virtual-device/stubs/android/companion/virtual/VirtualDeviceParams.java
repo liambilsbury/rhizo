@@ -9,7 +9,7 @@ import java.util.concurrent.Executor;
 public final class VirtualDeviceParams {
     public static final int LOCK_STATE_ALWAYS_UNLOCKED = 1;
 
-    // forbid direct construction
+    // private constructor
     private VirtualDeviceParams() {}
 
     public static final class Builder {

@@ -17,7 +17,7 @@ namespace {
 void klog(const char* msg) {
   __android_log_print(ANDROID_LOG_INFO, "rhizo-stream-export", "%s", msg);
 }
-// format a message and write it to the Android log
+// write the formatted message to the Android log
 void klogf(const char* fmt, ...) {
   char buf[320];
   va_list ap;
@@ -77,26 +77,26 @@ bool StreamExportBackend::EnsureConnected() {
 
   int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) {
-    klogf("EnsureConnected: socket() failed errno=%d (%s)", errno, strerror(errno));
+    klogf("socket() failed errno=%d (%s)", errno, strerror(errno));
     return false;
   }
   struct sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   if (strlen(path) >= sizeof(addr.sun_path)) {
-    klogf("EnsureConnected: RHIZO_STREAM_SOCKET path too long: %s", path);
+    klogf("RHIZO_STREAM_SOCKET=%s is longer than sun_path", path);
     close(fd);
     return false;
   }
   strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
   if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
-    klogf("EnsureConnected: connect(%s) failed errno=%d (%s) -- no consumer, staying headless",
+    klogf("connect(%s) failed errno=%d (%s)",
           path, errno, strerror(errno));
     close(fd);
     return false;
   }
   impl_->fd = fd;
   impl_->nextSeq = 1;
-  klogf("EnsureConnected: connected to %s, presenting via the stream export path", path);
+  klogf("connected to %s", path);
   return true;
 }
 
@@ -108,7 +108,7 @@ void StreamExportBackend::Disconnect() {
   }
 }
 
-// send the frame and wait for its ack
+// call sendmsg with the frame header and dmabuf fd and wait for the release ack
 bool StreamExportBackend::Present(const StreamFrame& frame) {
   if (impl_->fd < 0) return false;
 
@@ -143,7 +143,7 @@ bool StreamExportBackend::Present(const StreamFrame& frame) {
   memcpy(CMSG_DATA(cmsg), &frame.dmabufFd, sizeof(int));
 
   if (sendmsg(impl_->fd, &msg, MSG_NOSIGNAL) != static_cast<ssize_t>(sizeof(hdr))) {
-    klogf("Present: sendmsg failed errno=%d (%s) seq=%llu -- dropping the connection",
+    klogf("sendmsg failed errno=%d (%s) seq=%llu",
           errno, strerror(errno), (unsigned long long)hdr.seq);
     Disconnect();
     return false;
@@ -152,7 +152,7 @@ bool StreamExportBackend::Present(const StreamFrame& frame) {
   struct pollfd pfd{impl_->fd, POLLIN, 0};
   int pr = poll(&pfd, 1, kAckWaitMs);
   if (pr <= 0) {
-    klogf("Present: no release ack for seq=%llu within %dms -- dropping the connection",
+    klogf("no release ack for seq=%llu within %dms",
           (unsigned long long)hdr.seq, kAckWaitMs);
     Disconnect();
     return false;
@@ -161,8 +161,8 @@ bool StreamExportBackend::Present(const StreamFrame& frame) {
   ssize_t n = recv(impl_->fd, &ack, sizeof(ack), MSG_WAITALL);
   if (n != static_cast<ssize_t>(sizeof(ack)) || ack.magic != RHIZO_STREAM_ACK_MAGIC ||
       ack.seq != hdr.seq) {
-    klogf("Present: malformed or mismatched release ack for seq=%llu (read n=%zd) -- "
-          "dropping the connection", (unsigned long long)hdr.seq, n);
+    klogf("malformed or mismatched release ack for seq=%llu (n=%zd)",
+          (unsigned long long)hdr.seq, n);
     Disconnect();
     return false;
   }

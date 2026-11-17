@@ -1,5 +1,5 @@
 #!/bin/bash
-# edit rhizo's cmdline tokens in the bootloader config
+# bootloader config functions for the rhizo cmdline tokens
 RHIZO_BL_ROOT="${RHIZO_BL_ROOT:-}"
 BL_KINDS="grub-dropin grub-inline limine sdboot"
 BL_MARK_BEGIN="# >>> rhizo"
@@ -55,19 +55,19 @@ bl_unsearchable() {
   return 1
 }
 
-# print a cannot-read message for a path
+# print the unreadable component of a path
 bl_unreadable() {
   local d t n="${2:-0}"
   if [[ -e "$1" ]]; then
     if [[ -r "$1" && ( ! -d "$1" || -x "$1" ) ]]; then return 1; fi
-    echo "cannot read $1 as uid $EUID"; return 0
+    echo "$1 is not readable by uid $EUID"; return 0
   fi
   if [[ -L "$1" ]] && (( n < BL_MAX_LINKS )); then
-    t=$(bl_link_target "$1") || { echo "cannot read $1 as uid $EUID"; return 0; }
+    t=$(bl_link_target "$1") || { echo "$1 is not readable by uid $EUID"; return 0; }
     bl_unreadable "$t" $((n + 1)); return
   fi
   d=$(bl_unsearchable "$1" "$n") || return 1
-  echo "cannot read $d as uid $EUID"
+  echo "$d is not readable by uid $EUID"
 }
 
 # print the limine.conf path
@@ -84,8 +84,7 @@ bl_limine_conf() {
     c="$RHIZO_BL_ROOT${esp%/}/limine.conf"
     if [[ -f "$c" ]]; then echo "$c"; return 0; fi
     if why=$(bl_unreadable "$c"); then echo "$why" >&2; return 2; fi
-    echo "limine-entry-tool's ESP_PATH is $esp, but there is no $c: mount the ESP at $esp, or set ESP_PATH to" \
-         "where it is mounted" >&2
+    echo "limine-entry-tool ESP_PATH is $esp, no $c" >&2
     return 2
   fi
   for c in "${BL_LIMINE_CONFS[@]}"; do
@@ -95,7 +94,7 @@ bl_limine_conf() {
   return 1
 }
 
-# print the bootloader kind of this host
+# print the bootloader kind of the host
 bootloader_kind() {
   local flavor why rc blocked="" untooled="" found=()
   if [[ -n "${RHIZO_BOOTLOADER:-}" ]]; then
@@ -107,52 +106,52 @@ bootloader_kind() {
     ubuntu)
       if [[ ! -f "$BL_GRUB_DEFAULT" ]]; then
         if why=$(bl_unreadable "$BL_GRUB_DEFAULT"); then echo "$why" >&2; return 2; fi
-        echo "no $BL_GRUB_DEFAULT -- this host does not use GRUB" >&2
+        echo "no $BL_GRUB_DEFAULT" >&2
         return 1
       fi
       bootloader_regen_installed grub-dropin \
-        || { echo "no update-grub in any of $(bl_system_dirs ', ') -- grub2-common is not installed" >&2; return 1; }
+        || { echo "no update-grub in $(bl_system_dirs ', ')" >&2; return 1; }
       echo grub-dropin; return 0 ;;
     cachyos) ;;
-    *) echo "cannot find the bootloader on $flavor" >&2; return 1 ;;
+    *) echo "host flavor $flavor is unsupported" >&2; return 1 ;;
   esac
   if bootloader_regen_installed limine; then
     if [[ -f "$BL_LIMINE_DEFAULT" ]]; then
       rc=0; why=$(bl_limine_conf 2>&1 >/dev/null) || rc=$?
       case $rc in 0) found+=(limine) ;; 2) blocked=$why ;; esac
     elif why=$(bl_unreadable "$BL_LIMINE_DEFAULT"); then blocked=$why; fi
-  elif [[ -f "$BL_LIMINE_DEFAULT" ]]; then untooled+="; $BL_LIMINE_DEFAULT is there, but no limine-update is"
+  elif [[ -f "$BL_LIMINE_DEFAULT" ]]; then untooled+="; $BL_LIMINE_DEFAULT exists without limine-update"
   fi
   if bootloader_regen_installed sdboot; then
     if [[ ! -f "$BL_SDBOOT_CONF" ]]; then
       if why=$(bl_unreadable "$BL_SDBOOT_CONF"); then blocked=$why; fi
     elif [[ -d "$BL_SDBOOT_ENTRIES" ]]; then found+=(sdboot)
     elif why=$(bl_unreadable "$BL_SDBOOT_ENTRIES"); then blocked=$why; fi
-  elif [[ -f "$BL_SDBOOT_CONF" ]]; then untooled+="; $BL_SDBOOT_CONF is there, but no sdboot-manage is"
+  elif [[ -f "$BL_SDBOOT_CONF" ]]; then untooled+="; $BL_SDBOOT_CONF exists without sdboot-manage"
   fi
   if bootloader_regen_installed grub-inline; then
     if [[ ! -f "$BL_GRUB_DEFAULT" ]]; then
       if why=$(bl_unreadable "$BL_GRUB_DEFAULT"); then blocked=$why; fi
     elif [[ -f "$BL_GRUB_CFG" ]]; then found+=(grub-inline)
     elif why=$(bl_unreadable "$BL_GRUB_CFG"); then blocked=$why; fi
-  elif [[ -f "$BL_GRUB_DEFAULT" ]]; then untooled+="; $BL_GRUB_DEFAULT is there, but no grub-mkconfig is"
+  elif [[ -f "$BL_GRUB_DEFAULT" ]]; then untooled+="; $BL_GRUB_DEFAULT exists without grub-mkconfig"
   fi
   if (( ${#found[@]} == 1 )); then echo "${found[0]}"; return 0; fi
   if (( ${#found[@]} > 1 )); then
-    echo "more than one bootloader is configured here (${found[*]}) -- set RHIZO_BOOTLOADER to the one that boots this machine" >&2
+    echo "more than one bootloader config (${found[*]})" >&2
     return 1
   fi
   if [[ -n "$blocked" ]]; then echo "$blocked" >&2; return 2; fi
   if [[ -f "$BL_REFIND_CONF" ]]; then
-    echo "this host boots through rEFInd, whose $BL_REFIND_CONF rhizo does not edit -- supported: limine, systemd-boot with sdboot-manage, grub" >&2
+    echo "rEFInd $BL_REFIND_CONF is unsupported" >&2
     return 1
   fi
   if why=$(bl_unreadable "$BL_REFIND_CONF"); then echo "$why" >&2; return 2; fi
   if [[ -n "$untooled" ]]; then
-    echo "${untooled#; } in any of $(bl_system_dirs ', ') to regenerate its config -- install it" >&2
+    echo "${untooled#; } in $(bl_system_dirs ', ')" >&2
     return 1
   fi
-  echo "no supported bootloader configuration found (looked for $BL_LIMINE_DEFAULT, $BL_SDBOOT_CONF, $BL_GRUB_DEFAULT)" >&2
+  echo "no $BL_LIMINE_DEFAULT, $BL_SDBOOT_CONF or $BL_GRUB_DEFAULT" >&2
   return 1
 }
 
@@ -174,7 +173,7 @@ bootloader_generated() {
     grub-dropin|grub-inline) echo "$BL_GRUB_CFG" ;;
     limine)
       bl_limine_conf || rc=$?
-      (( rc != 1 )) || echo "no limine.conf found (looked for ${BL_LIMINE_CONFS[*]})" >&2
+      (( rc != 1 )) || echo "no limine.conf in ${BL_LIMINE_CONFS[*]}" >&2
       return "$rc" ;;
     sdboot) echo "$BL_SDBOOT_ENTRIES" ;;
     *)      bl_bad_kind "$1" ;;
@@ -225,16 +224,16 @@ bl_regen_path() {
   return 1
 }
 
-# check the regeneration command exists
+# return whether the regeneration command exists
 bootloader_regen_installed() {
   bl_regen_path "$1" >/dev/null
 }
 
-# print the regeneration command line for this host
+# print the regeneration command line for the host
 bootloader_regen_host_cmd() {
   local usual path
   usual=$(bootloader_regen_cmd "$1") || return 1
-  path=$(bl_regen_path "$1") || { echo "this host has no $(bootloader_regen_label "$1")" >&2; return 1; }
+  path=$(bl_regen_path "$1") || { echo "no $(bootloader_regen_label "$1")" >&2; return 1; }
   echo "$path${usual#"${usual%% *}"}"
 }
 
@@ -270,22 +269,21 @@ bootloader_regen() {
   if [[ "$1" == limine && -e "$BL_LIMINE_REMOVE_LIST.rhizo-regen" ]]; then
     if ! { cat -- "$BL_LIMINE_REMOVE_LIST.rhizo-regen" >> "$BL_LIMINE_REMOVE_LIST" \
            && rm -f -- "$BL_LIMINE_REMOVE_LIST.rhizo-regen"; } 2>&1; then
-      echo "could not put the record an interrupted run left in $BL_LIMINE_REMOVE_LIST.rhizo-regen back onto" \
-           "$BL_LIMINE_REMOVE_LIST"
+      echo "failed to append $BL_LIMINE_REMOVE_LIST.rhizo-regen to $BL_LIMINE_REMOVE_LIST"
       return 1
     fi
   fi
-  path=$(bl_regen_path "$1") || { echo "this host has no $(bootloader_regen_label "$1")"; return 127; }
+  path=$(bl_regen_path "$1") || { echo "no $(bootloader_regen_label "$1")"; return 127; }
   if [[ "$1" == limine && -e "$BL_LIMINE_REMOVE_LIST" ]]; then
     aside="$BL_LIMINE_REMOVE_LIST.rhizo-regen"
     if ! mv -f -- "$BL_LIMINE_REMOVE_LIST" "$aside" 2>&1; then
-      echo "could not set $BL_LIMINE_REMOVE_LIST aside"
+      echo "failed to move $BL_LIMINE_REMOVE_LIST to $aside"
       return 1
     fi
   fi
   PATH="${PATH:+$PATH:}$(bl_system_dirs :)" "$RHIZO_BL_ROOT$path" "${args[@]}" 2>&1 || rc=$?
   if [[ -n "$aside" ]] && ! mv -f -- "$aside" "$BL_LIMINE_REMOVE_LIST" 2>&1; then
-    echo "could not put $BL_LIMINE_REMOVE_LIST back from $aside"
+    echo "failed to move $aside to $BL_LIMINE_REMOVE_LIST"
     (( rc )) || rc=1
   fi
   return "$rc"
@@ -308,19 +306,19 @@ bl_block_get() {
   awk -v b="$BL_MARK_BEGIN" -v e="$BL_MARK_END" "$BL_AWK_L"' l == b {on = 1} on {print} l == e {on = 0}' "$1"
 }
 
-# check a file for rhizo's begin marker
+# return whether a file has the rhizo begin marker
 bl_block_has() {
   awk -v b="$BL_MARK_BEGIN" "$BL_AWK_L"' l == b {found = 1} END {exit !found}' "$1"
 }
 
-# check a file's begin and end markers
+# return whether a file's begin and end markers pair up
 bl_block_check() {
   local rc=0
   awk -v b="$BL_MARK_BEGIN" -v e="$BL_MARK_END" "$BL_AWK_L"' l == b {if (open) bad = 1; open = 1} l == e {open = 0} END {if (open || bad) exit 3}' "$1" || rc=$?
   case $rc in
     0) return 0 ;;
-    3) echo "$1 has a '$BL_MARK_BEGIN' line with no '$BL_MARK_END' line after it -- fix the file by hand" >&2 ;;
-    *) echo "cannot read $1: awk exited $rc" >&2 ;;
+    3) echo "$1 has a '$BL_MARK_BEGIN' line without a later '$BL_MARK_END' line" >&2 ;;
+    *) echo "awk failed on $1 with exit status $rc" >&2 ;;
   esac
   return 1
 }
@@ -433,30 +431,29 @@ bl_tokens_ok() {
     *"  "*)   why="a double space" ;;
     *)        return 0 ;;
   esac
-  echo "the token string has $why; tokens are separated by single spaces only" >&2
+  echo "the token string has $why" >&2
   return 1
 }
 
-# check the bootloader config sets a base cmdline
+# return whether the bootloader config sets a base cmdline
 bl_base_check() {
   local kind="$1" file="$2" rc=0 re msg set
   case "$kind" in
     limine)
       set=$(bl_limine_settings) || return 1
       awk -F '\t' '$2 == "default" && ($1 == "=" || $5 ~ /[^[:space:]]/) {found = 1} END {exit !found}' <<<"$set" && return 0
-      echo "neither $file nor limine-entry-tool's own config files set KERNEL_CMDLINE[default] -- copy the" \
-           "running cmdline into KERNEL_CMDLINE[default] in $file first" >&2
+      echo "no KERNEL_CMDLINE[default] in $file or the limine-entry-tool config files" >&2
       return 1 ;;
     sdboot)
       re='^[[:space:]]*LINUX_OPTIONS='
-      msg="$file sets no LINUX_OPTIONS -- copy the running cmdline into LINUX_OPTIONS there first" ;;
+      msg="$file sets no LINUX_OPTIONS" ;;
     *) return 0 ;;
   esac
   bl_outside_has "$file" "$re" || rc=$?
   case $rc in
     0) return 0 ;;
     1) echo "$msg" >&2 ;;
-    *) echo "cannot read $file" >&2 ;;
+    *) echo "failed to read $file" >&2 ;;
   esac
   return 1
 }
@@ -487,7 +484,7 @@ bootloader_write() {
   file=$(bootloader_config_file "$kind") || return 1
   bl_tokens_ok "$tokens" || return 1
   if [[ "$kind" != grub-dropin ]]; then
-    [[ -f "$file" ]] || { echo "no $file to put rhizo's tokens in" >&2; return 1; }
+    [[ -f "$file" ]] || { echo "no $file" >&2; return 1; }
     bl_block_check "$file" || return 1
     bl_base_check "$kind" "$file" || return 1
   fi
@@ -496,7 +493,7 @@ bootloader_write() {
     mkdir -p "$(dirname "$file")" && bl_replace "$(bl_dropin_mode "$file")" "$file" bl_grub_dropin_text "$tokens"
   else
     bl_replace keep "$file" bl_block_rewrite "$kind" "$tokens" "$file"
-  fi || { BL_SAVED_KIND=""; echo "could not write $file" >&2; return 1; }
+  fi || { BL_SAVED_KIND=""; echo "failed to write $file" >&2; return 1; }
 }
 
 # write rhizo's tokens and regenerate the config
@@ -510,14 +507,14 @@ bootloader_restore() {
   local kind="$1" file
   file=$(bootloader_config_file "$kind") || return 1
   if [[ "$BL_SAVED_KIND" != "$kind" ]]; then
-    echo "no bootloader_write for $kind in this shell to roll back" >&2
+    echo "BL_SAVED_KIND is not $kind" >&2
     return 1
   fi
   if [[ "$kind" == grub-dropin ]]; then
     if (( BL_SAVED_HAD )); then bl_replace "$(bl_dropin_mode "$file")" "$file" bl_saved_text; else rm -f "$file"; fi
   else
     bl_replace keep "$file" bl_saved_text
-  fi || { echo "could not restore $file" >&2; return 1; }
+  fi || { echo "failed to restore $file" >&2; return 1; }
 }
 
 # restore the replaced text and regenerate
@@ -527,7 +524,7 @@ bootloader_rollback() {
   BL_SAVED_KIND=""
 }
 
-# check a kind's config file holds the tokens
+# return whether a kind's config file has the tokens
 bootloader_config_current() {
   local kind="$1" tokens="$2" file want
   file=$(bootloader_config_file "$kind") || return 1
@@ -541,7 +538,7 @@ bootloader_config_current() {
   fi
 }
 
-# check a kind's file for rhizo's tokens
+# return whether a kind's file has the rhizo tokens
 bootloader_present() {
   local file why rc=0
   file=$(bootloader_config_file "$1") || return 1
@@ -555,7 +552,7 @@ bootloader_present() {
   bl_block_has "$file" || rc=$?
   case $rc in
     0|1) return "$rc" ;;
-    *)   echo "cannot read $file: awk exited $rc" >&2; return 3 ;;
+    *)   echo "awk failed on $file with exit status $rc" >&2; return 3 ;;
   esac
 }
 
@@ -695,7 +692,7 @@ BL_AWK_SH='
   }
   function mine(x,    o) { o = ""; while (length(o) < length(x)) o = o me; return o }
   function not_plain() {
-    printf "cannot read %s in %s: it is not plain assignments (line %d)\n", label, FILENAME, FNR > "/dev/stderr"
+    printf "%s in %s line %d is not a plain assignment\n", label, FILENAME, FNR > "/dev/stderr"
     failed = 1; exit 1
   }
   # assign a value to a variable
@@ -703,7 +700,7 @@ BL_AWK_SH='
     if (bad == "" && add && (nm in unknown)) bad = "$" nm
     if (bad != "") {
       if (nm ~ want) {
-        printf "cannot read %s in %s: its value has %s\n", nm, FILENAME, \
+        printf "%s in %s has %s in the value\n", nm, FILENAME, \
           bad > "/dev/stderr"
         failed = 1; exit 1
       }
@@ -948,7 +945,7 @@ bootloader_missing() {
       lines=$(bl_next_cmdlines "$kind") || rc=$?
       (( rc != 2 )) || return 2
       if (( rc != 0 )); then
-        echo "cannot read the cmdlines in $(bootloader_generated "$kind")" >&2
+        echo "failed to read the cmdlines in $(bootloader_generated "$kind")" >&2
         return 1
       fi
       for tok in $tokens; do
@@ -960,13 +957,13 @@ bootloader_missing() {
   esac
 }
 
-# print each entry and the tokens it lacks
+# print each entry and the tokens the entry lacks
 bootloader_missing_entries() {
   local - entries line where prev="" cmd acc="" tok out rc=0
   bl_tokens_ok "$2" || return 1
   entries=$(bl_next_entries "$1") || rc=$?
   (( rc != 2 )) || return 2
-  if (( rc != 0 )); then echo "cannot read the cmdlines in $(bootloader_generated "$1")" >&2; return 1; fi
+  if (( rc != 0 )); then echo "failed to read the cmdlines in $(bootloader_generated "$1")" >&2; return 1; fi
   set -f
   [[ -n "$entries" ]] || entries="$(bootloader_generated "$1")"$'\t'
   while IFS= read -r line; do
@@ -984,7 +981,7 @@ bootloader_missing_entries() {
 
 BL_EXCLUSIVE_LSMS="selinux apparmor smack"
 
-# print the cmdline words matching the names
+# print the cmdline key=value words whose key is in $1
 bl_settings() {
   local - w n
   set -f
@@ -1042,7 +1039,7 @@ bl_bool() {
     *) return 1 ;;
   esac
 }
-# print the last valid setting among the names
+# print the last setting of the keys in $2 whose value passes $1
 bl_last_taken() {
   local s last=""
   while IFS= read -r s; do
@@ -1054,14 +1051,14 @@ bl_last_taken() {
 bl_loop_builtin() {
   local rel f rc=0
   if ! rel=$(uname -r); then
-    echo "cannot tell whether loop is built into the running kernel: uname -r failed" >&2; return 2
+    echo "uname -r failed" >&2; return 2
   fi
   f="${RHIZO_BL_MODULES_BUILTIN:-$RHIZO_BL_ROOT/lib/modules/$rel/modules.builtin}"
   if [[ -f "$f" ]]; then grep -q '/loop\.ko$' "$f" || rc=$?; else rc=2; fi
-  (( rc < 2 )) || { echo "cannot tell whether loop is built into $rel: $f cannot be read" >&2; return 2; }
+  (( rc < 2 )) || { echo "failed to read $f" >&2; return 2; }
   return "$rc"
 }
-# test for selinux first among exclusive LSMs
+# return whether selinux is first among the exclusive LSMs
 bl_lsm_selinux_major() {
   local - l
   set -f
@@ -1070,7 +1067,7 @@ bl_lsm_selinux_major() {
   done
   return 1
 }
-# test for bpf ahead of selinux
+# return whether bpf is ahead of selinux
 bl_lsm_bpf_first() {
   local - l
   set -f
@@ -1082,7 +1079,7 @@ bl_lsm_bpf_first() {
   done
   return 1
 }
-# test for a usable selinux major LSM
+# return whether selinux is a usable major LSM
 bl_lsm_selinux_usable() { bl_lsm_selinux_major "$1" && ! bl_lsm_bpf_first "$1"; }
 
 # print each token a later setting overrides
@@ -1137,23 +1134,22 @@ bl_cmdline_overridden() {
   fi
 }
 
-# print the LSM list fault and its fix
+# print the LSM list fault and the expected order
 bl_lsm_fault() {
   local - l
   set -f
   if [[ ",$1," != *",selinux,"* ]]; then
-    printf '%s\n' "leaves selinux out of the LSM list" "add selinux to it"
+    printf '%s\n' "has no selinux" "expected selinux in the LSM list"
     return
   fi
   for l in ${1//,/ }; do
     [[ " $BL_EXCLUSIVE_LSMS " != *" $l "* ]] || break
   done
   if [[ "$l" == selinux ]]; then
-    printf '%s\n' "puts bpf before selinux, so /proc/<pid>/attr answers EINVAL and no SELinux context can be read or set" \
-      "put selinux before bpf in it"
+    printf '%s\n' "has bpf ahead of selinux" "expected selinux ahead of bpf"
     return
   fi
-  printf '%s\n' "puts $l before selinux, so $l is the major LSM" "put selinux before $l in it"
+  printf '%s\n' "has $l ahead of selinux" "expected selinux ahead of $l"
 }
 
 # print the override message for a token
@@ -1163,21 +1159,16 @@ bl_override_why() {
     lsm)
       { IFS= read -r what; IFS= read -r fix; } <<<"$(bl_lsm_fault "${2#*=}")"
       if [[ "$1" == security=* ]]; then
-        echo "the host's own $2, set by $3, voids rhizo's $1, as the kernel ignores security= beside any lsm=, and" \
-             "$what -- remove that lsm= from the host's own line, or $fix"
+        echo "the host $2 from $3 overrides rhizo's $1 and $what, $fix"
       else
-        echo "the host's own $2, set by $3, comes after rhizo's $1 on the next boot's cmdline and $what -- remove" \
-             "that lsm= from the host's own line, or $fix"
+        echo "the host $2 from $3 follows rhizo's $1 and $what, $fix"
       fi ;;
     selinux)
-      echo "the host's own $2, set by $3, turns selinux off on the next boot -- remove that $key= from the host's" \
-           "own line" ;;
+      echo "the host $2 from $3 disables selinux" ;;
     loop.max_loop|max_loop|audit_backlog_limit)
-      echo "the host's own $2, set by $3, comes after rhizo's $1 on the next boot's cmdline and asks for less --" \
-           "remove that $key= from the host's own line, or raise it to at least ${1#*=}" ;;
+      echo "the host $2 from $3 follows rhizo's $1 and is lower than ${1#*=}" ;;
     *)
-      echo "the host's own $2, set by $3, comes after rhizo's $1 on the next boot's cmdline and takes effect instead" \
-           "-- remove that $key= from the host's own line" ;;
+      echo "the host $2 from $3 follows rhizo's $1" ;;
   esac
 }
 
@@ -1195,7 +1186,7 @@ bootloader_overridden() {
   printf '%s' "$out"
 }
 
-# print the tokens present or absent on cmdlines
+# print the tokens on or off the cmdlines
 bl_tokens_where() {
   local - now tok where seen=" "
   now=$(bootloader_cmdline_tokens "$1") || return
@@ -1214,7 +1205,7 @@ bootloader_lost() {
   bl_tokens_where "$1" "$2" off
 }
 
-# print each token some cmdline carries
+# print each token on some cmdline
 bootloader_remaining() {
   bl_tokens_where "$1" "$2" on
 }
@@ -1256,7 +1247,7 @@ bl_limine_settings() {
       v = substr(l, RSTART + RLENGTH); sub(/[[:space:]]+$/, "", v)
       if (length(v) > 1 && v ~ /^".*"$/) v = substr(v, 2, length(v) - 2)
       print op "\t" key "\t" name "\t" FILENAME "\t" v }' "${files[@]}" \
-    || { echo "cannot read ${files[*]}" >&2; return 1; }
+    || { echo "failed to read ${files[*]}" >&2; return 1; }
 }
 
 # print the words limine files put on cmdlines
@@ -1298,7 +1289,7 @@ bl_host_words() {
   if [[ "$1" == grub-dropin ]]; then
     for f in "${BL_HOST_SRCS[@]}"; do
       [[ -e "$f" ]] || continue
-      named=$(bl_assigned_words "$f" "$BL_HOST_ERE" named) || { echo "cannot read $f" >&2; return 1; }
+      named=$(bl_assigned_words "$f" "$BL_HOST_ERE" named) || { echo "failed to read $f" >&2; return 1; }
       [[ -z "$named" ]] || awk -F '\t' -v f="$f" '{print $1 "\t" f "\t" $2}' <<<"$named"
     done
     return 0
@@ -1318,13 +1309,13 @@ bl_host_lines() {
   case "$1" in
     limine)
       rc=0; entries=$(bl_next_entries limine) || rc=$?
-      (( rc != 1 )) || { echo "cannot read the cmdlines in $(bootloader_generated limine)" >&2; return 1; }
+      (( rc != 1 )) || { echo "failed to read the cmdlines in $(bootloader_generated limine)" >&2; return 1; }
       (( rc == 0 )) || return "$rc"
       [[ -n "$entries" ]] || return 0
       set=$(bl_limine_settings) || return
       if [[ -e "$BL_KERNEL_CMDLINE" ]]; then
         kcmd=$(awk '{for (i = 1; i <= NF; i++) printf "%s%s", (n++ ? " " : ""), $i}' "$BL_KERNEL_CMDLINE") \
-          || { echo "cannot read $BL_KERNEL_CMDLINE" >&2; return 1; }
+          || { echo "failed to read $BL_KERNEL_CMDLINE" >&2; return 1; }
       fi
       awk -F '\t' -v kcmd="$kcmd" '
         function key(k) { return (k in line) ? k : "default" }
@@ -1373,7 +1364,7 @@ bootloader_host_tokens() {
   words=$(awk -F '\t' '{print $3}' <<<"$words")
   if [[ "$1" == limine && -e "$BL_KERNEL_CMDLINE" ]]; then
     words+=$'\n'$(awk '{for (i = 1; i <= NF; i++) print $i}' "$BL_KERNEL_CMDLINE") \
-      || { echo "cannot read $BL_KERNEL_CMDLINE" >&2; return 1; }
+      || { echo "failed to read $BL_KERNEL_CMDLINE" >&2; return 1; }
   fi
   awk 'NF' <<<"$words" | LC_ALL=C sort -u
 }
@@ -1388,7 +1379,7 @@ bootloader_token_source() {
   case $rc in
     0) echo "$BL_KERNEL_CMDLINE" ;;
     1) ;;
-    *) echo "cannot read $BL_KERNEL_CMDLINE" >&2; return 1 ;;
+    *) echo "failed to read $BL_KERNEL_CMDLINE" >&2; return 1 ;;
   esac
 }
 
@@ -1421,7 +1412,7 @@ bootloader_strip() {
   elif [[ -f "$file" ]]; then
     bl_block_check "$file" || return 1
     if bl_block_has "$file"; then
-      bl_replace keep "$file" bl_block_strip "$file" || { echo "could not write $file" >&2; return 1; }
+      bl_replace keep "$file" bl_block_strip "$file" || { echo "failed to write $file" >&2; return 1; }
     fi
   fi
 }
@@ -1432,11 +1423,11 @@ bl_tool_path() {
   for dir in $BL_SYSTEM_DIRS; do
     if [[ -x "$RHIZO_BL_ROOT$dir/$1" ]]; then echo "$RHIZO_BL_ROOT$dir/$1"; return 0; fi
   done
-  echo "this host has no $1 in any of $(bl_system_dirs ', ')" >&2
+  echo "no $1 in $(bl_system_dirs ', ')" >&2
   return 1
 }
 
-# check that a boot entry id names a Rhizo kernel
+# return whether a boot entry id ends in -rhizo
 bl_rhizo_entry() {
   local name="${1##*[/>]}"
   name=${name%.conf}; name=${name#gnulinux-}; name=${name%-advanced-*}; name=${name%-fallback}
@@ -1446,13 +1437,13 @@ bl_rhizo_entry() {
 # print an EFI variable's value as text
 bl_efivar_read() {
   [[ -e "$1" ]] || return 0
-  tail -c +5 "$1" | tr -d '\0' || { echo "cannot read $1" >&2; return 1; }
+  tail -c +5 "$1" | tr -d '\0' || { echo "failed to read $1" >&2; return 1; }
 }
 
 # write an EFI variable's attributes and NUL-terminated value
 bl_efivar_write() {
   local tmp i rc=0
-  [[ -d "$BL_EFIVARS" ]] || { echo "no $BL_EFIVARS, so this host's boot loader reads no EFI variable" >&2; return 1; }
+  [[ -d "$BL_EFIVARS" ]] || { echo "no $BL_EFIVARS" >&2; return 1; }
   tmp=$(mktemp) || return 1
   {
     printf '\007\000\000\000'
@@ -1463,8 +1454,8 @@ bl_efivar_write() {
       printf '%s\0' "$3"
     fi
   } > "$tmp" || rc=1
-  if (( rc == 0 )) && [[ -e "$1" ]] && ! chattr -i "$1"; then echo "cannot clear the immutable flag of $1" >&2; rc=1; fi
-  if (( rc == 0 )) && ! dd if="$tmp" of="$1" bs=4096 status=none; then echo "cannot write $1" >&2; rc=1; fi
+  if (( rc == 0 )) && [[ -e "$1" ]] && ! chattr -i "$1"; then echo "chattr -i $1 failed" >&2; rc=1; fi
+  if (( rc == 0 )) && ! dd if="$tmp" of="$1" bs=4096 status=none; then echo "failed to write $1" >&2; rc=1; fi
   rm -f "$tmp"
   return "$rc"
 }
@@ -1472,15 +1463,15 @@ bl_efivar_write() {
 # remove an EFI variable
 bl_efivar_remove() {
   [[ -e "$1" ]] || return 0
-  chattr -i "$1" || { echo "cannot clear the immutable flag of $1" >&2; return 1; }
-  rm -f "$1" || { echo "cannot remove $1" >&2; return 1; }
+  chattr -i "$1" || { echo "chattr -i $1 failed" >&2; return 1; }
+  rm -f "$1" || { echo "failed to remove $1" >&2; return 1; }
 }
 
 # print a grubenv variable's value
 bl_grub_env_get() {
   [[ -e "$BL_GRUB_ENV" ]] || return 0
   awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$BL_GRUB_ENV" \
-    || { echo "cannot read $BL_GRUB_ENV" >&2; return 1; }
+    || { echo "failed to read $BL_GRUB_ENV" >&2; return 1; }
 }
 
 # print grub.cfg's menu entry ids with their submenus
@@ -1493,7 +1484,7 @@ bl_grub_entry_ids() {
     /^[[:space:]]*submenu[[:space:]]/ { sub_id = idof($0); next }
     /^}/ { sub_id = "" }
     /^[[:space:]]*menuentry[[:space:]]/ { id = idof($0); if (id != "") print (sub_id != "" ? sub_id ">" : "") id }
-  ' "$BL_GRUB_CFG" || { echo "cannot read $BL_GRUB_CFG" >&2; return 1; }
+  ' "$BL_GRUB_CFG" || { echo "failed to read $BL_GRUB_CFG" >&2; return 1; }
 }
 
 # print grub.cfg's default line value
@@ -1501,7 +1492,7 @@ bl_grub_cfg_default() {
   # shellcheck disable=SC2016
   awk '/^[[:space:]]*set[[:space:]]+default=/ { v = $0; sub(/^[^=]*=/, "", v); gsub(/"/, "", v)
                                                 if (v != "${next_entry}") last = v }
-       END { print last }' "$BL_GRUB_CFG" || { echo "cannot read $BL_GRUB_CFG" >&2; return 1; }
+       END { print last }' "$BL_GRUB_CFG" || { echo "failed to read $BL_GRUB_CFG" >&2; return 1; }
 }
 
 # print the stored default entry id for a kind
@@ -1531,7 +1522,7 @@ bl_entry_ids() {
   local out line f k
   case "$1" in
     limine)
-      out=$(bl_next_entries limine) || { echo "cannot read the entries in $(bootloader_generated limine)" >&2; return 1; }
+      out=$(bl_next_entries limine) || { echo "failed to read the entries in $(bootloader_generated limine)" >&2; return 1; }
       [[ -z "$out" ]] && return 0
       while IFS= read -r line; do line=${line%%$'\t'*}; echo "${line#* entry }"; done <<<"$out" ;;
     sdboot)
@@ -1554,7 +1545,7 @@ bl_first_entry() {
   done <<<"$ids"
 }
 
-# check that the next boot lists an entry id
+# return whether bl_entry_ids prints an entry id
 bl_entry_exists() {
   local ids numeric='^[0-9>]+$'
   [[ "$1" != grub-* || ! "$2" =~ $numeric ]] || return 0
@@ -1573,30 +1564,30 @@ bl_default_set() {
     grub-dropin|grub-inline)
       tool=$(bl_tool_path grub-editenv) || return 1
       if [[ "$2" == - ]]; then
-        "$tool" "$BL_GRUB_ENV" unset saved_entry || { echo "grub-editenv could not unset saved_entry in $BL_GRUB_ENV" >&2; return 1; }
+        "$tool" "$BL_GRUB_ENV" unset saved_entry || { echo "grub-editenv $BL_GRUB_ENV unset saved_entry failed" >&2; return 1; }
       else
-        "$tool" "$BL_GRUB_ENV" set "saved_entry=$2" || { echo "grub-editenv could not set saved_entry in $BL_GRUB_ENV" >&2; return 1; }
+        "$tool" "$BL_GRUB_ENV" set "saved_entry=$2" || { echo "grub-editenv $BL_GRUB_ENV set saved_entry failed" >&2; return 1; }
       fi ;;
     *) bl_bad_kind "$1" ;;
   esac
 }
 
-# check a kind can make the Rhizo kernel its default
+# return whether a kind can set the Rhizo kernel as the default entry
 bootloader_rhizo_default_preflight() {
   local kind="$1" conf id
   case "$kind" in
     limine)
       conf=$(bootloader_generated limine) || return 1
       grep -q '^[[:space:]]*remember_last_entry:[[:space:]]*yes' "$conf" \
-        || { echo "$conf does not set remember_last_entry: yes, so Limine reads no LimineLastBootedEntry" >&2; return 1; }
-      [[ -d "$BL_EFIVARS" ]] || { echo "no $BL_EFIVARS, so this host's boot loader reads no EFI variable" >&2; return 1; } ;;
+        || { echo "$conf does not set remember_last_entry: yes" >&2; return 1; }
+      [[ -d "$BL_EFIVARS" ]] || { echo "no $BL_EFIVARS" >&2; return 1; } ;;
     sdboot)
-      [[ -d "$BL_EFIVARS" ]] || { echo "no $BL_EFIVARS, so this host's boot loader reads no EFI variable" >&2; return 1; } ;;
+      [[ -d "$BL_EFIVARS" ]] || { echo "no $BL_EFIVARS" >&2; return 1; } ;;
     grub-dropin|grub-inline) bl_tool_path grub-editenv >/dev/null || return 1 ;;
     *) bl_bad_kind "$kind"; return ;;
   esac
   id=$(bl_first_entry "$kind" rhizo) || return 1
-  [[ -n "$id" ]] || { echo "$(bootloader_generated "$kind") lists no Rhizo kernel entry -- is the Rhizo kernel installed?" >&2; return 1; }
+  [[ -n "$id" ]] || { echo "$(bootloader_generated "$kind") lists no Rhizo kernel entry" >&2; return 1; }
 }
 
 # make the Rhizo kernel the default boot entry
@@ -1607,7 +1598,7 @@ bootloader_make_rhizo_default() {
   prev=$(bl_default_stored "$kind") || return 1
   if ! grep -q '^rhizo-kernel-default ' "$record" 2>/dev/null; then
     { mkdir -p "$(dirname "$record")" && echo "rhizo-kernel-default ${prev:--}" >> "$record"; } \
-      || { echo "cannot record the previous default entry in $record" >&2; return 1; }
+      || { echo "failed to write the previous default entry to $record" >&2; return 1; }
     added=1
   fi
   if bl_default_set "$kind" "$id"; then
@@ -1615,16 +1606,16 @@ bootloader_make_rhizo_default() {
       echo "$id"
       return 0
     fi
-    echo "set $id as the default, but the next boot takes '${now:-the first entry}'" >&2
-    bl_default_set "$kind" "${prev:--}" || echo "could not put the stored default back to '${prev:--}'" >&2
+    echo "the default entry is '${now:-the first entry}' after setting $id" >&2
+    bl_default_set "$kind" "${prev:--}" || echo "failed to restore the stored default '${prev:--}'" >&2
   fi
   if (( added )) && ! sed -i '/^rhizo-kernel-default /d' "$record"; then
-    echo "could not drop the rhizo-kernel-default line from $record" >&2
+    echo "failed to remove the rhizo-kernel-default line from $record" >&2
   fi
   return 1
 }
 
-# restore the default boot entry the record keeps
+# restore the default boot entry in the record
 bootloader_restore_default() {
   local kind="$1" record="$2" line prev now target rc=0
   line=$(grep -m1 '^rhizo-kernel-default ' "$record" 2>/dev/null) || return 0
@@ -1646,8 +1637,8 @@ bootloader_restore_default() {
     bl_default_set "$kind" "$target" || return 1
     now=$(bl_default_stored "$kind") || return 1
     [[ "${now:--}" == "$target" ]] \
-      || { echo "set the stored default back to '$target', but it reads '${now:--}'" >&2; return 1; }
+      || { echo "the stored default is '${now:--}' after setting '$target'" >&2; return 1; }
     echo "restored $target"
   fi
-  sed -i '/^rhizo-kernel-default /d' "$record" || { echo "could not drop the rhizo-kernel-default line from $record" >&2; return 1; }
+  sed -i '/^rhizo-kernel-default /d' "$record" || { echo "failed to remove the rhizo-kernel-default line from $record" >&2; return 1; }
 }

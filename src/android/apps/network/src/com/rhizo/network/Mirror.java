@@ -15,7 +15,7 @@ import android.util.Log;
 
 import java.util.List;
 
-// receive the host's mirrored SSID and Wi-Fi settings resets
+// BroadcastReceiver for mirrored SSIDs and NETWORK_SETTINGS_RESET
 public class Mirror extends BroadcastReceiver {
     static final String TAG = "RhizoNetwork";
     static final String ACTION_RESET = "android.net.wifi.action.NETWORK_SETTINGS_RESET";
@@ -28,7 +28,7 @@ public class Mirror extends BroadcastReceiver {
 
     private static final Object LOCK = new Object();
 
-    // the code and summary of a broadcast result
+    // code and data of a broadcast result
     static final class Outcome {
         final int code;
         final String data;
@@ -39,7 +39,7 @@ public class Mirror extends BroadcastReceiver {
         }
     }
 
-    // a request run on a worker thread
+    // Runnable for handle on the rhizo-mirror thread
     static final class Apply implements Runnable {
         private final Context mContext;
         private final Intent mIntent;
@@ -66,7 +66,7 @@ public class Mirror extends BroadcastReceiver {
         }
     }
 
-    // apply the request off the main thread
+    // call handle on a rhizo-mirror thread
     @Override
     public void onReceive(Context context, Intent intent) {
         boolean ordered = isOrderedBroadcast();
@@ -74,7 +74,7 @@ public class Mirror extends BroadcastReceiver {
                 "rhizo-mirror").start();
     }
 
-    // run a mirror or reset request
+    // apply a mirror or ACTION_RESET intent
     static Outcome handle(Context ctx, Intent intent) {
         boolean debug = intent.getBooleanExtra("debug", false);
         boolean reset = ACTION_RESET.equals(intent.getAction());
@@ -84,20 +84,19 @@ public class Mirror extends BroadcastReceiver {
         if (reset) {
             hex = kept.current();
             if (hex == null) {
-                Log.i(TAG, "reset: nothing mirrored yet, nothing to re-add");
+                Log.i(TAG, "Kept.current() returned null");
                 return new Outcome(Activity.RESULT_OK, "ok nothing-mirrored");
             }
         } else {
             hex = Kept.normalize(intent.getStringExtra("ssid_hex"));
             if (hex == null) {
-                Log.e(TAG, "mirror: refused, ssid_hex is not 1-32 bytes of hex");
+                Log.e(TAG, "ssid_hex is not 1-32 bytes of hex");
                 return new Outcome(RESULT_BAD_REQUEST, "bad-ssid");
             }
         }
-        // an add made without this permission latches the app unapproved until its data is cleared
         if (ctx.checkSelfPermission(PROVISIONING) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, what + ": refused, " + PROVISIONING
-                    + " is not granted (privapp allowlist missing?), no suggestion added");
+            Log.e(TAG, what + " " + PROVISIONING
+                    + " is not granted");
             return new Outcome(RESULT_NOT_PROVISIONED, "not-provisioned");
         }
         List<String> want = reset ? Kept.only(hex) : kept.promote(hex);
@@ -109,7 +108,7 @@ public class Mirror extends BroadcastReceiver {
             if (status != WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL) {
                 break;
             }
-            Log.w(TAG, what + ": wifi user data not loaded yet, retry " + attempt + "/" + ATTEMPTS);
+            Log.w(TAG, what + " status=STATUS_NETWORK_SUGGESTIONS_ERROR_INTERNAL attempt=" + attempt + "/" + ATTEMPTS);
             try {
                 Thread.sleep(RETRY_MS);
             } catch (InterruptedException e) {
@@ -117,7 +116,7 @@ public class Mirror extends BroadcastReceiver {
             }
         }
         if (status != WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS) {
-            Log.e(TAG, what + ": wifi refused the suggestions, status " + status);
+            Log.e(TAG, what + " reconcile failed with status " + status);
             return new Outcome(RESULT_WIFI_REFUSED, "wifi-status=" + status);
         }
         kept.save(want);
@@ -125,19 +124,19 @@ public class Mirror extends BroadcastReceiver {
         String revalidate = "-";
         if (!connected) {
             reconnect = wifi.reconnect();
-            Log.i(TAG, what + ": reconnect requested=" + reconnect);
+            Log.i(TAG, what + " reconnect=" + reconnect);
         } else if (!reset) {
             revalidate = revalidate(ctx);
-            Log.i(TAG, what + ": revalidate " + revalidate);
+            Log.i(TAG, what + " revalidate=" + revalidate);
         }
-        Log.i(TAG, what + ": done kept=" + want.size() + " connected=" + connected
+        Log.i(TAG, what + " done kept=" + want.size() + " connected=" + connected
                 + (debug ? " ssid_hex=" + hex : ""));
         return new Outcome(Activity.RESULT_OK, "ok kept=" + want.size()
                 + " connected=" + (connected ? 1 : 0) + " reconnect=" + (reconnect ? 1 : 0)
                 + " revalidate=" + revalidate);
     }
 
-    // make NetworkMonitor re-validate the Wi-Fi network
+    // call reportNetworkConnectivity on the Wi-Fi network
     static String revalidate(Context ctx) {
         ConnectivityManager cm = ctx.getSystemService(ConnectivityManager.class);
         if (cm == null) {
@@ -150,12 +149,12 @@ public class Mirror extends BroadcastReceiver {
             }
             boolean validated = nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
             cm.reportNetworkConnectivity(n, !validated);
-            return validated ? "requested(was-validated)" : "requested(was-unvalidated)";
+            return validated ? "reportNetworkConnectivity(validated)" : "reportNetworkConnectivity(unvalidated)";
         }
         return "no-wifi-network";
     }
 
-    // return whether the station is associated
+    // return whether getSupplicantState() is COMPLETED
     static boolean isConnected(WifiManager wifi) {
         WifiInfo info = wifi.getConnectionInfo();
         return info != null && info.getSupplicantState() == SupplicantState.COMPLETED;

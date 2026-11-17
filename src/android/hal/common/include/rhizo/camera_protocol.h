@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_PROTOCOL_H
 #define RHIZO_CAMERA_PROTOCOL_H
 
-// define the socket protocol between rhizo-camerad and the camera HAL
+// socket protocol between rhizo-camerad and the camera HAL
 
 #include <stdint.h>
 
@@ -46,7 +46,7 @@ struct rhizo_camera_hello {
   uint32_t reserved;
 };
 
-// a camera size and its highest frame rate
+// camera width, height and highest frame rate
 struct rhizo_camera_mode {
   uint32_t width;
   uint32_t height;
@@ -54,7 +54,7 @@ struct rhizo_camera_mode {
   uint32_t fps_den;
 };
 
-// a host camera, keyed by its PipeWire node.name
+// host camera keyed by PipeWire node.name
 struct rhizo_camera_info {
   char key[RHIZO_CAMERA_KEY_LEN];
   char name[RHIZO_CAMERA_NAME_LEN];
@@ -63,13 +63,13 @@ struct rhizo_camera_info {
   struct rhizo_camera_mode modes[RHIZO_CAMERA_MAX_MODES];
 };
 
-// a camera list header, followed by count rhizo_camera_info entries
+// camera list header followed by count rhizo_camera_info entries
 struct rhizo_camera_list {
   uint32_t version;
   uint32_t count;
 };
 
-// a stream request for a camera mode
+// RHIZO_CAMERA_OPEN payload for a camera mode
 struct rhizo_camera_open {
   char key[RHIZO_CAMERA_KEY_LEN];
   uint32_t stream_id;
@@ -85,7 +85,7 @@ struct rhizo_camera_close {
   uint32_t reserved;
 };
 
-// a started stream and the rate of its frames
+// started stream size and frame rate
 struct rhizo_camera_started {
   uint32_t stream_id;
   uint32_t width;
@@ -95,7 +95,7 @@ struct rhizo_camera_started {
   uint32_t reserved;
 };
 
-// a frame header, followed by unpadded I420 planes
+// frame header followed by unpadded I420 planes
 struct rhizo_camera_frame {
   uint32_t stream_id;
   uint32_t width;

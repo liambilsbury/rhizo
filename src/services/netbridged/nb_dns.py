@@ -32,7 +32,7 @@ QTYPE_NAMES = {1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 12: "PTR", 15: "MX",
 
 
 def qtype_name(qtype):
-    """return the name of a query type, or its number"""
+    """return QTYPE_NAMES[qtype], or str(qtype)"""
     return QTYPE_NAMES.get(qtype, str(qtype))
 
 
@@ -196,7 +196,7 @@ class PendingTable:
         return None
 
     def add(self, upstream, txid, pending):
-        """record a pending query under its upstream and transaction id"""
+        """store pending under (upstream, txid)"""
         self._entries[(upstream, txid)] = pending
 
     def pop(self, upstream, txid):
@@ -204,7 +204,7 @@ class PendingTable:
         return self._entries.pop((upstream, txid), None)
 
     def pop_expired(self, now):
-        """remove and return the pending queries past their deadline"""
+        """remove and return the pending queries with deadline <= now"""
         expired = [(k, p) for k, p in self._entries.items() if p.deadline <= now]
         for k, _p in expired:
             del self._entries[k]
@@ -256,7 +256,7 @@ def prune_idle_tcp(conns, now, idle_timeout=TCP_IDLE_TIMEOUT):
 
 
 def validate_forward_reply(data, addr, pending):
-    """check an upstream reply against its query"""
+    """return the reason data does not match pending, or None"""
     if addr[1] != DNS_PORT:
         return "bad-source-port"
     if len(data) < 12:
@@ -409,7 +409,7 @@ class DnsService(Service):
                 self._close_tcp(conn)
 
     def on_readable(self, sock):
-        """handle a readable socket by its kind"""
+        """handle a readable socket by socket kind"""
         if sock is self._udp:
             self._on_udp_readable()
             return
@@ -424,7 +424,7 @@ class DnsService(Service):
             self._on_tcp_client_readable(conn)
 
     def _on_udp_readable(self):
-        """read a UDP query and handle it"""
+        """read a UDP query and call _handle_query"""
         try:
             data, addr = self._udp.recvfrom(4096)
         except OSError as e:
@@ -433,7 +433,7 @@ class DnsService(Service):
         self._handle_query(data, "udp", addr, None)
 
     def _on_tcp_accept(self):
-        """accept a TCP client unless too many are open"""
+        """accept a TCP client unless MAX_TCP_CONNS are open"""
         try:
             conn, addr = self._tcp.accept()
         except OSError as e:
@@ -471,7 +471,7 @@ class DnsService(Service):
             self._handle_query(msg, "tcp", conn.addr, conn)
 
     def _on_fwd_readable(self, sock):
-        """read an upstream reply and answer the waiting client"""
+        """read an upstream reply and call _reply for the pending query"""
         try:
             data, addr = sock.recvfrom(4096)
         except OSError as e:
@@ -497,7 +497,7 @@ class DnsService(Service):
         self._reply(pending.proto, pending.addr, pending.conn, set_txid(data, pending.client_txid))
 
     def _handle_query(self, data, proto, addr, conn):
-        """answer a query locally or forward it upstream"""
+        """reply from the local maps, or forward the query upstream"""
         parsed = parse_query(data)
         if parsed is None:
             log("NB_DNS_MALFORMED reason=parse-failed proto=%s", proto)
@@ -542,7 +542,7 @@ class DnsService(Service):
         self._dispatch(pending, 0)
 
     def _dispatch(self, pending, resolver_index):
-        """send a query to an upstream resolver"""
+        """sendto the query to pending.resolvers[resolver_index]"""
         log_qname = sanitize_for_log(pending.qname)
         if resolver_index >= len(pending.resolvers):
             log("NB_DNS_SERVFAIL qname=%s reason=upstream-timeout", log_qname)
@@ -571,7 +571,7 @@ class DnsService(Service):
         self._pending.add(upstream_key, our_txid, next_pending)
 
     def _reply(self, proto, addr, conn, payload):
-        """send a reply over UDP or TCP"""
+        """write payload over UDP or TCP"""
         if proto == "udp":
             try:
                 self._udp.sendto(payload, addr)
@@ -588,7 +588,7 @@ class DnsService(Service):
             self._close_tcp(conn)
 
     def _close_tcp(self, conn):
-        """close a TCP client connection and forget it"""
+        """close a TCP client connection and delete conn from _tcp_conns"""
         if conn.closed:
             return
         conn.closed = True
@@ -599,7 +599,7 @@ class DnsService(Service):
             pass
 
     def _refresh_portal(self):
-        """reload the portal address when its file changed"""
+        """reload _portal_ip when the portal file stat changes"""
         try:
             st = os.stat(self._portal_path)
         except OSError:

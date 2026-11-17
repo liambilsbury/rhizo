@@ -21,7 +21,7 @@
 
 namespace rhizo::c2store {
 
-// count a live instance against its entry's cap
+// live instance counted against the entry's max_instances
 class InstanceSlot {
  public:
   InstanceSlot(std::shared_ptr<std::atomic<uint32_t>> live, std::shared_ptr<ThroughputLedger> ledger)
@@ -33,9 +33,9 @@ class InstanceSlot {
   InstanceSlot(const InstanceSlot&) = delete;
   InstanceSlot& operator=(const InstanceSlot&) = delete;
 
-  // replace the held reservation at start
+  // replace reserved_ with amount, or return false when ledger_->Take fails
   bool Reserve(uint64_t amount);
-  // change the held reservation while running
+  // replace reserved_ with amount through ledger_->Force
   void Adjust(uint64_t amount);
   void Unreserve();
   uint64_t reserved() const;
@@ -49,10 +49,10 @@ class InstanceSlot {
 
 // reserve the needed throughput or return C2_NO_MEMORY
 c2_status_t ReserveAtStart(InstanceSlot* slot, const C2ResourcesNeededTuning& needs, const std::string& name);
-// call start under a reservation that a failed start releases
+// call start under ReserveAtStart, or Unreserve when start fails
 c2_status_t StartReserved(InstanceSlot* slot, const C2ResourcesNeededTuning& needs, const std::string& name,
                           const std::function<c2_status_t()>& start);
-// return true when force is set or the needs changed
+// call Adjust and return true when force is set or ThroughputPart(needs) differs from reserved()
 bool HoldNeeds(InstanceSlot* slot, const C2ResourcesNeededTuning& needs, bool force);
 
 using InterfaceFactory = std::function<std::shared_ptr<C2ComponentInterface>(

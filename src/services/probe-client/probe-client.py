@@ -5,12 +5,12 @@ import sys
 import time
 
 TRAILER_PREFIX = b"\x00RHIZO_PROBE_RC="
-NO_TRAILER = "RHIZO_PROBE_NO_TRAILER: connection closed without a completion marker"
-TIMED_OUT = "RHIZO_PROBE_TIMEOUT: no completion trailer before deadline"
+NO_TRAILER = "RHIZO_PROBE_NO_TRAILER: connection closed before a RHIZO_PROBE_RC trailer"
+TIMED_OUT = "RHIZO_PROBE_TIMEOUT: no RHIZO_PROBE_RC trailer before the deadline"
 
 
 def write_or_discard(stream, data):
-    """write bytes to a stream or discard them"""
+    """write data to stream, or point stream at /dev/null on EPIPE"""
     try:
         stream.buffer.write(data)
         stream.buffer.flush()
@@ -21,14 +21,14 @@ def write_or_discard(stream, data):
 
 
 def say(line):
-    """write a line to stderr"""
+    """write line to stderr"""
     write_or_discard(sys.stderr, line.encode() + b"\n")
 
 
 def main() -> int:
-    """send a command to rhizo-probed"""
+    """write the command to rhizo-probed and return the RHIZO_PROBE_RC value"""
     if len(sys.argv) < 4:
-        say("usage: probe-client.py <sock> <timeout-s> <command...>")
+        say("probe-client.py <sock> <timeout-s> <command...>")
         return 96
     sock_path, timeout_s = sys.argv[1], float(sys.argv[2])
     cmd = " ".join(sys.argv[3:])

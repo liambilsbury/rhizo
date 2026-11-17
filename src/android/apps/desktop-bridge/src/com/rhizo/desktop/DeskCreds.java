@@ -51,13 +51,13 @@ final class DeskCreds {
         }
         String[] lines = new String(bytes, StandardCharsets.UTF_8).split("\n");
         if (lines.length < 2) {
-            throw new IOException("credentials file has " + lines.length + " lines, want 2");
+            throw new IOException("credentials file has " + lines.length + " lines, expected 2");
         }
         int port;
         try {
             port = Integer.parseInt(lines[0].trim());
         } catch (NumberFormatException e) {
-            throw new IOException("credentials file has a bad port: " + lines[0]);
+            throw new IOException("failed to parse credentials file port " + lines[0]);
         }
         String token = lines[1].trim();
         if (port <= 0 || token.length() != TOKEN_BYTES * 2) {
@@ -67,7 +67,7 @@ final class DeskCreds {
         return new DeskCreds(token, port);
     }
 
-    // return the atomic file holding the credentials
+    // return the AtomicFile for FILE_NAME
     private static AtomicFile file(Context context) {
         return new AtomicFile(new File(context.getFilesDir(), FILE_NAME));
     }

@@ -16,7 +16,7 @@ _stop = False
 
 
 def _on_signal(_sig, _frm):
-    """set the stop flag"""
+    """set _stop"""
     global _stop
     _stop = True
 
@@ -91,37 +91,32 @@ def parse_args(argv=None):
     ap.add_argument("--proxy-port", type=int, default=8118)
     ap.add_argument("--proxy-connect-policy", choices=("deny-local", "any"),
                     default="deny-local",
-                    help="network.proxy_connect: deny-local refuses "
-                         "loopback/link-local/multicast/host-address CONNECT "
-                         "targets by default, any dials whatever the client asks")
+                    help="network.proxy_connect value, deny-local denies loopback, link-local, "
+                         "multicast and --proxy-host-addr targets, any denies no target")
     ap.add_argument("--proxy-allow", action="append", default=[], metavar="CIDR",
-                    help="allow a proxy CONNECT/absolute-URI target inside this "
-                         "CIDR even though deny-local would refuse it")
+                    help="allow CONNECT and absolute-URI targets in CIDR under deny-local")
     ap.add_argument("--proxy-host-addr", dest="proxy_host_addrs", action="append",
                     default=[], metavar="IP",
-                    help="deny this address as a proxy CONNECT target under "
-                         "deny-local -- pass every address the host itself owns")
+                    help="deny IP as a CONNECT target under deny-local")
     ap.add_argument("--mdns-uplink-if", default="")
     ap.add_argument("--local-a", action="append", default=[],
                     metavar="NAME=IP",
-                    help="answer NAME authoritatively and never forward it")
+                    help="return IP with the AA flag for NAME A queries")
     ap.add_argument("--local-aaaa", action="append", default=[],
                     metavar="NAME=IPV6",
-                    help="answer NAME's AAAA authoritatively and never forward it")
+                    help="return IPV6 with the AA flag for NAME AAAA queries")
     ap.add_argument("--services", default=",".join(ALL_SERVICES))
     ap.add_argument("--state-dir", default="/run/rhizo-netbridged")
     ap.add_argument("--portal", default=None, metavar="IP",
-                    help="seed the state-dir portal file at startup, as if "
-                         "start-netfix.sh portal on IP had already run")
+                    help="write IP to the state-dir portal file at startup")
     ap.add_argument("--wifi-mode", choices=("mirror", "fixed", "off"), default="off",
-                    help="network.wifi: mirror presents the host's "
-                         "current network through the Rhizo Wi-Fi driver, fixed "
-                         "always presents \"Rhizo\", off never touches the driver")
+                    help="network.wifi value, mirror sets the host uplink SSID on rhizo_wlan, "
+                         "fixed sets SSID \"Rhizo\", off makes no rhizo_wlan call")
     ap.add_argument("--wifi-secret-file", default="", metavar="PATH",
-                    help="the per-install secret the presented BSSID is keyed on; "
-                         "missing or unreadable falls back to /etc/machine-id")
+                    help="BSSID HMAC key file, /etc/machine-id when PATH is missing, "
+                         "unreadable or under 16 bytes")
     ap.add_argument("--wifi-log-ssid", action="store_true",
-                    help="log the presented SSID in clear text (it is location data)")
+                    help="log the SSID in clear text")
     return ap.parse_args(argv)
 
 
@@ -142,7 +137,6 @@ def main():
         except OSError as e:
             log("NB_PORTAL_SEED_FAILED ip=%s error=%s", cfg.portal, e)
     else:
-        # systemd can keep the RuntimeDirectory across a restart
         try:
             os.unlink(os.path.join(cfg.state_dir, "portal"))
             log("NB_PORTAL_CLEARED reason=not-seeded")
@@ -159,7 +153,7 @@ def main():
             try:
                 reason = svc.unhealthy()
             except Exception as e:  # noqa: BLE001
-                reason = "unhealthy() raised: %s" % e
+                reason = "unhealthy() raised %s" % e
             if reason:
                 log("NB_SERVICE_FAILED name=%s error=%s", name, reason)
                 svc = None
@@ -171,7 +165,7 @@ def main():
         return 1
 
     def publish(state):
-        """pass the host state to every service"""
+        """call on_host_state on each service"""
         for svc in services:
             try:
                 svc.on_host_state(state)
@@ -192,7 +186,7 @@ def main():
     registered = {}
 
     def reregister():
-        """register every service socket with the poller again"""
+        """register each service socket with the poller"""
         for fd in list(registered):
             poller.unregister(fd)
             registered.pop(fd)

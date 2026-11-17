@@ -44,12 +44,12 @@ int32_t RoundFps(const HostMode& m) {
   return std::max<int32_t>(1, static_cast<int32_t>((m.fpsNum + m.fpsDen / 2) / m.fpsDen));
 }
 
-// return true when a mode crops and scales to a size
+// return true when m is at least width x height
 bool Covers(const HostMode& m, int32_t width, int32_t height) {
   return static_cast<int32_t>(m.width) >= width && static_cast<int32_t>(m.height) >= height;
 }
 
-// return an even same-aspect thumbnail size near area
+// return an even thumbnail size of equal aspect near area
 std::array<int32_t, 2> ThumbnailNear(int32_t width, int32_t height, int32_t area) {
   int32_t g = std::gcd(width, height);
   int32_t p = width / g, q = height / g;
@@ -79,13 +79,13 @@ bool FindI32(const camera_metadata_t* s, uint32_t tag, int32_t* out, size_t n) {
   return true;
 }
 
-// a byte control and its allowed values
+// a byte control tag with allowed values
 struct ByteControl {
   uint32_t tag;
   std::vector<uint8_t> allowed;
 };
 
-// return the byte controls and their supported values
+// return the byte controls with supported values
 const std::vector<ByteControl>& ByteControls() {
   static const std::vector<ByteControl> kControls = {
       {ANDROID_COLOR_CORRECTION_ABERRATION_MODE, {ANDROID_COLOR_CORRECTION_ABERRATION_MODE_OFF}},
@@ -114,7 +114,7 @@ const std::vector<ByteControl>& ByteControls() {
   return kControls;
 }
 
-// return the capture intent of a request template
+// return the ANDROID_CONTROL_CAPTURE_INTENT of requestTemplate
 bool IntentFor(int32_t requestTemplate, uint8_t* intent) {
   switch (requestTemplate) {
     case 1: *intent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW; return true;
@@ -125,7 +125,7 @@ bool IntentFor(int32_t requestTemplate, uint8_t* intent) {
   }
 }
 
-// return true when the shape lists a frame rate range
+// return true when shape.fpsRanges contains range
 bool HasFpsRange(const CameraShape& shape, const int32_t range[2]) {
   for (const auto& r : shape.fpsRanges) {
     if (r[0] == range[0] && r[1] == range[1]) return true;
@@ -156,7 +156,7 @@ void AddDefaultControls(MetadataBuilder& md, const CameraShape& shape, uint8_t i
   md.setI32(ANDROID_SENSOR_TEST_PATTERN_MODE, {ANDROID_SENSOR_TEST_PATTERN_MODE_OFF});
 }
 
-// echo the request controls within the supported values
+// echo the controls in s within the supported values
 void EchoControls(MetadataBuilder& md, const CameraShape& shape, const camera_metadata_t* s) {
   for (const ByteControl& c : ByteControls()) {
     uint8_t v = c.allowed[0];
@@ -255,7 +255,7 @@ std::vector<int32_t> MetadataBuilder::tags() const {
 bool MetadataBuilder::set(uint32_t tag, uint8_t type, const void* data, size_t count) {
   int want = get_camera_metadata_tag_type(tag);
   if (want != type) {
-    klogf("metadata tag 0x%x wants type %d, given %d; dropped", tag, want, type);
+    klogf("get_camera_metadata_tag_type(0x%x) %d != type %d", tag, want, type);
     return false;
   }
   Entry e{type, count, {}};
@@ -273,7 +273,7 @@ std::vector<uint8_t> MetadataBuilder::finish() const {
   if (m == nullptr) return {};
   for (const auto& [tag, e] : entries_) {
     if (add_camera_metadata_entry(m, tag, e.bytes.data(), e.count) != 0) {
-      klogf("metadata tag 0x%x could not be added", tag);
+      klogf("add_camera_metadata_entry failed for tag 0x%x", tag);
       free_camera_metadata(m);
       return {};
     }
@@ -301,7 +301,7 @@ MetadataPtr ParseMetadata(const std::vector<uint8_t>& blob) {
   return MetadataPtr(static_cast<camera_metadata_t*>(p));
 }
 
-// return true when a blob is well-formed and matches its size
+// return true when a blob is well-formed and get_camera_metadata_size equals blob.size()
 bool ValidMetadataBlob(const std::vector<uint8_t>& blob) {
   MetadataPtr m = ParseMetadata(blob);
   return m != nullptr && get_camera_metadata_size(m.get()) == blob.size();
@@ -390,7 +390,7 @@ CameraShape ShapeFor(const std::vector<HostMode>& modes) {
   return shape;
 }
 
-// return true when the shape lists a size
+// return true when shape.sizes contains width x height
 bool ShapeHasSize(const CameraShape& shape, int32_t width, int32_t height) {
   for (const OutputSize& s : shape.sizes) {
     if (s.width == width && s.height == height) return true;
@@ -398,7 +398,7 @@ bool ShapeHasSize(const CameraShape& shape, int32_t width, int32_t height) {
   return false;
 }
 
-// return the slowest mode of the best size reaching maxFps
+// return the slowest mode of the best size with RoundFps at least maxFps
 int ChooseMode(const std::vector<HostMode>& modes, int32_t width, int32_t height, int32_t maxFps) {
   int bySize = ChooseModeBySize(modes, width, height);
   if (bySize < 0 || maxFps <= 0) return bySize;
@@ -533,7 +533,7 @@ std::vector<uint8_t> BuildCharacteristics(const CameraShape& shape) {
   return md.finish();
 }
 
-// build a request template, or empty when unsupported
+// build the default settings of requestTemplate, or empty when unsupported
 std::vector<uint8_t> BuildDefaultRequest(const CameraShape& shape, int32_t requestTemplate) {
   uint8_t intent;
   if (!IntentFor(requestTemplate, &intent)) return {};
@@ -550,7 +550,7 @@ std::vector<uint8_t> BuildSessionCharacteristics() {
   return md.finish();
 }
 
-// build the result metadata of a completed request
+// build the CaptureResult metadata for settings
 std::vector<uint8_t> BuildResult(const CameraShape& shape, const camera_metadata_t* settings,
                                  int64_t timestampNs, int32_t pipelineDepth) {
   MetadataBuilder md;
@@ -559,14 +559,14 @@ std::vector<uint8_t> BuildResult(const CameraShape& shape, const camera_metadata
   return md.finish();
 }
 
-// return the upper end of a request's AE target range
+// return the upper end of ANDROID_CONTROL_AE_TARGET_FPS_RANGE in settings, or shape.previewFps[1]
 int32_t RequestedMaxFps(const CameraShape& shape, const camera_metadata_t* settings) {
   int32_t asked[2];
   if (FindI32(settings, ANDROID_CONTROL_AE_TARGET_FPS_RANGE, asked, 2) && HasFpsRange(shape, asked)) return asked[1];
   return shape.previewFps[1];
 }
 
-// read a request's JPEG settings within the shape's limits
+// read the ANDROID_JPEG_* values in settings within the shape's limits
 JpegSettings JpegSettingsFrom(const CameraShape& shape, const camera_metadata_t* settings) {
   JpegSettings j;
   auto thumb = DefaultThumbnail(shape);

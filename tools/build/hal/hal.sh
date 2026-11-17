@@ -1,5 +1,5 @@
 #!/bin/bash
-# builds a HAL binary with the NDK
+# NDK clang++ build of one HAL binary
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT="$(cd "." && pwd)"
@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
     --no-default-libs) NO_DEFAULT_LIBS=1; shift ;;
     --stage) STAGE_DIR="$2"; shift 2 ;;
     --abi) ABI="$2"; shift 2 ;;
-    *) echo "unknown arg: $1" >&2; exit 2 ;;
+    *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
 SHARED="${SHARED:-0}"
@@ -53,11 +53,11 @@ case "$ABI" in
     LIBDIR="$ROOT/var/share/gsi_libs_arm64"
     OUT_DIR="$ROOT/toolchain/out/arm64"
     ;;
-  *) echo "unknown --abi: $ABI (expected x86_64, x86 or arm64-v8a)" >&2; exit 2 ;;
+  *) echo "unknown --abi $ABI, expected x86_64, x86 or arm64-v8a" >&2; exit 2 ;;
 esac
 mkdir -p "$OUT_DIR/gen_${OUT_NAME}"
 
-[[ -x "$CLANGXX" ]] || { echo "NDK clang++ not found at $CLANGXX" >&2; exit 1; }
+[[ -x "$CLANGXX" ]] || { echo "no $CLANGXX" >&2; exit 1; }
 
 INC_ARGS=(-I "$GEN_HDR" -I "$INC_PLAT")
 for d in "${EXTRA_INC[@]}"; do INC_ARGS+=(-I "$d"); done
@@ -75,10 +75,9 @@ compile_one() {
   fi
 }
 
-echo "[build-hal] compiling $SRC -> ${OUT_NAME}.o"
 compile_one "$SRC" "$OUT_DIR/gen_${OUT_NAME}/${OUT_NAME}.o"
 
-# hash a source file with its headers
+# print the object cache key of $1 from the compiler, flags, $1 and the headers
 src_key() {
   local cpp="$1" d f
   local files=("$cpp")
@@ -98,7 +97,7 @@ if [[ ${#EXTRA_SRC[@]} -gt 0 ]]; then
   mkdir -p "$extra_dir"
   n_compiled=0; n_cached=0
   for cpp in "${EXTRA_SRC[@]}"; do
-    [[ -f "$cpp" ]] || { echo "[build-hal] --extra-src not found: $cpp" >&2; exit 1; }
+    [[ -f "$cpp" ]] || { echo "no --extra-src $cpp" >&2; exit 1; }
     obj="$extra_dir/$(echo "${cpp#"$ROOT/"}" | sed 's/\//_/g').$(src_key "$cpp").o"
     if [[ -f "$obj" ]]; then
       n_cached=$((n_cached+1))
@@ -108,13 +107,13 @@ if [[ ${#EXTRA_SRC[@]} -gt 0 ]]; then
     fi
     GEN_OBJS+=("$obj")
   done
-  echo "[build-hal] --extra-src: $n_compiled compiled, $n_cached cached"
+  echo "extra_src compiled=$n_compiled cached=$n_cached"
 fi
 for name in "${AIDL_NAMES[@]}"; do
   while IFS= read -r f; do GEN_OBJS+=("$f"); done < <(find "$OUT_DIR/gen" -iname "*${name}*.cpp.o")
 done
 if [[ ${#AIDL_NAMES[@]} -gt 0 && ${#GEN_OBJS[@]} -eq 0 ]]; then
-  echo "[build-hal] WARNING: --aidl given but no matching *.cpp.o found under toolchain/out/gen/" >&2
+  echo "no *.cpp.o in $OUT_DIR/gen for --aidl ${AIDL_NAMES[*]}" >&2
 fi
 
 for src_dir in "${AIDL_SRC_DIRS[@]}"; do
@@ -132,7 +131,7 @@ for src_dir in "${AIDL_SRC_DIRS[@]}"; do
     fi
     GEN_OBJS+=("$obj")
   done < <(find "$src_dir" -iname "*.cpp")
-  echo "[build-hal] --aidl-src $src_dir: $n_compiled compiled, $n_cached cached"
+  echo "aidl_src=$src_dir compiled=$n_compiled cached=$n_cached"
 done
 
 if [[ "$SHARED" == 1 || "${NO_DEFAULT_LIBS:-0}" == 1 ]]; then
@@ -145,7 +144,6 @@ for f in "${EXACT_SO[@]}"; do LINK_LIBS+=(-l:"$f"); done
 
 SHARED_FLAGS=(); [[ "$SHARED" == 1 ]] && SHARED_FLAGS+=(-shared -fPIC)
 
-echo "[build-hal] linking ${OUT_NAME} (${#GEN_OBJS[@]} AIDL glue objects, ${#LINK_LIBS[@]} link flags)"
 "$CLANGXX" -static-libstdc++ "${SHARED_FLAGS[@]}" \
   "$OUT_DIR/gen_${OUT_NAME}/${OUT_NAME}.o" "${GEN_OBJS[@]}" \
   -L "$LIBDIR" "${LINK_LIBS[@]}" \
@@ -153,24 +151,24 @@ echo "[build-hal] linking ${OUT_NAME} (${#GEN_OBJS[@]} AIDL glue objects, ${#LIN
 
 if [[ "$SHARED" == 1 ]]; then
   if [[ -n "$STAGE_DIR" ]]; then
-    echo "[build-hal] OK -> ${OUT_DIR#"$ROOT/"}/${OUT_NAME}"
+    echo "wrote ${OUT_DIR#"$ROOT/"}/${OUT_NAME}"
   else
-    echo "[build-hal] OK -> ${OUT_DIR#"$ROOT/"}/${OUT_NAME} (pass --stage gfx_hal / gpu_driver, or stage it yourself)"
+    echo "wrote ${OUT_DIR#"$ROOT/"}/${OUT_NAME}"
   fi
 elif [[ "$ABI" == x86 || "$ABI" == arm64-v8a ]]; then
   if [[ -n "$STAGE_DIR" ]]; then
-    echo "[build-hal] OK -> ${OUT_DIR#"$ROOT/"}/${OUT_NAME} (--abi $ABI executable)"
+    echo "wrote ${OUT_DIR#"$ROOT/"}/${OUT_NAME} (--abi $ABI)"
   else
-    echo "[build-hal] OK -> ${OUT_DIR#"$ROOT/"}/${OUT_NAME} (--abi $ABI executable, pass --stage or stage it yourself)"
+    echo "wrote ${OUT_DIR#"$ROOT/"}/${OUT_NAME} (--abi $ABI)"
   fi
 else
   mkdir -p "$ROOT/var/bin"
   cp --remove-destination "$OUT_DIR/${OUT_NAME}" "$ROOT/var/bin/${OUT_NAME}"
   cp --remove-destination "$OUT_DIR/${OUT_NAME}" "$ROOT/var/share/${OUT_NAME}"
-  echo "[build-hal] OK -> var/bin/${OUT_NAME} and var/share/${OUT_NAME}"
+  echo "wrote var/bin/${OUT_NAME} and var/share/${OUT_NAME}"
 fi
 if [[ -n "$STAGE_DIR" ]]; then
   install -D -m 0755 "$OUT_DIR/${OUT_NAME}" "$ROOT/var/share/${STAGE_DIR}/${OUT_NAME}"
-  echo "[build-hal] staged -> var/share/${STAGE_DIR}/${OUT_NAME}"
+  echo "staged var/share/${STAGE_DIR}/${OUT_NAME}"
 fi
 readelf -d "$OUT_DIR/${OUT_NAME}" | grep NEEDED

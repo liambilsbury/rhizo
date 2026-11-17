@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: rhizo
 Source: https://github.com/liambilsbury/rhizo
-Comment: The packages carry Linux v7.1-rc1 (Copyright the Linux kernel contributors, GPL-2.0-only),
+Comment: The packages carry Linux v7.3.1 (Copyright the Linux kernel contributors, GPL-2.0-only),
  the SELinux namespace series in kernel/series and the patches in kernel/patches. kernel/SOURCE pins
  the base tree and the series commit.
 
@@ -83,11 +83,6 @@ License: GPL-2.0-only
 Files: kernel/patches/*
 Copyright: 2026 Liam Bilsbury
 License: GPL-2.0-only
-
-Files: kernel/patches/0003-*
-Copyright: 2026 Denis V. Lunev
-License: GPL-2.0-only
- Mainline commit 1aac65f3e651.
 
 Files: kernel/patches/0021-*
 Copyright: 2026 Liam Bilsbury

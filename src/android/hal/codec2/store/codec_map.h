@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2STORE_CODEC_MAP_H
 #define RHIZO_C2STORE_CODEC_MAP_H
 
-// map the driver's capabilities to c2.rhizo.* component declarations
+// mapping of the driver's capabilities to c2.rhizo.* component declarations
 
 #include <stdint.h>
 
@@ -15,15 +15,15 @@
 
 namespace rhizo::c2store {
 
-// map a VA profile to its Codec2 profile
+// map a VA profile to the Codec2 profile
 bool C2ProfileOf(VAProfile va, C2Config::profile_t* out);
-// return the VA profile of caps that serves a Codec2 profile
+// return the VA profile in caps.va_profiles that C2ProfileOf maps to profile, or VAProfileNone
 VAProfile VaProfileFor(const c2va::ComponentCaps& caps, C2Config::profile_t profile);
 
 std::vector<uint32_t> ProfilesOf(const c2va::ComponentCaps& caps);
 // list the levels whose picture-size limits fit caps' largest picture
 std::vector<uint32_t> LevelsOf(const c2va::ComponentCaps& caps);
-// return the lowest level that holds width x height
+// return the lowest level whose picture-size limit fits width x height
 C2Config::level_t MinLevelFor(const c2va::ComponentCaps& caps, uint32_t width, uint32_t height);
 // return the H.264 level_idc or H.265 general_level_idc of a level
 uint32_t LevelIdcOf(c2va::Codec codec, C2Config::level_t level);
@@ -31,7 +31,7 @@ uint32_t LevelIdcOf(c2va::Codec codec, C2Config::level_t level);
 // return a decoder's size alignment
 uint32_t SizeAlignmentOf(c2va::Codec codec);
 
-// return the resource a component's instances count against
+// return the resource id of a component's kind and codec
 uint32_t ResourceIdOf(const c2va::ComponentCaps& caps);
 
 // map colour code points to Codec2 colour aspects
@@ -43,13 +43,13 @@ c2va::ColorInfo IsoColorOf(C2Color::range_t range, C2Color::primaries_t primarie
 // fill unspecified colour aspects by picture size
 c2va::ColorInfo SurfaceColorOf(const C2StreamColorAspectsInfo::output& declared, uint32_t width, uint32_t height);
 
-// return true when container colour aspects outrank coded ones
+// return true when container colour aspects override coded colour aspects
 bool ContainerAspectsFirst(c2va::Codec codec);
 // merge container and coded colour aspects field by field
 C2ColorAspectsStruct MergeColorAspects(const C2ColorAspectsStruct& container, const C2ColorAspectsStruct& coded,
                                        bool container_first);
 
-// log the app's default colour aspects by input index
+// log of the app's default colour aspects by input index
 class DefaultAspectsLog {
  public:
   // record the default that takes effect at index

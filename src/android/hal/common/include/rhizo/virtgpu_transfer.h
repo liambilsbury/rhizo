@@ -12,16 +12,16 @@
 
 namespace rhizo {
 
-// log once that the device has no context_init
+// print "virtgpu context_init unavailable (why)" to stderr from a static initializer
 inline void NoteNoContextInit(const char* why) {
   static const bool logged = [&] {
-    dprintf(2, "rhizo: virtgpu context_init unavailable (%s), using the implicit default context\n", why);
+    dprintf(2, "virtgpu context_init unavailable (%s)\n", why);
     return true;
   }();
   (void)logged;
 }
 
-// report whether a DRM fd belongs to the virtio_gpu driver
+// return whether drm_version.name for drmFd is "virtio_gpu"
 inline bool IsVirtgpuNode(int drmFd) {
   char name[32] = {};
   struct drm_version ver {};
@@ -30,7 +30,7 @@ inline bool IsVirtgpuNode(int drmFd) {
   return ioctl(drmFd, DRM_IOCTL_VERSION, &ver) == 0 && strcmp(name, "virtio_gpu") == 0;
 }
 
-// report whether this host reads guest buffers through virtgpu transfers
+// return whether /dev/dri/renderD128 is virtio_gpu or fails to open with an errno other than ENOENT and ENODEV
 inline bool VirtgpuTransferNeeded() {
   static const bool needed = [] {
     int fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
@@ -42,7 +42,7 @@ inline bool VirtgpuTransferNeeded() {
   return needed;
 }
 
-// create the virgl context of a render node fd
+// create a virgl context on drmFd
 inline bool InitVirglContext(int drmFd) {
   int hasContextInit = 0;
   struct drm_virtgpu_getparam gp {};
@@ -50,11 +50,11 @@ inline bool InitVirglContext(int drmFd) {
   gp.value = reinterpret_cast<uintptr_t>(&hasContextInit);
   if (ioctl(drmFd, DRM_IOCTL_VIRTGPU_GETPARAM, &gp) != 0) {
     if (errno != ENOSYS && errno != EINVAL) return false;
-    NoteNoContextInit("getparam");
+    NoteNoContextInit("DRM_IOCTL_VIRTGPU_GETPARAM");
     return true;
   }
   if (hasContextInit == 0) {
-    NoteNoContextInit("not offered");
+    NoteNoContextInit("VIRTGPU_PARAM_CONTEXT_INIT=0");
     return true;
   }
   int capsetMask = 0;
@@ -73,11 +73,11 @@ inline bool InitVirglContext(int drmFd) {
   init.ctx_set_params = reinterpret_cast<uintptr_t>(&capset);
   if (ioctl(drmFd, DRM_IOCTL_VIRTGPU_CONTEXT_INIT, &init) == 0) return true;
   if (errno != ENOSYS && errno != EINVAL) return false;
-  NoteNoContextInit("context_init ioctl");
+  NoteNoContextInit("DRM_IOCTL_VIRTGPU_CONTEXT_INIT");
   return true;
 }
 
-// open the DRM render node and its virgl context
+// return a static /dev/dri/renderD128 fd with a virgl context
 inline int OpenRenderNode() {
   static const int fd = [] {
     int drmFd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
@@ -91,7 +91,7 @@ inline int OpenRenderNode() {
   return fd;
 }
 
-// wait for the virtgpu transfer to finish
+// wait on handle with DRM_IOCTL_VIRTGPU_WAIT
 inline bool VirtgpuWaitHandle(int drmFd, uint32_t handle) {
   struct drm_virtgpu_3d_wait wait_req {};
   wait_req.handle = handle;
@@ -99,7 +99,7 @@ inline bool VirtgpuWaitHandle(int drmFd, uint32_t handle) {
   return ioctl(drmFd, DRM_IOCTL_VIRTGPU_WAIT, &wait_req) == 0;
 }
 
-// pull host content into the guest resource
+// copy the host resource of dmabufFd into the guest buffer with DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST
 inline bool VirtgpuTransferFromHost(int dmabufFd, int width, int height, int  ,
                                      bool wait = true) {
   int drmFd = OpenRenderNode();
@@ -133,7 +133,7 @@ inline bool VirtgpuTransferFromHost(int dmabufFd, int width, int height, int  ,
   return rc == 0 && waited;
 }
 
-// push guest content to the host
+// copy the guest buffer of handle to the host resource with DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST
 inline bool VirtgpuTransferToHostHandle(int drmFd, uint32_t handle, int width, int height) {
   struct drm_virtgpu_3d_transfer_to_host xfer {};
   xfer.bo_handle = handle;
@@ -144,7 +144,7 @@ inline bool VirtgpuTransferToHostHandle(int drmFd, uint32_t handle, int width, i
   return rc == 0 && VirtgpuWaitHandle(drmFd, handle);
 }
 
-// push guest content to the host resource
+// copy the guest buffer of dmabufFd to the host resource with DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST
 inline bool VirtgpuTransferToHost(int dmabufFd, int width, int height, int  ,
                                    bool wait = true) {
   int drmFd = OpenRenderNode();

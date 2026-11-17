@@ -17,11 +17,11 @@ constexpr char kPolicyPath[] = "/vendor/etc/seccomp_policy/rhizo-codec2-service.
 bool EnterSandbox() {
   // SetUpMinijail aborts on an unreadable policy
   if (access(kPolicyPath, R_OK) != 0) {
-    klogf("sandbox: no readable seccomp policy at %s", kPolicyPath);
+    klogf("access(%s, R_OK) failed", kPolicyPath);
     return false;
   }
   android::SetUpMinijail(kPolicyPath, "");
-  klogf("sandbox: seccomp policy %s applied", kPolicyPath);
+  klogf("seccomp policy %s applied", kPolicyPath);
   return true;
 }
 

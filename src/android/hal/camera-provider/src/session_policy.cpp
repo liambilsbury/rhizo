@@ -37,7 +37,7 @@ bool FramePacer::accept(int64_t timestampNs, int32_t maxFps) {
   return true;
 }
 
-// return whether a session reopens its host stream now
+// return whether to reopen the host stream
 bool ShouldReopen(bool stopped, int consecutiveTimeouts, bool present, int64_t msSinceLastOpen) {
   if (!present || msSinceLastOpen < kReopenIntervalMs) return false;
   return stopped || consecutiveTimeouts >= kSilentTimeoutsBeforeReopen;
@@ -51,7 +51,7 @@ OpenRate ChooseOpenRate(uint32_t modeFpsNum, uint32_t modeFpsDen, int32_t maxFps
   return OpenRate{static_cast<uint32_t>(maxFps), 1, true};
 }
 
-// return whether a stream must reopen to serve maxFps
+// return whether maxFps and modeFps exceed streamFps + kRateSlack
 bool NeedsFasterStream(double streamFps, double modeFps, int32_t maxFps) {
   return streamFps > 0 && maxFps > streamFps + kRateSlack && modeFps > streamFps + kRateSlack;
 }

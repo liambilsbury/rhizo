@@ -1,10 +1,10 @@
 #!/bin/bash
-# build rhizo-wifi-service and rhizo-wifi-supplicant into gfx_hal
+# var/share/gfx_hal/rhizo-wifi-service var/share/gfx_hal/rhizo-wifi-supplicant RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ABI_ARGS=(); [[ -n "${RHIZO_HAL_ABI:-}" ]] && ABI_ARGS=(--abi "$RHIZO_HAL_ABI")
 ONLY="${1:-all}"
-case "$ONLY" in all|service|supplicant) ;; *) echo "usage: $0 [all|service|supplicant]" >&2; exit 2 ;; esac
+case "$ONLY" in all|service|supplicant) ;; *) echo "$0 [all|service|supplicant]" >&2; exit 2 ;; esac
 
 if [[ "$ONLY" != supplicant ]]; then
   tools/build/hal/hal.sh rhizo-wifi-service src/android/hal/wifi/src/wifi.cpp \

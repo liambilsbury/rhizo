@@ -1,7 +1,7 @@
 #!/bin/bash
-# refuse a toolchain output folder that resolves into another checkout
+# own_output() check for toolchain output folders outside REPO_ROOT
 
-# refuse an output folder that resolves outside this checkout
+# return 1 for an output folder that resolves outside REPO_ROOT
 own_output() {
   local top d real link
   top=$(realpath -m "$REPO_ROOT")
@@ -10,7 +10,7 @@ own_output() {
     [[ "$real" == "$top"/* ]] && continue
     link="$d"
     while [[ "$link" != "$REPO_ROOT" && "$link" != / && ! -L "$link" ]]; do link=$(dirname "$link"); done
-    log "${d#"$REPO_ROOT"/} resolves to $real, outside this checkout -- build it there, or give this checkout its own: rm ${link#"$REPO_ROOT"/} && cp -a --reflink=auto $(realpath -m "$link") ${link#"$REPO_ROOT"/}"
+    log "${d#"$REPO_ROOT"/} resolves to $real outside $REPO_ROOT through the link ${link#"$REPO_ROOT"/}"
     return 1
   done
 }

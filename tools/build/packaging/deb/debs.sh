@@ -1,5 +1,5 @@
 #!/bin/bash
-# build the product packages into var/debs
+# var/debs/rhizo_<version>_amd64.deb build with dpkg-buildpackage
 set -euo pipefail
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_COMMON_DIR GIT_PREFIX \
       GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
@@ -15,7 +15,7 @@ drop_other_versions() {
   for old in "$dir/${pkg}_"*.deb; do
     [[ -f "$old" && "$(basename "$old")" != "$name" ]] || continue
     rm -f "$old" "$old.inputs"
-    echo "[build-debs] replaced $(basename "$old") in $dir"
+    echo "deleted $(basename "$old") in $dir"
   done
 }
 
@@ -29,8 +29,8 @@ cleanup_at() {
 
 if [[ "${1:-}" == --at ]]; then
   AT_REF="${2:-}"
-  [[ -n "$AT_REF" ]] || { echo "[build-debs] --at needs REF" >&2; exit 2; }
-  [[ "${3:-}" == --out && -n "${4:-}" ]] || { echo "[build-debs] --at REF needs --out DIR" >&2; exit 2; }
+  [[ -n "$AT_REF" ]] || { echo "--at has no REF" >&2; exit 2; }
+  [[ "${3:-}" == --out && -n "${4:-}" ]] || { echo "--at REF has no --out DIR" >&2; exit 2; }
   AT_OUT="$4"
 fi
 
@@ -40,15 +40,15 @@ build_into() {
   parent=$(dirname "$src")
   if [[ "$stamp" == 1 ]]; then
     pre_digest=$(python3 -B "$ROOT/tools/build/stamps.py" deb-digest) \
-      || { echo "[build-debs] could not take the pre-build input digest" >&2; exit 1; }
+      || { echo "stamps.py deb-digest failed" >&2; exit 1; }
   fi
   ( cd "$src" && dpkg-buildpackage -us -uc -b >"$OUT/$(basename "$src").build.log" 2>&1 ) \
-    || { echo "[build-debs] $src failed -- see $OUT/$(basename "$src").build.log" >&2; exit 1; }
+    || { echo "dpkg-buildpackage failed in $src (log $OUT/$(basename "$src").build.log)" >&2; exit 1; }
   for f in "$parent"/$glob; do
     [[ -f "$f" ]] || continue
     drop_other_versions "$OUT" "$(basename "$f")"
     mv -f "$f" "$OUT/"
-    echo "[build-debs] $(basename "$f") $(sha256sum "$OUT/$(basename "$f")" | cut -c1-16)"
+    echo "wrote $(basename "$f") sha256=$(sha256sum "$OUT/$(basename "$f")" | cut -c1-16)"
     if [[ "$stamp" == 1 ]]; then
       [[ ! -e "$ROOT/test/checks/lib/package-tree.py" ]] \
         || python3 -B "$ROOT/test/checks/lib/package-tree.py" "$OUT/$(basename "$f")" "$ROOT"
@@ -70,7 +70,7 @@ payload_digest_matches() {
   na=$(cd "$da" && find . -type f | wc -l)
   nb=$(cd "$db" && find . -type f | wc -l)
   if (( na == 0 || nb == 0 )); then
-    echo "[build-debs] payload extraction produced no files to compare ($a: $na file(s), $b: $nb file(s)) -- cannot judge byte-identity" >&2
+    echo "dpkg-deb --fsys-tarfile extracted files=$na from $a and files=$nb from $b" >&2
     rm -rf "$da" "$db"
     exit 1
   fi
@@ -80,55 +80,55 @@ payload_digest_matches() {
   [[ -n "$ha" && "$ha" == "$hb" ]]
 }
 
-# stage the ref's payload into its worktree's var/share
+# build the payload of ref in the var/share of worktree wt
 stage_prev_payload() {
   local wt="$1" ref="$2"
 
   [[ -x "$wt/tools/fetch/build-inputs.sh" && -x "$wt/tools/build/payload.sh" ]] \
-    || { echo "[build-debs] $ref predates tools/build/payload.sh" >&2; return 1; }
+    || { echo "no tools/build/payload.sh at $ref" >&2; return 1; }
 
   if [[ -e "$ROOT/toolchain" && ! -e "$wt/toolchain" ]]; then
     cp -a --reflink=auto "$(readlink -f "$ROOT/toolchain")" "$wt/toolchain" \
-      || { echo "[build-debs] could not copy toolchain into $wt" >&2; return 1; }
+      || { echo "failed to copy toolchain to $wt" >&2; return 1; }
   fi
   if [[ -e "$ROOT/aosp-android16-qpr2" && ! -e "$wt/aosp-android16-qpr2" ]]; then
     ln -s "$(readlink -f "$ROOT/aosp-android16-qpr2")" "$wt/aosp-android16-qpr2" \
-      || { echo "[build-debs] could not link aosp-android16-qpr2 into $wt" >&2; return 1; }
+      || { echo "failed to link aosp-android16-qpr2 in $wt" >&2; return 1; }
   fi
 
   ( cd "$wt" && tools/fetch/build-inputs.sh --accept-android-sdk-license ) \
-    || { echo "[build-debs] $ref's build-inputs.sh failed in $wt" >&2; return 1; }
+    || { echo "tools/fetch/build-inputs.sh of $ref failed in $wt" >&2; return 1; }
   ( cd "$wt" && tools/build/payload.sh ) \
-    || { echo "[build-debs] $ref's payload.sh failed in $wt" >&2; return 1; }
+    || { echo "tools/build/payload.sh of $ref failed in $wt" >&2; return 1; }
 
   [[ -d "$wt/var/share" && ! -L "$wt/var/share" ]] \
-    || { echo "[build-debs] $wt/var/share is not a real directory after building $ref's own payload" >&2; return 1; }
+    || { echo "$wt/var/share is not a directory" >&2; return 1; }
   local shared
   shared=$(comm -12 \
     <(find "$wt/var/share" -type f -printf '%i\n' 2>/dev/null | sort -u) \
     <(find "$ROOT/var/share" -type f -printf '%i\n' 2>/dev/null | sort -u))
   [[ -z "$shared" ]] \
-    || { echo "[build-debs] $wt/var/share shares $(wc -l <<<"$shared") inode(s) with $ROOT/var/share -- $ref's payload is not its own" >&2; return 1; }
+    || { echo "$wt/var/share has $(wc -l <<<"$shared") inodes of $ROOT/var/share" >&2; return 1; }
 }
 
-# build N-1 in a throwaway detached worktree
+# build the packages of ref in a detached worktree into outdir
 build_at() {
   local ref="$1" outdir="$2"
 
   local head_version; head_version=$(dpkg-parsechangelog -l"$ROOT/debian/changelog" -SVersion)
 
   mkdir -p "$ROOT/var" && AT_WORK=$(mktemp -d "$ROOT/var/build-debs-at.XXXXXX") \
-    || { echo "[build-debs] could not make a work dir under $ROOT/var" >&2; exit 1; }
+    || { echo "mktemp -d $ROOT/var/build-debs-at.XXXXXX failed" >&2; exit 1; }
   trap cleanup_at EXIT
 
   AT_RHIZO_PREV="$AT_WORK/rhizo-prev"
   git -C "$ROOT" worktree add --detach "$AT_RHIZO_PREV" "$ref" \
-    || { echo "[build-debs] could not create a worktree at $ref" >&2; exit 1; }
+    || { echo "git worktree add --detach $AT_RHIZO_PREV $ref failed" >&2; exit 1; }
 
   local ref_version; ref_version=$(dpkg-parsechangelog -l"$AT_RHIZO_PREV/debian/changelog" -SVersion)
-  [[ -n "$ref_version" ]] || { echo "[build-debs] no Version in $ref's debian/changelog" >&2; exit 1; }
+  [[ -n "$ref_version" ]] || { echo "no Version in debian/changelog of $ref" >&2; exit 1; }
   if [[ "$ref_version" == "$head_version" ]]; then
-    echo "[build-debs] --at $ref builds version $ref_version, the same as HEAD's -- refusing" >&2
+    echo "--at $ref Version $ref_version == HEAD Version" >&2
     exit 1
   fi
 
@@ -139,7 +139,7 @@ build_at() {
   rhizo_commit=$(git -C "$ROOT" rev-parse "$ref")
 
   ( cd "$AT_RHIZO_PREV" && dpkg-buildpackage -us -uc -b >"$AT_WORK/rhizo-prev.build.log" 2>&1 ) \
-    || { echo "[build-debs] $ref failed to build -- see $AT_WORK/rhizo-prev.build.log" >&2; exit 1; }
+    || { echo "dpkg-buildpackage failed for $ref (log $AT_WORK/rhizo-prev.build.log)" >&2; exit 1; }
 
   local f
   for f in "$AT_WORK"/rhizo_*_amd64.deb; do
@@ -147,20 +147,20 @@ build_at() {
     drop_other_versions "$outdir" "$(basename "$f")"
     mv -f "$f" "$outdir/"
     printf 'commit\t%s\n' "$rhizo_commit" > "$outdir/$(basename "$f").inputs"
-    echo "[build-debs] $(basename "$f") $(sha256sum "$outdir/$(basename "$f")" | cut -c1-16) (from $ref @ ${rhizo_commit:0:12})"
+    echo "wrote $(basename "$f") sha256=$(sha256sum "$outdir/$(basename "$f")" | cut -c1-16) ref=$ref commit=${rhizo_commit:0:12}"
   done
   local prev_deb new_deb
   prev_deb=$(ls -1 "$outdir"/rhizo_*_amd64.deb 2>/dev/null | tail -1)
   new_deb=$(ls -1 "$OUT"/rhizo_*_amd64.deb 2>/dev/null | tail -1)
   if [[ -z "$prev_deb" ]]; then
-    echo "[build-debs] $ref's build produced no rhizo_*_amd64.deb in $outdir" >&2
+    echo "no rhizo_*_amd64.deb in $outdir for $ref" >&2
     exit 1
   fi
   if [[ -z "$new_deb" ]]; then
-    echo "[build-debs] no rhizo_*_amd64.deb in $OUT to compare $(basename "$prev_deb") against -- build N first with tools/build/packaging/deb/debs.sh" >&2
+    echo "no rhizo_*_amd64.deb in $OUT" >&2
     exit 1
   elif payload_digest_matches "$prev_deb" "$new_deb"; then
-    echo "[build-debs] $(basename "$prev_deb") ($ref) and $(basename "$new_deb") (HEAD) have byte-identical payloads once VERSION is excluded -- refusing" >&2
+    echo "$(basename "$prev_deb") ($ref) and $(basename "$new_deb") (HEAD) have equal payloads without usr/lib/rhizo/VERSION" >&2
     exit 1
   fi
   ls -1 "$outdir"/*.deb
@@ -171,26 +171,26 @@ selftest_at_cleanup() {
   local fail=0 out
 
   out=$(AT_RHIZO_PREV="" AT_WORK=""; cleanup_at 2>&1; echo "rc=$?")
-  [[ "$out" == "rc=0" ]] || { echo "SELFTEST FAILED: cleanup_at with its --at globals empty did not cleanly no-op: $out"; fail=1; }
+  [[ "$out" == "rc=0" ]] || { echo "FAIL cleanup_at with AT_RHIZO_PREV= AT_WORK= prints rc=0 ($out)"; fail=1; }
 
   out=$(unset AT_RHIZO_PREV AT_WORK 2>/dev/null; set -euo pipefail; cleanup_at 2>&1; echo "rc=$?")
-  [[ "$out" == "rc=0" ]] || { echo "SELFTEST FAILED: cleanup_at crashed with its --at globals unset (the reported defect): $out"; fail=1; }
+  [[ "$out" == "rc=0" ]] || { echo "FAIL cleanup_at with AT_RHIZO_PREV and AT_WORK unset under set -u prints rc=0 ($out)"; fail=1; }
 
   local fixture_work fixture_wt
   fixture_work=$(mktemp -d "${TMPDIR:-/tmp}/build-debs-selftest.XXXXXX")
   fixture_wt="$fixture_work/rhizo-fixture"
   if git -C "$ROOT" worktree add --detach "$fixture_wt" HEAD >/dev/null 2>&1; then
     ( AT_RHIZO_PREV="$fixture_wt" AT_WORK="$fixture_work"; cleanup_at )
-    [[ ! -e "$fixture_wt" ]] || { echo "SELFTEST FAILED: cleanup_at left the detached worktree behind: $fixture_wt"; fail=1; }
-    [[ ! -e "$fixture_work" ]] || { echo "SELFTEST FAILED: cleanup_at left the scratch dir behind: $fixture_work"; fail=1; }
+    [[ ! -e "$fixture_wt" ]] || { echo "FAIL cleanup_at deletes the worktree $fixture_wt"; fail=1; }
+    [[ ! -e "$fixture_work" ]] || { echo "FAIL cleanup_at deletes $fixture_work"; fail=1; }
     git -C "$ROOT" worktree prune >/dev/null 2>&1
   else
-    echo "SELFTEST SKIPPED: could not add a fixture worktree at HEAD to exercise cleanup_at's real removal"
+    echo "SKIP cleanup_at worktree removal after git worktree add failed"
   fi
   rm -rf "$fixture_work" 2>/dev/null
 
-  if (( fail )); then echo "debs.sh selftest: FAILED"; return 1; fi
-  echo "debs.sh selftest: ok"
+  if (( fail )); then echo "FAIL debs.sh --selftest"; return 1; fi
+  echo "ok debs.sh --selftest"
 }
 
 if [[ "${1:-}" == --selftest ]]; then

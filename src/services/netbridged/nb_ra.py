@@ -120,7 +120,7 @@ class RaService(Service):
             raise
         if len(mac) != 6:
             log("NB_RA_FAIL reason=mac_length:%d", len(mac))
-            raise ValueError(f"bad mac length for {iface}: {len(mac)}")
+            raise ValueError(f"mac length for {iface} is {len(mac)}, expected 6")
         return mac, mtu
 
     def sockets(self):
@@ -130,7 +130,7 @@ class RaService(Service):
         return [self._sock] if self._sock is not None else []
 
     def unhealthy(self):
-        """report a missing ICMPv6 socket"""
+        """return the missing ICMPv6 socket reason, or an empty string"""
         return "" if self.sockets() else "no ICMPv6 socket on %s" % self.cfg.veth_if
 
     def _open_socket(self):
@@ -178,7 +178,7 @@ class RaService(Service):
         return min(deadlines)
 
     def tick(self, now):
-        """send the solicited and periodic advertisements that are due"""
+        """call _send for each due solicited and periodic advertisement"""
         if self._next_solicited is not None and now >= self._next_solicited:
             self._next_solicited = None
             self._send("solicited")
@@ -187,7 +187,7 @@ class RaService(Service):
             self._next_periodic = now + self.ra_interval
 
     def _send(self, reason):
-        """build and send a router advertisement"""
+        """build a router advertisement and call sendto to ALL_ROUTERS"""
         if self._sock is None:
             log("NB_RA_FAIL reason=no_socket")
             return

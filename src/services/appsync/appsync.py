@@ -55,8 +55,8 @@ def _pick_ssh_control_dir():
             continue
         return cand
     raise SystemExit(
-        "rhizo-appsync: no usable SSH ControlMaster directory. Set XDG_RUNTIME_DIR to a "
-        "directory you own.")
+        "[rhizo-appsync] no writable rhizo-ssh-<uid> directory under XDG_RUNTIME_DIR or "
+        "/tmp")
 
 
 _SSH_CONTROL_DIR = _pick_ssh_control_dir()
@@ -68,9 +68,9 @@ def ssh_opts():
     """return the ssh and scp options"""
     if len(_SSH_CONTROL_SOCK) > 91:
         raise SystemExit(
-            f"rhizo-appsync: ControlPath {_SSH_CONTROL_SOCK!r} is "
-            f"{len(_SSH_CONTROL_SOCK)} bytes; ssh's temp suffix needs it at 91 or "
-            f"under. Set XDG_RUNTIME_DIR shorter.")
+            f"[rhizo-appsync] ControlPath {_SSH_CONTROL_SOCK!r} is "
+            f"{len(_SSH_CONTROL_SOCK)} bytes, over 91 "
+            f"bytes")
     os.makedirs(_SSH_CONTROL_DIR, exist_ok=True)
     return ["-i", SSH_KEY, "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
@@ -133,7 +133,7 @@ HIDDEN_PACKAGES = {"com.android.inputmethod.latin", "org.chromium.webview_shell"
 
 
 def log(msg):
-    """print a message to stderr with the rhizo-appsync prefix"""
+    """print msg to stderr with the [rhizo-appsync] tag"""
     print(f"[rhizo-appsync] {msg}", file=sys.stderr, flush=True)
 
 
@@ -150,10 +150,10 @@ def configured_selinux_mode():
     try:
         r = subprocess.run([helper, "--env-file", env_file, "--configured"], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise RuntimeError(f"running the SELinux mode helper {helper} failed: {e}") from e
+        raise RuntimeError(f"the SELinux mode helper {helper} failed ({e})") from e
     mode = r.stdout.strip()
     if r.returncode != 0 or mode not in SELINUX_MODES:
-        raise RuntimeError(f"the SELinux mode helper {helper} exited {r.returncode} with {mode!r}: {r.stderr.strip()[:200]}")
+        raise RuntimeError(f"the SELinux mode helper {helper} exited {r.returncode} with {mode!r} ({r.stderr.strip()[:200]})")
     return mode
 
 
@@ -166,11 +166,11 @@ def read_selinux_mode():
     except FileNotFoundError:
         mode = ""
     except OSError as e:
-        raise RuntimeError(f"reading the SELinux mode file {path} failed: {e}") from e
+        raise RuntimeError(f"failed to read the SELinux mode file {path} ({e})") from e
     if not mode:
         return configured_selinux_mode()
     if mode not in SELINUX_MODES:
-        raise RuntimeError(f"the SELinux mode file {path} holds {mode!r}, not host or namespace")
+        raise RuntimeError(f"the SELinux mode file {path} is {mode!r}, expected host or namespace")
     return mode
 
 
@@ -179,20 +179,20 @@ def find_aapt2():
     override = os.environ.get("RHIZO_AAPT2")
     if override:
         if not os.access(override, os.X_OK):
-            log(f"FAIL: RHIZO_AAPT2={override} is not an executable file")
+            log(f"RHIZO_AAPT2={override} is not an executable file")
             sys.exit(1)
         return override
     for c in AAPT2_CANDIDATES:
         if os.access(c, os.X_OK):
             return c
-    log("FAIL: no aapt2 at " + ", nor at ".join(AAPT2_CANDIDATES)
-        + ". Build one with tools/build/toolchain/aapt2.sh, or name one in RHIZO_AAPT2.")
+    log("no aapt2 at " + ", ".join(AAPT2_CANDIDATES)
+        + " or RHIZO_AAPT2")
     sys.exit(1)
 
 
 @functools.lru_cache(maxsize=1)
 def icon_generator():
-    """load gen-rhizo-icon.py"""
+    """return the gen-rhizo-icon.py module, or None"""
     if not os.path.isfile(ICON_GEN):
         return None
     spec = importlib.util.spec_from_file_location("rhizo_gen_icon", ICON_GEN)
@@ -202,7 +202,7 @@ def icon_generator():
 
 
 def _extract_rc_marker(out, marker):
-    """extract the marker line value"""
+    """return the text after marker on the first line that starts with marker, or None"""
     for line in out.splitlines():
         if line.startswith(marker):
             return line[len(marker):].strip()
@@ -218,7 +218,7 @@ def kde_mimeapps_path(prefix):
 # paths for system-wide desktop entries
 class Dest:
     def __init__(self, prefix):
-        """store the prefix and the paths under it"""
+        """store prefix and the paths under prefix"""
         self.prefix = prefix
         self.applications = os.path.join(prefix, "applications")
         self.icons = os.path.join(prefix, "icons", "hicolor")
@@ -235,7 +235,7 @@ class Dest:
         return os.path.join(self.metainfo, f"rhizo-{pkg}.metainfo.xml")
 
     def icon(self, name, size):
-        """return the path of a named icon of a size in the hicolor theme"""
+        """return the hicolor path of icon name at size"""
         return os.path.join(self.icons, f"{size}x{size}", "apps", f"{name}.png")
 
 
@@ -255,13 +255,13 @@ class HostBackend:
         self._mode = None
 
     def aapt2(self):
-        """return the aapt2 path, found on the first call"""
+        """return the aapt2 path, calling find_aapt2 while self._aapt2 is None"""
         if self._aapt2 is None:
             self._aapt2 = find_aapt2()
         return self._aapt2
 
     def host_run(self, cmd, timeout=30):
-        """run a command on the host and return its status and combined output"""
+        """run cmd on the host and return the exit status and combined output"""
         if self.local:
             full = ["/bin/sh", "-c", cmd]
         else:
@@ -270,7 +270,7 @@ class HostBackend:
         return r.returncode, (r.stdout or "") + (r.stderr or "")
 
     def host_sh(self, cmd, timeout=30):
-        """run a command on the host"""
+        """run cmd on the host and return the combined output"""
         return self.host_run(cmd, timeout)[1]
 
     def selinux_mode(self):
@@ -280,7 +280,7 @@ class HostBackend:
         return self._mode
 
     def _read_mode(self):
-        """read the SELinux mode"""
+        """return read_selinux_mode() locally, or the guest SELinux mode over ssh"""
         if self.local:
             return read_selinux_mode()
         path = shlex.quote(SELINUX_MODE_FILE)
@@ -289,7 +289,7 @@ class HostBackend:
                f"if [ -z \"$m\" ]; then {helper}; else echo \"$m\"; fi")
         rc, out = self.host_run(cmd)
         if rc != 0 or out.strip() not in SELINUX_MODES:
-            raise RuntimeError(f"reading the guest's SELinux mode failed: {cmd!r} exited {rc}, output {out[:200]!r}")
+            raise RuntimeError(f"failed to read the guest SELinux mode ({cmd!r} exited {rc}, output {out[:200]!r})")
         return out.strip()
 
     def android_sh(self, cmd, timeout=30):
@@ -323,7 +323,7 @@ class HostBackend:
         found = (self.host_sh(f"{tests} || true", timeout=15) or "").strip().split("\n")[0].strip()
         if not found:
             raise RuntimeError(
-                "no rhizo-probe-client on the guest; tried "
+                "no rhizo-probe-client on the guest at "
                 + ", ".join(PROBE_CLIENT_GUEST_CANDIDATES))
         self._probe_client = found
         return found
@@ -332,7 +332,7 @@ class HostBackend:
         """copy a sandbox file through the shell"""
         size_out = self.android_sh(f"stat -c %s {sandbox_path}", timeout=timeout).strip()
         if not size_out.isdigit():
-            return False, f"could not read the size of {sandbox_path!r}: {size_out[:200]!r}"
+            return False, f"failed to read the size of {sandbox_path!r} ({size_out[:200]!r})"
         size = int(size_out)
         parts = []
         for index in range(-(-size // PULL_CHUNK_BYTES)):
@@ -341,22 +341,22 @@ class HostBackend:
                 f"dd if={sandbox_path} bs={PULL_CHUNK_BYTES} skip={index} count=1 2>/dev/null | base64",
                 timeout=timeout)
             if not out or out.startswith("nsenter: failed to execute"):
-                return False, (f"android_sh produced no usable output for {sandbox_path!r} "
-                               f"chunk {index}: {out[:200]!r}")
+                return False, (f"android_sh returned no base64 for {sandbox_path!r} "
+                               f"chunk {index} ({out[:200]!r})")
             try:
                 chunk = base64.b64decode("".join(out.split()), validate=True)
             except (binascii.Error, ValueError):
                 return False, (
-                    f"base64 output for {sandbox_path!r} chunk {index} was not valid base64 "
-                    f"({len(out)} char(s) received, decoding to ~{len(out) * 3 // 4} "
-                    f"byte(s)); the text starts {out[:120]!r}")
+                    f"failed to decode base64 for {sandbox_path!r} chunk {index} "
+                    f"(chars={len(out)} approx_bytes={len(out) * 3 // 4} "
+                    f"start={out[:120]!r})")
             if len(chunk) != want:
-                return False, (f"chunk {index} of {sandbox_path!r} decoded to {len(chunk)} byte(s), "
-                               f"{want} expected -- the transfer was cut short")
+                return False, (f"chunk {index} of {sandbox_path!r} decoded to {len(chunk)} bytes, "
+                               f"expected {want}")
             parts.append(chunk)
         data = b"".join(parts)
         if len(data) < 1024 or data[:2] != b"PK":
-            return False, f"decoded {len(data)} byte(s) for {sandbox_path!r}, does not look like an APK (starts {data[:16]!r})"
+            return False, f"decoded {len(data)} bytes for {sandbox_path!r}, under 1024 bytes or without a PK header ({data[:16]!r})"
         with open(local_path, "wb") as f:
             f.write(data)
         return True, None
@@ -371,7 +371,7 @@ class HostBackend:
                 copy_err = str(e)
             if self.init_pid is not None:
                 return self.pull_via_shell(sandbox_path or guest_path, local_path, timeout=timeout)
-            return False, f"shutil.copyfile({guest_path!r}) failed ({copy_err}) and no init_pid for the android_sh fallback"
+            return False, f"shutil.copyfile({guest_path!r}) failed ({copy_err}) with init_pid None"
         _gsi_root = GSI_GUEST.rstrip("/") + "/"
         if sandbox_path and self.init_pid is not None and not guest_path.startswith(_gsi_root):
             return self.pull_via_shell(sandbox_path, local_path, timeout=timeout)
@@ -380,7 +380,7 @@ class HostBackend:
         r = subprocess.run(full, capture_output=True, text=True, timeout=timeout)
         if r.returncode == 0:
             return True, None
-        return False, f"scp {guest_path!r} exit {r.returncode}: {r.stderr.strip()[:200]}"
+        return False, f"scp {guest_path!r} failed with exit status {r.returncode} ({r.stderr.strip()[:200]})"
 
     def push(self, local_path, guest_path, timeout=60):
         """copy a local file to the guest"""
@@ -390,7 +390,7 @@ class HostBackend:
                 shutil.copymode(local_path, guest_path)
                 return True
             except OSError as e:
-                log(f"  copy to {guest_path} failed: {e}")
+                log(f"  failed to copy to {guest_path} ({e})")
                 return False
         full = ["scp", "-q"] + ssh_opts() + ["-P", SSH_PORT, local_path,
                                              f"{SSH_TARGET}:{guest_path}"]
@@ -398,7 +398,7 @@ class HostBackend:
         return r.returncode == 0
 
     def push_batch(self, items, work, timeout=180):
-        """write several files to the guest"""
+        """write items to the guest"""
         if not items:
             return []
         dirs = sorted({os.path.dirname(p) for p, _ in items})
@@ -422,8 +422,8 @@ class HostBackend:
                            capture_output=True, timeout=timeout)
         out = ((r.stdout or b"") + (r.stderr or b"")).decode("utf-8", "replace")
         if PUSH_BATCH_OK not in out:
-            log(f"  FAIL: writing {len(items)} file(s) under {dirs} exited "
-                f"{r.returncode}: {' '.join(out.split())[:200] or '<no output>'}")
+            log(f"  failed to write {len(items)} files under {dirs} with exit status "
+                f"{r.returncode} ({' '.join(out.split())[:200] or '<no output>'})")
             return []
         return [p for p, _ in items]
 
@@ -433,11 +433,11 @@ class HostBackend:
             proc = subprocess.run([self.aapt2(), "dump", "badging", local_apk],
                                   capture_output=True, text=True, timeout=30)
         except subprocess.SubprocessError as e:
-            return 127, "", f"aapt2 dump badging failed: {e}"
+            return 127, "", f"aapt2 dump badging failed ({e})"
         return proc.returncode, proc.stdout, proc.stderr
 
     def plasma_desktop(self):
-        """return whether the host has plasma's shell"""
+        """return whether command -v plasmashell succeeds on the host"""
         return "RHIZO_PLASMA" in self.host_sh("command -v plasmashell >/dev/null 2>&1 && echo RHIZO_PLASMA")
 
     def refresh_desktop_db(self, app_dir):
@@ -448,15 +448,15 @@ class HostBackend:
             f"update-desktop-database {q}; echo RHIZO_UDD_RC=$?; "
             f"else echo RHIZO_UDD_MISSING; fi")
         if "RHIZO_UDD_MISSING" in out:
-            return False, ("update-desktop-database is not installed -- "
-                           "desktop-file-utils is a Depends of the rhizo package")
+            return False, ("command -v update-desktop-database "
+                           "failed")
         rc = _extract_rc_marker(out, "RHIZO_UDD_RC=")
         if rc != "0":
-            return False, f"update-desktop-database exited {rc}: {' '.join(out.split())[:200]}"
+            return False, f"update-desktop-database failed with exit status {rc} ({' '.join(out.split())[:200]})"
         return True, f"update-desktop-database rebuilt mimeinfo.cache in {app_dir}"
 
     def bump_icon_theme(self, theme_root):
-        """bump the icon theme directory mtime"""
+        """touch theme_root and run gtk-update-icon-cache"""
         q = shlex.quote(theme_root)
         if self.local:
             os.utime(theme_root, None)
@@ -467,15 +467,15 @@ class HostBackend:
             f"gtk-update-icon-cache -f -t {q}; echo RHIZO_GUIC_RC=$?; "
             f"else echo RHIZO_GUIC_ABSENT; fi")
         if "RHIZO_GUIC_ABSENT" in out:
-            return f"bumped {theme_root}; no gtk-update-icon-cache here"
+            return f"touched {theme_root}, no gtk-update-icon-cache in PATH"
         rc = _extract_rc_marker(out, "RHIZO_GUIC_RC=")
         if rc != "0":
-            return f"bumped {theme_root}; FAIL: gtk-update-icon-cache exited {rc}: {' '.join(out.split())[:200]}"
-        return f"bumped {theme_root} and refreshed its gtk icon cache"
+            return f"touched {theme_root}, gtk-update-icon-cache failed with exit status {rc} ({' '.join(out.split())[:200]})"
+        return f"touched {theme_root} and ran gtk-update-icon-cache"
 
 
 def verdict_code(aapt2=None):
-    """hash this file with aapt2 and ICON_GEN"""
+    """hash __file__, aapt2 and ICON_GEN"""
     h = hashlib.sha256()
     for part in (os.path.abspath(__file__), aapt2, ICON_GEN):
         h.update(b"\0" + (part or "").encode() + b"\0")
@@ -488,28 +488,28 @@ def verdict_code(aapt2=None):
 
 
 def load_cache(path, fingerprint, prefix, code=None):
-    """read the verdict cache file"""
+    """return the cache entries when fingerprint, code and prefix match, or {}"""
     code = verdict_code() if code is None else code
     try:
         with open(path) as fh:
             c = json.load(fh)
         if not isinstance(c.get("entries"), dict):
-            log(f"cache at {path} has no entries object: starting empty")
+            log(f"cache {path} has no entries object")
         elif c.get("fingerprint") != fingerprint:
-            log(f"cache at {path} is for fingerprint {c.get('fingerprint')!r}, "
-                f"not {fingerprint!r}: starting empty")
+            log(f"cache {path} fingerprint {c.get('fingerprint')!r} "
+                f"is not {fingerprint!r}")
         elif c.get("code") != code:
-            log(f"cache at {path} holds verdicts from appsync.py {c.get('code')!r}, "
-                f"not {code!r}: starting empty")
+            log(f"cache {path} code {c.get('code')!r} "
+                f"is not {code!r}")
         elif c.get("prefix") != prefix:
-            log(f"cache at {path} was written for prefix {c.get('prefix')!r}, "
-                f"not {prefix!r}: starting empty")
+            log(f"cache {path} prefix {c.get('prefix')!r} "
+                f"is not {prefix!r}")
         else:
             return c["entries"]
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as e:
-        log(f"cache at {path} unreadable ({e}): starting empty")
+        log(f"failed to read cache {path} ({e})")
     return {}
 
 
@@ -568,7 +568,7 @@ def settled_query_activities_raw(be, deadline_s=180, stable_rounds_needed=2):
         }
         raw = be.android_sh(QUERY_ACTIVITIES_CMD)
         if "Failure calling service" in raw or "Can't find service" in raw:
-            log(f"  query-activities returned a service error ({raw.strip()!r}) -- re-checking")
+            log(f"  query-activities returned a service error ({raw.strip()!r})")
             stable_rounds = 0
             prev_pkgs = pkgs
             prev_missing = None
@@ -579,21 +579,21 @@ def settled_query_activities_raw(be, deadline_s=180, stable_rounds_needed=2):
             stable_rounds += 1
             if stable_rounds >= stable_rounds_needed:
                 if missing:
-                    log(f"  {len(missing)} third-party package(s) never appear in query-activities ({missing}) "
-                        f"-- no launchable activity")
+                    log(f"  {len(missing)} third-party packages ({missing}) "
+                        f"have no launchable activity")
                 return raw, True
         else:
             if stable_rounds:
-                log("  third-party package set or its query-activities reflection changed again -- resetting the stability count")
+                log("  pm list packages -3 or query-activities changed, stable_rounds=0")
             stable_rounds = 0
             if missing != prev_missing:
-                log(f"  {len(missing)} third-party package(s) not yet reflected in live query-activities ({missing}) -- re-checking")
+                log(f"  {len(missing)} third-party packages absent from query-activities ({missing})")
             elif pkgs != prev_pkgs:
-                log(f"  third-party package set changed since the last read ({sorted(prev_pkgs or [])} -> {sorted(pkgs)}) -- re-checking")
+                log(f"  pm list packages -3 changed ({sorted(prev_pkgs or [])} -> {sorted(pkgs)})")
         prev_pkgs = pkgs
         prev_missing = missing
         time.sleep(be.poll_s)
-    log(f"  settle deadline ({deadline_s}s) reached without {stable_rounds_needed} consecutive stable reads -- proceeding with the last one, deleting nothing")
+    log(f"  {deadline_s}s deadline passed without {stable_rounds_needed} consecutive equal query-activities outputs")
     return raw, False
 
 
@@ -608,14 +608,14 @@ def enumerate_launchable(be):
     for pkg, act in pairs:
         fq = pkg + act if act.startswith(".") else act
         if fq in by_pkg[pkg]:
-            log(f"  drop {pkg}/{act}: in {pkg}'s own disabledComponents ({fq})")
+            log(f"  drop {pkg}/{act} in the {pkg} disabledComponents ({fq})")
             continue
         filtered.append((pkg, act))
     return filtered, raw, settled
 
 
 def pm_list(be, flag):
-    """return package names for a pm list flag"""
+    """return the packages for a pm list flag"""
     raw = be.android_sh(("pm list packages " + flag).strip())
     if "Failure calling service" in raw or "Can't find service" in raw:
         log(f"  'pm list packages {flag}' returned a service error ({raw.strip()!r})")
@@ -628,7 +628,7 @@ def installed_packages(be):
     """return all packages and the third-party packages"""
     every = pm_list(be, "")
     if not every:
-        log("  'pm list packages' named no packages -- treating the read as failed")
+        log("  'pm list packages' printed no packages")
         return None, None
     third = pm_list(be, "-3")
     if third is None:
@@ -650,7 +650,7 @@ def resolve_winner(be, probe_args, label):
         if not COMPONENT_RE.match(line):
             continue
         if CHOOSER_RE.search(line):
-            log(f"  {label}: the resolver answers with a chooser ({line}) -- no default written")
+            log(f"  resolve-activity {label} returned a chooser ({line})")
             return None
         return line.split("/", 1)[0]
     return None
@@ -718,15 +718,15 @@ def host_defaults(winners, synthesized, policy, log):
     defaults = {APK_MIME: APK_HANDLER}
     if not policy.allows("desktop.default_handler"):
         if winners:
-            log(f"  desktop.default_handler is off: {len(winners)} resolver "
-                f"winner(s) claim no host default")
+            log(f"  desktop.default_handler is off, {len(winners)} resolver "
+                f"winners without a host default")
         return defaults
     for key in sorted(winners):
         winner = winners[key]
         if winner in synthesized:
             defaults[key] = f"rhizo-{winner}.desktop"
         else:
-            log(f"  {key}: resolver winner {winner} has no synthesized entry -- no default written")
+            log(f"  {key} resolver winner {winner} has no synthesized entry")
     return {k: defaults[k] for k in sorted(defaults)}
 
 
@@ -739,7 +739,7 @@ def merge_mimeapps(existing_text, defaults, ours=()):
     have_default_section = False
 
     def flush_missing():
-        """append each default not yet written to the output lines"""
+        """append each default missing from handled to out"""
         for mt, desktop in defaults.items():
             if mt not in handled:
                 out.append(f"{mt}={desktop}")
@@ -782,7 +782,7 @@ def merge_mimeapps(existing_text, defaults, ours=()):
 
 
 def strip_mimeapps_entries(text, desktop_names):
-    """remove associations to the given desktop entries"""
+    """return text without the desktop_names values, and the dropped lines"""
     kept, dropped = [], []
     for line in text.splitlines():
         s = line.strip()
@@ -812,13 +812,13 @@ def png_square_size(data):
 
 
 def hicolor_size(pixels):
-    """return the largest standard icon size"""
+    """return the largest STANDARD_ICON_SIZES value at or below pixels"""
     fit = [s for s in STANDARD_ICON_SIZES if s <= pixels]
     return max(fit) if fit else None
 
 
 def density_of(name):
-    """return the rank of the first density named in a file name, or 0"""
+    """return the DENSITY_RANK of the first density in name, or 0"""
     for d, rank in DENSITY_RANK.items():
         if d in name:
             return rank
@@ -913,10 +913,10 @@ def android_icon(be, pkg, px=ANDROID_ICON_PX):
     try:
         data = base64.b64decode("".join(out.split()), validate=True)
     except (binascii.Error, ValueError):
-        return None, f"Android drew no icon: {uri} answered {' '.join(out.split())[:160]!r}"
+        return None, f"content read {uri} returned no base64 ({' '.join(out.split())[:160]!r})"
     pixels, why = png_square_size(data)
     if pixels != px:
-        return None, f"Android drew no icon: {uri} answered no {px}px PNG ({why or f'{pixels}px'})"
+        return None, f"content read {uri} returned no {px}px PNG ({why or f'{pixels}px'})"
     return data, None
 
 
@@ -959,7 +959,7 @@ def adaptive_layers(be, apk_path, badging_text):
 
 
 def compose_adaptive(fg_data, bg):
-    """draw an adaptive icon as the android launcher shows it"""
+    """draw the adaptive icon fg_data over bg in the launcher circle mask"""
     try:
         decoded = decode_png_rgba(fg_data)
     except (zlib.error, struct.error, IndexError, ValueError):
@@ -1022,7 +1022,7 @@ def collect_icon_rasters(apk_path, badging_text):
             same_base = sorted(n for n in names
                                if n.endswith(f"/{base}.png") and ("mipmap" in n or "drawable" in n))
             if not same_base:
-                notes.append(f"'{path}' has no raster form in this APK")
+                notes.append(f"'{path}' has no PNG in the APK")
             candidates.extend(same_base)
 
         seen = set()
@@ -1033,11 +1033,11 @@ def collect_icon_rasters(apk_path, badging_text):
             data = fill_icon(z.read(name))
             pixels, why = png_square_size(data)
             if pixels is None:
-                notes.append(f"refused {name}: {why}")
+                notes.append(f"refused {name} ({why})")
                 continue
             size = hicolor_size(pixels)
             if size is None:
-                notes.append(f"refused {name}: {pixels}px is below the smallest theme size")
+                notes.append(f"refused {name} at {pixels}px below the smallest STANDARD_ICON_SIZES")
                 continue
             rank = (density_of(name), pixels)
             if size in chosen and chosen[size][0] >= rank:
@@ -1092,33 +1092,33 @@ def write_defaults(be, dest, work, defaults, ours, claims_path, probed_at):
                  if isinstance(c, dict) and c.get("t", 0) > probed_at
                  and k in defaults and c.get("desktop") != defaults[k]}
         for k, v in sorted(newer.items()):
-            log(f"  {k}: {v} was claimed from a newer resolver read than this pass's -- left as it is")
+            log(f"  {k}={v} has a claim newer than probed_at")
         mine = {k: v for k, v in defaults.items() if k not in newer}
         existing, read_ok = read_mimeapps(be, dest)
         if not read_ok:
             return False
         keep_ours = set(ours) - set(newer.values())
         if not write_mimeapps(be, dest, work, merge_mimeapps(existing, mine, keep_ours)):
-            log(f"  FAIL: could not write {dest.mimeapps}")
+            log(f"  failed to write {dest.mimeapps}")
             return False
         for k, v in mine.items():
             claims[k] = {"desktop": v, "t": probed_at}
         try:
             save_claims(claims_path, dest.prefix, claims)
         except OSError as e:
-            log(f"  FAIL: could not record the defaults this pass claimed in {claims_path}: {e}")
+            log(f"  failed to write {claims_path} ({e})")
             return False
-    log(f"  {dest.mimeapps} defaults: {mine}")
+    log(f"  {dest.mimeapps} defaults={mine}")
     return True
 
 
 def read_mimeapps(be, dest):
-    """read mimeapps.list and create its directory"""
+    """read mimeapps.list and create the mimeapps.list directory"""
     return read_list(be, dest.mimeapps)
 
 
 def read_list(be, path):
-    """read a mimeapps-style list and create its directory"""
+    """read the mimeapps-style list at path and create the parent directory"""
     q = shlex.quote(path)
     out = be.host_sh(f"mkdir -p {shlex.quote(os.path.dirname(path))}; "
                      f"if [ -f {q} ]; then printf RHIZO_MIMEAPPS_BEGIN; cat {q}; "
@@ -1127,7 +1127,7 @@ def read_list(be, path):
         return out.split("RHIZO_MIMEAPPS_BEGIN", 1)[1], True
     if "RHIZO_MIMEAPPS_ABSENT" in out:
         return "", True
-    log(f"  FAIL: reading {path} produced no marker, so this is not its content: {out[:200]!r}")
+    log(f"  no RHIZO_MIMEAPPS marker in the output for {path} ({out[:200]!r})")
     return "", False
 
 
@@ -1155,14 +1155,14 @@ def claim_appstream_handler(be, dest, work):
             return True
         text = merge_mimeapps(existing, {APPSTREAM_KEY: ";".join(want) + ";"})
         if not put_file(be, work, "kde-mimeapps.list", text.encode(), dest.kde_mimeapps):
-            log(f"  FAIL: could not write {dest.kde_mimeapps}")
+            log(f"  failed to write {dest.kde_mimeapps}")
             return False
-    log(f"  {dest.kde_mimeapps}: {APPSTREAM_KEY}={';'.join(want)}")
+    log(f"  {dest.kde_mimeapps} {APPSTREAM_KEY}={';'.join(want)}")
     return True
 
 
 def put_file(be, work, name, data, guest_path):
-    """write bytes to a file and push it"""
+    """write data to work/name and push work/name to guest_path"""
     local = os.path.join(work, name)
     with open(local, "wb") as fh:
         fh.write(data)
@@ -1171,7 +1171,7 @@ def put_file(be, work, name, data, guest_path):
 
 
 def write_mimeapps(be, dest, work, text):
-    """push a mimeapps.list text to the destination"""
+    """write text to dest.mimeapps with put_file"""
     return put_file(be, work, "mimeapps.list", text.encode(), dest.mimeapps)
 
 
@@ -1184,13 +1184,13 @@ def ensure_generic_icon(be, dest, work):
         return True
     gen = icon_generator()
     if gen is None:
-        log(f"  FAIL: {target} is gone and there is no {ICON_GEN} beside this script to "
-            f"write it")
+        log(f"  {target} does not exist and {ICON_GEN} "
+            f"does not exist")
         return False
     if put_file(be, work, "rhizo.png", gen.mark_png(), target):
         log(f"  wrote the generic icon {target}")
         return True
-    log(f"  FAIL: could not write the generic icon {target}")
+    log(f"  failed to write the generic icon {target}")
     return False
 
 
@@ -1201,17 +1201,17 @@ def seed_apk_default(be, dest, work):
         return False
     text = merge_mimeapps(existing, {APK_MIME: APK_HANDLER})
     if write_mimeapps(be, dest, work, text):
-        log(f"  {dest.mimeapps}: {APK_MIME}={APK_HANDLER}")
+        log(f"  {dest.mimeapps} {APK_MIME}={APK_HANDLER}")
         return True
-    log(f"  FAIL: could not write {dest.mimeapps}")
+    log(f"  failed to write {dest.mimeapps}")
     return False
 
 
 def reconcile_only(be, dest):
-    """remove entries of packages the device lacks"""
+    """remove the desktop entries of packages absent from pm list packages"""
     every, _ = installed_packages(be)
     if every is None:
-        log("reconcile-only: the package list could not be read -- nothing removed")
+        log("failed to read pm list packages")
         return 0
     with tempfile.TemporaryDirectory() as work:
         removed = reconcile_entries(be, dest, every, True, work)
@@ -1221,17 +1221,17 @@ def reconcile_only(be, dest):
         log("  " + be.bump_icon_theme(dest.icons))
         if not ok:
             return 1
-    log("reconcile-only: %d package(s) removed" % len(removed))
+    log("removed %d packages" % len(removed))
     return 0
 
 
 def reconcile_entries(be, dest, live_pkgs, settled, work):
-    """remove entries of packages missing from the device"""
+    """remove the desktop entries of packages absent from live_pkgs or in HIDDEN_PACKAGES"""
     if not settled:
-        log("  enumeration never settled -- nothing removed")
+        log("  settled is false, nothing removed")
         return []
     if not live_pkgs:
-        log("  no live package list -- nothing removed")
+        log("  live_pkgs is empty, nothing removed")
         return []
     listing = be.host_sh(
         f"for f in {shlex.quote(dest.applications)}/rhizo-*.desktop; do "
@@ -1248,12 +1248,12 @@ def reconcile_entries(be, dest, live_pkgs, settled, work):
             unmarked += 1
             continue
         if not PKG_RE.match(pkg):
-            log(f"  {path}: X-Rhizo-Package={pkg!r} is not a package name -- left alone")
+            log(f"  {path} X-Rhizo-Package={pkg!r} does not match PKG_RE")
             continue
         if pkg not in live_pkgs or pkg in HIDDEN_PACKAGES:
             gone_pkgs[pkg] = path
     if unmarked:
-        log(f"  {unmarked} rhizo-*.desktop file(s) carry no X-Rhizo-Package= -- not ours, left alone")
+        log(f"  {unmarked} rhizo-*.desktop files without X-Rhizo-Package=")
     if not gone_pkgs:
         return []
 
@@ -1270,7 +1270,7 @@ def reconcile_entries(be, dest, live_pkgs, settled, work):
     with mimeapps_lock(be, dest):
         existing, ok = read_mimeapps(be, dest)
         if not ok:
-            log(f"  FAIL: {sorted(names)} still named in {dest.mimeapps}, which could not be read")
+            log(f"  read_mimeapps failed with {sorted(names)} in {dest.mimeapps}")
             return sorted(gone_pkgs)
         text, dropped = strip_mimeapps_entries(existing, names)
         if dropped:
@@ -1278,12 +1278,12 @@ def reconcile_entries(be, dest, live_pkgs, settled, work):
                 for line in dropped:
                     log(f"  removed {dest.mimeapps} line {line!r}")
             else:
-                log(f"  FAIL: could not rewrite {dest.mimeapps} without {sorted(names)}")
+                log(f"  failed to write {dest.mimeapps} without {sorted(names)}")
     return sorted(gone_pkgs)
 
 
 def resolve_apk_all(be):
-    """return the APK path of every installed package"""
+    """return the APK path of each installed package"""
     out = {}
     raw = be.android_sh("pm list packages -f")
     for line in raw.splitlines():
@@ -1339,7 +1339,7 @@ def badging_label(badging):
 
 
 def probe_mime_associations(be):
-    """query the resolver for every probed type"""
+    """query the resolver for each SCHEME_PROBES and MIME_PROBES type"""
     handlers, winners = {}, {}
     for scheme in SCHEME_PROBES:
         key = f"x-scheme-handler/{scheme}"
@@ -1348,15 +1348,15 @@ def probe_mime_associations(be):
         if winner:
             winners[key] = winner
         elif not handlers[key]:
-            log(f"  {scheme}: no Android app resolves this scheme")
+            log(f"  no Android app resolves scheme {scheme}")
     for mime in MIME_PROBES:
         handlers[mime] = query_handlers(be, mime_probe_args(mime))
         winner = resolve_winner(be, mime_probe_args(mime), mime)
         if winner:
             winners[mime] = winner
         elif not handlers[mime]:
-            log(f"  {mime}: no Android app resolves this type")
-    log(f"  resolver named handlers for {sorted(k for k, v in handlers.items() if v)}")
+            log(f"  no Android app resolves type {mime}")
+    log(f"  resolver returned handlers for {sorted(k for k, v in handlers.items() if v)}")
     return handlers, winners
 
 
@@ -1374,7 +1374,7 @@ def synthesize_entry(be, dest, work, pkg, act, mime_types, is_third_party, devpa
     cached = cache.get(pkg)
     if cached and cached.get("devpath") == devpath and cached.get("activity") == act:
         if cached.get("result") == "skip":
-            log(f"  skip {pkg}: {cached.get('reason')} (cached verdict)")
+            log(f"  skip {pkg} ({cached.get('reason')}, cached verdict)")
             return None, True
         entry = cached.get("app") or {}
         wanted = [entry.get("desktop_guest_path", "")]
@@ -1386,7 +1386,7 @@ def synthesize_entry(be, dest, work, pkg, act, mime_types, is_third_party, devpa
                      and entry.get("third_party") == is_third_party
                      and entry.get("plasma", False) == plasma)
         if cached.get("result") == "ok" and present and unchanged:
-            log(f"  reused rhizo-{pkg}.desktop (cached verdict, files present)")
+            log(f"  reused rhizo-{pkg}.desktop from the cached verdict")
             return entry, True
 
     local_apk = os.path.join(work, f"{pkg}.apk")
@@ -1399,7 +1399,7 @@ def synthesize_entry(be, dest, work, pkg, act, mime_types, is_third_party, devpa
             break
         pull_fail_reasons.append(f"{cand} -> {reason}")
     if guest_apk_path is None:
-        log(f"  skip {pkg}: could not pull a valid APK: " + "; ".join(pull_fail_reasons))
+        log(f"  skip {pkg}, failed to pull an APK from " + "; ".join(pull_fail_reasons))
         return None, False
 
     rc, badging, stderr = be.badging(local_apk)
@@ -1410,17 +1410,17 @@ def synthesize_entry(be, dest, work, pkg, act, mime_types, is_third_party, devpa
                 magic = fh.read(4)
             shape = f"{st.st_size}B magic={magic!r}"
         except OSError as e:
-            shape = f"unstattable: {e}"
-        reason = (f"aapt2 dump badging exited {rc} on the pulled APK "
-                  f"({shape}): {' '.join(stderr.split())[:300] or '<no stderr>'}")
-        log(f"  skip {pkg}: {reason}")
+            shape = f"os.stat failed ({e})"
+        reason = (f"aapt2 dump badging failed with exit status {rc} on the pulled APK "
+                  f"({shape}) ({' '.join(stderr.split())[:300] or '<no stderr>'})")
+        log(f"  skip {pkg} ({reason})")
         return None, False
 
     label = badging_label(badging)
     if not label:
-        reason = (f"aapt2 exited 0 but its badging output carries no "
-                  f"application-label: line ({len(badging.splitlines())} line(s) of badging)")
-        log(f"  skip {pkg}: {reason}")
+        reason = (f"aapt2 dump badging returned 0 without an "
+                  f"application-label: line ({len(badging.splitlines())} lines)")
+        log(f"  skip {pkg} ({reason})")
         cache[pkg] = {"devpath": devpath, "activity": act, "result": "skip", "reason": reason}
         return None, False
 
@@ -1454,7 +1454,7 @@ def synthesize_entry(be, dest, work, pkg, act, mime_types, is_third_party, devpa
                 icon_sizes.append(size)
             else:
                 icon_notes.append(
-                    f"could not write {target} (from {rasters[size][1]})")
+                    f"failed to write {target} (from {rasters[size][1]})")
     stale = [dest.icon(f"rhizo-{pkg}", s) for s in STANDARD_ICON_SIZES if s not in icon_sizes]
     be.host_sh("rm -f -- " + " ".join(shlex.quote(p) for p in stale))
     icon_name = f"rhizo-{pkg}" if icon_sizes else GENERIC_ICON
@@ -1463,17 +1463,17 @@ def synthesize_entry(be, dest, work, pkg, act, mime_types, is_third_party, devpa
     text = desktop_entry_text(label, icon_name, pkg, act, mime_types, is_third_party, plasma)
     entry_path = dest.entry(pkg)
     if not put_file(be, work, f"rhizo-{pkg}.desktop", text.encode(), entry_path):
-        log(f"  skip {pkg}: could not write {entry_path}")
+        log(f"  skip {pkg}, failed to write {entry_path}")
         return None, False
     meta_path = dest.metainfo_file(pkg)
     if plasma and act:
         be.host_sh(f"mkdir -p {shlex.quote(dest.metainfo)}")
         if not put_file(be, work, f"rhizo-{pkg}.metainfo.xml", metainfo_text(label, pkg).encode(), meta_path):
-            log(f"  FAIL: could not write {meta_path}: plasma's manage action finds no {pkg}")
+            log(f"  failed to write {meta_path} for {pkg}")
     else:
         be.host_sh("rm -f -- " + shlex.quote(meta_path))
 
-    log(f"  synthesized {entry_path}: Name='{label}' Icon={icon_name} "
+    log(f"  synthesized {entry_path} Name='{label}' Icon={icon_name} "
         f"mime={mime_types or 'none'} third_party={int(is_third_party)} "
         f"no_display={int(not act)} icons={icon_sizes or 'none'} ({icon_note})")
 
@@ -1499,28 +1499,28 @@ def synthesize_entry(be, dest, work, pkg, act, mime_types, is_third_party, devpa
 
 def sync_apps(be, dest, manifest_path, min_apps, cache_path=CACHE_PATH, claims_path=CLAIMS_PATH):
     """write desktop entries for the installed packages"""
-    log(f"using aapt2: {be.aapt2()} (local={be.local}) prefix={dest.prefix}")
+    log(f"aapt2={be.aapt2()} local={be.local} prefix={dest.prefix}")
     failures = 0
 
     fingerprint = be.android_sh("getprop ro.build.fingerprint").strip()
     code = verdict_code(be.aapt2())
     cache = load_cache(cache_path, fingerprint, dest.prefix, code=code) if fingerprint else {}
     cache_hits = 0
-    log(f"fingerprint {fingerprint!r}: {len(cache)} cached package verdict(s)")
+    log(f"fingerprint {fingerprint!r} has {len(cache)} cached package verdicts")
 
     pairs, raw, settled = enumerate_launchable(be)
-    log(f"query-activities raw output:\n{raw}")
+    log(f"query-activities output\n{raw}")
     pairs = [p for p in pairs if p[0] not in HIDDEN_PACKAGES]
     if not pairs:
-        log("FAIL: no launchable pkg/activity pairs found on the live sandbox")
+        log("no launchable pkg/activity pairs in query-activities")
         return {}, False
     if not settled:
-        log("FAIL: query-activities enumeration never settled -- synthesizing from a partial read")
+        log("query-activities did not settle")
         failures += 1
-    log(f"found {len(pairs)} launchable activities: {pairs}")
+    log(f"{len(pairs)} launchable activities {pairs}")
 
     apk_paths = resolve_apk_all(be)
-    log(f"  resolved {len(apk_paths)} APK path(s) in one pm list packages -f")
+    log(f"  pm list packages -f returned {len(apk_paths)} APK paths")
 
     every_pkg, third_party = installed_packages(be)
     probed_at = time.time()
@@ -1533,20 +1533,20 @@ def sync_apps(be, dest, manifest_path, min_apps, cache_path=CACHE_PATH, claims_p
             if pkg in launchable or pkg in HIDDEN_PACKAGES:
                 continue
             if every_pkg is not None and pkg not in every_pkg:
-                log(f"  {key}: resolver named {pkg}, which pm does not list as installed -- no entry")
+                log(f"  {key} resolver returned {pkg}, absent from pm list packages")
                 continue
             handler_only.add(pkg)
     if handler_only:
-        log(f"  handler-only packages (no launcher activity): {sorted(handler_only)}")
+        log(f"  handler-only packages without a launcher activity {sorted(handler_only)}")
     targets = list(pairs) + [(pkg, "") for pkg in sorted(handler_only)]
 
     if third_party is None:
-        log("  the installed-package read failed -- no Uninstall actions, nothing removed")
+        log("  installed_packages failed")
 
     apps = []
     plasma = be.plasma_desktop()
-    log(f"  plasma {'is' if plasma else 'is not'} installed: entries "
-        f"{'leave Uninstall to its manage action' if plasma else 'carry an Uninstall'}")
+    log(f"  plasmashell {'found' if plasma else 'not found'}, entries "
+        f"{'without Actions=Uninstall' if plasma else 'with Actions=Uninstall'}")
     with tempfile.TemporaryDirectory() as work:
         be.host_sh(f"mkdir -p {shlex.quote(dest.applications)}")
         for pkg, act in targets:
@@ -1557,7 +1557,7 @@ def sync_apps(be, dest, manifest_path, min_apps, cache_path=CACHE_PATH, claims_p
             if not devpath:
                 devpath, why = resolve_apk(be, pkg)
             if not devpath:
-                log(f"  skip {pkg}: {why}")
+                log(f"  skip {pkg} ({why})")
                 continue
 
             entry, from_cache = synthesize_entry(be, dest, work, pkg, act, mime_types,
@@ -1579,7 +1579,7 @@ def sync_apps(be, dest, manifest_path, min_apps, cache_path=CACHE_PATH, claims_p
         removed = reconcile_entries(be, dest, live_now, settled, work)
 
         ok, detail = be.refresh_desktop_db(dest.applications)
-        log(("  " if ok else "  FAIL: ") + detail)
+        log("  " + detail)
         failures += 0 if ok else 1
         log("  " + be.bump_icon_theme(dest.icons))
 
@@ -1592,16 +1592,16 @@ def sync_apps(be, dest, manifest_path, min_apps, cache_path=CACHE_PATH, claims_p
     }
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
-    log(f"wrote manifest: {manifest_path} ({len(apps)} app(s), {cache_hits} from cache, "
-        f"{len(removed)} removed)")
+    log(f"wrote {manifest_path} apps={len(apps)} cached={cache_hits} "
+        f"removed={len(removed)}")
     if fingerprint:
         try:
             save_cache(cache_path, fingerprint, dest.prefix, cache, code=code)
         except OSError as e:
-            log(f"could not write {cache_path}: {e}")
+            log(f"failed to write {cache_path} ({e})")
 
     if len(apps) < min_apps:
-        log(f"FAIL: only {len(apps)} .desktop entries synthesized, need >= {min_apps}")
+        log(f"synthesized {len(apps)} .desktop entries, fewer than --min-apps {min_apps}")
         failures += 1
     return manifest, failures == 0
 
@@ -1639,7 +1639,7 @@ def sync_package(be, dest, pkg, deadline_s=PACKAGE_MAP_DEADLINE_S, claims_path=C
     """write the entry and defaults for a package"""
     every, third = installed_packages(be)
     if every is None or pkg not in every:
-        log(f"  package {pkg}: pm does not list it installed -- nothing written")
+        log(f"  package {pkg} is absent from pm list packages")
         return False
     pairs = launcher_activities(be, pkg, deadline_s)
     probed_at = time.time()
@@ -1647,14 +1647,14 @@ def sync_package(be, dest, pkg, deadline_s=PACKAGE_MAP_DEADLINE_S, claims_path=C
     mime_types = mime_types_for(pkg, handlers)
     act = pairs[-1][1] if pairs else ""
     if not act and not mime_types:
-        log(f"  package {pkg}: no launcher activity and no handled type -- no entry")
+        log(f"  package {pkg} has no launcher activity and no handled type")
         return False
     devpath = resolve_apk_all(be).get(pkg)
     why = None
     if not devpath:
         devpath, why = resolve_apk(be, pkg)
     if not devpath:
-        log(f"  skip {pkg}: {why}")
+        log(f"  skip {pkg} ({why})")
         return False
     with tempfile.TemporaryDirectory() as work:
         be.host_sh(f"mkdir -p {shlex.quote(dest.applications)}")
@@ -1666,16 +1666,16 @@ def sync_package(be, dest, pkg, deadline_s=PACKAGE_MAP_DEADLINE_S, claims_path=C
         own = {k: v for k, v in winners.items() if v == pkg}
         defaults = host_defaults(own, {pkg}, capabilities.policy_or_deny(log=log), log)
         if not write_defaults(be, dest, work, defaults, {f"rhizo-{pkg}.desktop"}, claims_path, probed_at):
-            log(f"  FAIL: could not merge {pkg}'s defaults into {dest.mimeapps}")
+            log(f"  failed to merge the {pkg} defaults into {dest.mimeapps}")
             ok = False
         db_ok, detail = be.refresh_desktop_db(dest.applications)
-        log(("  " if db_ok else "  FAIL: ") + detail)
+        log("  " + detail)
         log("  " + be.bump_icon_theme(dest.icons))
     if not (ok and db_ok):
-        log(f"package {pkg}: FAIL: entry {dest.entry(pkg)} written but its defaults or the desktop "
-            f"database were not")
+        log(f"package {pkg} entry {dest.entry(pkg)} written, defaults or update-desktop-database "
+            f"failed")
         return False
-    log(f"package {pkg}: entry {dest.entry(pkg)} written, defaults {defaults}")
+    log(f"package {pkg} entry {dest.entry(pkg)} written, defaults {defaults}")
     return True
 
 
@@ -1689,12 +1689,12 @@ def read_queue(queue_path, offset):
     except FileNotFoundError:
         return [], 0
     except OSError as e:
-        raise OSError(e.errno, f"refusing {queue_path}: {e.strerror} (a symlink reads ELOOP)") from e
+        raise OSError(e.errno, f"failed to open {queue_path} ({e.strerror})") from e
     with os.fdopen(fd, "rb") as fh:
         st = os.fstat(fh.fileno())
         if not stat.S_ISREG(st.st_mode) or st.st_size > QUEUE_MAX_BYTES:
-            raise OSError(errno.EINVAL, f"refusing {queue_path}: mode {st.st_mode:o}, "
-                                        f"{st.st_size} bytes, want a regular file of at most {QUEUE_MAX_BYTES}")
+            raise OSError(errno.EINVAL, f"{queue_path} mode={st.st_mode:o} "
+                                        f"size={st.st_size} is not a regular file of at most {QUEUE_MAX_BYTES} bytes")
         data = fh.read(QUEUE_MAX_BYTES)
     if len(data) < offset:
         offset = 0
@@ -1717,22 +1717,22 @@ def drain_queue(be, dest, queue_path, state_path, alive, wait,
         lines, offset = read_queue(queue_path, offset)
         for name in lines:
             if not QUEUE_DIR_RE.match(name) or name in (".", ".."):
-                log(f"queue: a {len(name)}-character line is not a /data/app entry name -- ignored")
+                log(f"ignored a {len(name)}-character queue line that does not match QUEUE_DIR_RE")
                 ignored.append(name)
             elif name not in pending:
                 pending[name] = time.monotonic()
         if pending:
             for d, pkg in sorted(packages_for_dirs(be, set(pending)).items()):
                 del pending[d]
-                log(f"queue: {d} is {pkg}'s directory, per pm list packages -f")
+                log(f"queue entry {d} maps to {pkg} in pm list packages -f")
                 if sync_package(be, dest, pkg, map_deadline_s):
                     synced.append(pkg)
                 else:
-                    log(f"queue: FAIL: {pkg}'s entry was not written")
+                    log(f"failed to write the queued {pkg} entry")
                     failed.append(pkg)
             for d, t0 in list(pending.items()):
                 if time.monotonic() - t0 >= map_deadline_s:
-                    log(f"queue: pm names no package under {d} after {map_deadline_s:.0f}s -- ignored")
+                    log(f"ignored queue entry {d}, no package after {map_deadline_s:.0f}s")
                     ignored.append(d)
                     del pending[d]
         if not pending:
@@ -1773,7 +1773,7 @@ def pid_waiter(pid):
 
 
 def drain_waiter(while_pid):
-    """return poll and wait functions for the drain's optional watched pid"""
+    """return poll and wait functions for while_pid, or sleep_wait when while_pid is unset"""
     return pid_waiter(while_pid) if while_pid else ((lambda: False), sleep_wait)
 
 
@@ -1930,7 +1930,7 @@ class FixtureWorld:
             for i, p in enumerate(handlers))
 
     def probe_key(self, cmd):
-        """return the key a probe command asks about"""
+        """return the -t type or -d scheme key of a probe command"""
         mo = re.search(r"-t (\S+)", cmd)
         if mo:
             return mo.group(1)
@@ -1977,12 +1977,12 @@ class FixtureBackend(HostBackend):
         return getattr(self.world, "plasma", False)
 
     def refresh_desktop_db(self, app_dir):
-        """record a desktop database refresh of a directory"""
+        """append app_dir to self.refreshed"""
         self.refreshed.append(app_dir)
         return True, f"fixture recorded update-desktop-database {app_dir}"
 
     def bump_icon_theme(self, theme_root):
-        """record an icon theme bump of a theme root"""
+        """append theme_root to self.bumped"""
         self.bumped.append(theme_root)
         return f"fixture recorded a theme bump of {theme_root}"
 
@@ -2017,7 +2017,7 @@ class Expectations:
         self.failed = []
 
     def check(self, name, actual, expected):
-        """record a check and a failure on a mismatch"""
+        """append name to self.names, and to self.failed when actual != expected"""
         self.names.append(name)
         if self.corrupt:
             expected = corrupt_value(expected)
@@ -2025,7 +2025,7 @@ class Expectations:
             self.failed.append((name, actual, expected))
 
     def survivors(self):
-        """return the checked names that did not fail"""
+        """return the self.names entries absent from self.failed"""
         return [n for n in self.names if n not in {f[0] for f in self.failed}]
 
 
@@ -2076,7 +2076,7 @@ image/png=eog.desktop;
 
 
 def read_text(path):
-    """return the file text or a marker"""
+    """return the text of path, or RHIZO_ABSENT path when path is not a file"""
     if not os.path.isfile(path):
         return f"RHIZO_ABSENT {path}"
     with open(path) as fh:
@@ -2084,7 +2084,7 @@ def read_text(path):
 
 
 def read_bytes(path):
-    """return a file's bytes, or RHIZO_ABSENT when it is not a file"""
+    """return the bytes of path, or RHIZO_ABSENT when path is not a file"""
     if not os.path.isfile(path):
         return b"RHIZO_ABSENT"
     with open(path, "rb") as fh:
@@ -2092,7 +2092,7 @@ def read_bytes(path):
 
 
 def icon_dirs_holding(icons_root, name):
-    """list the theme size dirs for an icon"""
+    """return the sizes of the icons_root size directories with apps/name.png"""
     found = []
     for d in sorted(os.listdir(icons_root)) if os.path.isdir(icons_root) else []:
         if os.path.isfile(os.path.join(icons_root, d, "apps", f"{name}.png")):
@@ -2105,7 +2105,7 @@ def run_fixture(corrupt):
     exp = Expectations(corrupt)
     gen = icon_generator()
     if gen is None:
-        raise SystemExit(f"the selftest builds its fixture rasters with {ICON_GEN}, which is absent")
+        raise SystemExit(f"{ICON_GEN} does not exist")
     with tempfile.TemporaryDirectory() as root:
         dest = Dest(os.path.join(root, "usr", "share"))
         os.makedirs(dest.applications)
@@ -2133,25 +2133,25 @@ def run_fixture(corrupt):
         world = FixtureWorld(FIXTURE_PACKAGES)
         be = FixtureBackend(world)
         m1, ok1 = sync_apps(be, dest, manifest_path, min_apps=1, cache_path=cache_path)
-        exp.check("round1-ok", ok1, True)
-        exp.check("entry-text-alpha", read_text(dest.entry("com.fixture.alpha")), ALPHA_ENTRY)
-        exp.check("entry-text-handler-only",
+        exp.check("ok1 == True", ok1, True)
+        exp.check('read_text(dest.entry("com.fixture.alpha")) == ALPHA_ENTRY', read_text(dest.entry("com.fixture.alpha")), ALPHA_ENTRY)
+        exp.check('read_text(dest.entry("com.android.htmlviewer")) == HTMLVIEWER_ENTRY',
                   read_text(dest.entry("com.android.htmlviewer")), HTMLVIEWER_ENTRY)
-        exp.check("icon-sizes-alpha",
+        exp.check('icon_dirs_holding(dest.icons, "rhizo-com.fixture.alpha") == [48, 192]',
                   icon_dirs_holding(dest.icons, "rhizo-com.fixture.alpha"), [48, 192])
-        exp.check("icon-192-is-192",
+        exp.check('png_square_size(read_bytes(dest.icon("rhizo-com.fixture.alpha", 192)))[0] == 192',
                   png_square_size(read_bytes(dest.icon("rhizo-com.fixture.alpha", 192)))[0], 192)
-        exp.check("icon-48-is-48",
+        exp.check('png_square_size(read_bytes(dest.icon("rhizo-com.fixture.alpha", 48)))[0] == 48',
                   png_square_size(read_bytes(dest.icon("rhizo-com.fixture.alpha", 48)))[0], 48)
-        exp.check("icon-density-collision",
+        exp.check('read_bytes(dest.icon("rhizo-com.fixture.alpha", 48)) == gen.solid_png(48, FIXTURE_ICONS["res/mipmap-hdpi-v4/ic.png"][1])',
                   read_bytes(dest.icon("rhizo-com.fixture.alpha", 48)),
                   gen.solid_png(48, FIXTURE_ICONS["res/mipmap-hdpi-v4/ic.png"][1]))
-        exp.check("generic-icon-written",
+        exp.check("read_bytes(dest.icon(GENERIC_ICON, 256)) == gen.mark_png()",
                   read_bytes(dest.icon(GENERIC_ICON, 256)), gen.mark_png())
-        exp.check("generic-icon-named-when-no-raster",
+        exp.check('Icon= lines of dest.entry("com.fixture.gamma") == ["Icon=rhizo"]',
                   [line for line in read_text(dest.entry("com.fixture.gamma")).split("\n\n")[0].splitlines()
                    if line.startswith("Icon=")], ["Icon=rhizo"])
-        exp.check("no-icon-for-vector-only",
+        exp.check('icon_dirs_holding(dest.icons, "rhizo-com.fixture.gamma") == []',
                   icon_dirs_holding(dest.icons, "rhizo-com.fixture.gamma"), [])
         drawn_root = os.path.join(root, "drawn")
         drawn_dest = Dest(os.path.join(drawn_root, "usr", "share"))
@@ -2164,56 +2164,56 @@ def run_fixture(corrupt):
         drawn_world.android_icons = {"com.fixture.gamma": drawn_png, "com.fixture.alpha": b"not a png"}
         sync_apps(FixtureBackend(drawn_world), drawn_dest, os.path.join(drawn_root, "apps.json"), min_apps=1,
                   cache_path=os.path.join(drawn_root, "cache.json"))
-        exp.check("android-drawn-icon-named",
+        exp.check('Icon= lines of drawn_dest.entry("com.fixture.gamma") == ["Icon=rhizo-com.fixture.gamma"]',
                   [line for line in read_text(drawn_dest.entry("com.fixture.gamma")).split("\n\n")[0].splitlines()
                    if line.startswith("Icon=")], ["Icon=rhizo-com.fixture.gamma"])
-        exp.check("android-drawn-icon-written",
+        exp.check('read_bytes(drawn_dest.icon("rhizo-com.fixture.gamma", ANDROID_ICON_PX)) == drawn_png',
                   read_bytes(drawn_dest.icon("rhizo-com.fixture.gamma", ANDROID_ICON_PX)), drawn_png)
-        exp.check("android-drawn-icon-replaces-stale-sizes",
+        exp.check('icon_dirs_holding(drawn_dest.icons, "rhizo-com.fixture.gamma") == [ANDROID_ICON_PX]',
                   icon_dirs_holding(drawn_dest.icons, "rhizo-com.fixture.gamma"), [ANDROID_ICON_PX])
-        exp.check("android-garbage-falls-back-to-the-apk",
+        exp.check('icon_dirs_holding(drawn_dest.icons, "rhizo-com.fixture.alpha") == [48, 192]',
                   icon_dirs_holding(drawn_dest.icons, "rhizo-com.fixture.alpha"), [48, 192])
         merged = read_text(dest.mimeapps)
-        exp.check("mimeapps-merged-text", merged, MERGED_MIMEAPPS)
-        exp.check("mimeapps-apk-default",
+        exp.check("merged == MERGED_MIMEAPPS", merged, MERGED_MIMEAPPS)
+        exp.check('APK_MIME + "=" + APK_HANDLER in merged.splitlines()',
                   f"{APK_MIME}={APK_HANDLER}" in merged.splitlines(), True)
-        exp.check("mimeapps-single-winner",
+        exp.check('"x-scheme-handler/https=rhizo-com.fixture.alpha.desktop" in merged.splitlines()',
                   "x-scheme-handler/https=rhizo-com.fixture.alpha.desktop" in merged.splitlines(),
                   True)
-        exp.check("mimeapps-chooser-no-default",
+        exp.check('not any(line.startswith("text/plain=") for line in merged.splitlines())',
                   any(line.startswith("text/plain=") for line in merged.splitlines()), False)
         off = host_defaults({"x-scheme-handler/https": "com.fixture.alpha"},
                             {"com.fixture.alpha"},
                             capabilities.deny_all(), lambda _m: None)
-        exp.check("default-handler-off-claims-nothing", off, {APK_MIME: APK_HANDLER})
+        exp.check("host_defaults with capabilities.deny_all() == {APK_MIME: APK_HANDLER}", off, {APK_MIME: APK_HANDLER})
         on = host_defaults({"x-scheme-handler/https": "com.fixture.alpha"},
                            {"com.fixture.alpha"},
                            capabilities.defaults(), lambda _m: None)
-        exp.check("default-handler-off-by-default", on, {APK_MIME: APK_HANDLER})
+        exp.check("host_defaults with capabilities.defaults() == {APK_MIME: APK_HANDLER}", on, {APK_MIME: APK_HANDLER})
         granted = host_defaults(
             {"x-scheme-handler/https": "com.fixture.alpha"}, {"com.fixture.alpha"},
             capabilities.read_policy(policy_conf)[0], lambda _m: None)
-        exp.check("default-handler-on-claims-the-winner", granted,
+        exp.check('host_defaults with read_policy(policy_conf) == {APK_MIME: APK_HANDLER, "x-scheme-handler/https": "rhizo-com.fixture.alpha.desktop"}', granted,
                   {APK_MIME: APK_HANDLER,
                    "x-scheme-handler/https": "rhizo-com.fixture.alpha.desktop"})
-        exp.check("mimeapps-preserves-foreign",
+        exp.check("the FIXTURE_MIMEAPPS comment, text/csv and [Added Associations] lines in merged.splitlines()",
                   all(line in merged.splitlines() for line in
                       ("# a comment nothing may touch", "text/csv=libreoffice-calc.desktop",
                        "[Added Associations]", "image/png=eog.desktop;")), True)
-        exp.check("manifest-fields-alpha",
+        exp.check('com.fixture.alpha icon_sizes, mime_types, third_party and no_display in m1["apps"] == [48, 192], ["x-scheme-handler/https", "image/png", "text/plain"], True, False',
                   {k: v for k, v in next(a for a in m1["apps"]
                                          if a["package"] == "com.fixture.alpha").items()
                    if k in ("icon_sizes", "mime_types", "third_party", "no_display")},
                   {"icon_sizes": [48, 192],
                    "mime_types": ["x-scheme-handler/https", "image/png", "text/plain"],
                    "third_party": True, "no_display": False})
-        exp.check("manifest-fields-handler-only",
+        exp.check('com.android.htmlviewer icon_sizes, mime_types, third_party and no_display in m1["apps"] == [], ["text/html"], False, True',
                   {k: v for k, v in next(a for a in m1["apps"]
                                          if a["package"] == "com.android.htmlviewer").items()
                    if k in ("icon_sizes", "mime_types", "third_party", "no_display")},
                   {"icon_sizes": [], "mime_types": ["text/html"],
                    "third_party": False, "no_display": True})
-        exp.check("content-only-filter-offered-nothing",
+        exp.check('not os.path.exists(dest.entry("com.fixture.contentonly")) and com.fixture.contentonly not in m1["apps"]',
                   [os.path.exists(dest.entry("com.fixture.contentonly"))]
                   + [a["package"] for a in m1["apps"] if a["package"] == "com.fixture.contentonly"],
                   [False])
@@ -2221,7 +2221,7 @@ def run_fixture(corrupt):
                                  *(("..", "..", "install", "cli") if _CHECKOUT else ("..", "..", "install", "cli")),
                                  "print-share-row.py")
         mo = re.search(r'print\("%s\\t%s\\t([a-z]+:[^%"]*)%s"', read_text(share_row) if os.path.exists(share_row) else "")
-        exp.check("mime-probe-is-the-uri-rhizo-launch-delivers",
+        exp.check("MIME_PROBE_URI.startswith(the print-share-row.py URI prefix)",
                   bool(mo and mo.group(1) and MIME_PROBE_URI.startswith(mo.group(1))), True)
         off_root = os.path.join(root, "turned-off")
         off_dest = Dest(os.path.join(off_root, "share"))
@@ -2238,19 +2238,19 @@ def run_fixture(corrupt):
         finally:
             with open(policy_conf, "w") as fh:
                 fh.write("[desktop]\ndefault_handler = yes\n")
-        exp.check("default-handler-off-withdraws-earlier-claims", read_text(off_dest.mimeapps),
+        exp.check('read_text(off_dest.mimeapps) == MERGED_MIMEAPPS without the "=rhizo-com." lines', read_text(off_dest.mimeapps),
                   "".join(line + "\n" for line in MERGED_MIMEAPPS.splitlines()
                           if "=rhizo-com." not in line))
-        exp.check("round1-removed-nothing", m1["removed"], [])
-        exp.check("desktop-db-refreshed", be.refreshed, [dest.applications])
-        exp.check("icon-theme-bumped", be.bumped, [dest.icons])
+        exp.check('m1["removed"] == []', m1["removed"], [])
+        exp.check("be.refreshed == [dest.applications]", be.refreshed, [dest.applications])
+        exp.check("be.bumped == [dest.icons]", be.bumped, [dest.icons])
 
         before = sorted(os.listdir(dest.applications))
-        exp.check("reconcile-unsettled-noop",
+        exp.check('reconcile_entries(be, dest, {"com.fixture.alpha"}, False, root) == []',
                   reconcile_entries(be, dest, {"com.fixture.alpha"}, False, root), [])
-        exp.check("reconcile-unsettled-kept-files", sorted(os.listdir(dest.applications)), before)
-        exp.check("reconcile-empty-list-noop", reconcile_entries(be, dest, set(), True, root), [])
-        exp.check("reconcile-empty-list-kept-files",
+        exp.check("sorted(os.listdir(dest.applications)) == before after reconcile_entries with settled False", sorted(os.listdir(dest.applications)), before)
+        exp.check("reconcile_entries(be, dest, set(), True, root) == []", reconcile_entries(be, dest, set(), True, root), [])
+        exp.check("sorted(os.listdir(dest.applications)) == before after reconcile_entries with live_pkgs set()",
                   sorted(os.listdir(dest.applications)), before)
 
         class NeverSettlesBackend(FixtureBackend):
@@ -2283,49 +2283,49 @@ def run_fixture(corrupt):
                 cache_path=os.path.join(root, "unsettled-cache.json"))
         finally:
             settled_query_activities_raw = real_settle
-        exp.check("sync-unsettled-not-ok", ok_unsettled, False)
-        exp.check("sync-unsettled-apps-count", len(m_unsettled.get("apps", [])), 4)
+        exp.check("ok_unsettled == False", ok_unsettled, False)
+        exp.check('len(m_unsettled.get("apps", [])) == 4', len(m_unsettled.get("apps", [])), 4)
 
         world.present = [p for p in FIXTURE_PACKAGES if p != "com.fixture.beta"]
         m2, ok2 = sync_apps(be, dest, manifest_path, min_apps=1, cache_path=cache_path)
-        exp.check("round2-ok", ok2, True)
-        exp.check("reconcile-removed-manifest", m2["removed"], ["com.fixture.beta"])
-        exp.check("reconcile-removed-entry",
+        exp.check("ok2 == True", ok2, True)
+        exp.check('m2["removed"] == ["com.fixture.beta"]', m2["removed"], ["com.fixture.beta"])
+        exp.check('not os.path.exists(dest.entry("com.fixture.beta"))',
                   os.path.exists(dest.entry("com.fixture.beta")), False)
-        exp.check("reconcile-removed-icons",
+        exp.check('icon_dirs_holding(dest.icons, "rhizo-com.fixture.beta") == []',
                   icon_dirs_holding(dest.icons, "rhizo-com.fixture.beta"), [])
-        exp.check("reconcile-removed-mimeapps-line",
+        exp.check('read_text(dest.mimeapps) == MERGED_MIMEAPPS without the "x-scheme-handler/rhizo-test" line',
                   read_text(dest.mimeapps),
                   MERGED_MIMEAPPS.replace(
                       "x-scheme-handler/rhizo-test=rhizo-com.fixture.beta.desktop\n", ""))
-        exp.check("reconcile-kept-foreign-entry",
+        exp.check("read_text(foo.desktop) == the foo.desktop fixture text",
                   read_text(os.path.join(dest.applications, "foo.desktop")),
                   "[Desktop Entry]\nType=Application\nName=Foo\nExec=foo\n")
-        exp.check("reconcile-kept-unmarked-rhizo-entry",
+        exp.check("read_text(dest.applications APK_HANDLER) == read_text(shipped_handler)",
                   read_text(os.path.join(dest.applications, APK_HANDLER)),
                   read_text(shipped_handler))
-        exp.check("reconcile-kept-unmarked-lookalike",
+        exp.check("read_text(lookalike) == the rhizo-com.notours.stub.desktop fixture text",
                   read_text(lookalike),
                   "[Desktop Entry]\nType=Application\nName=Not Ours\nExec=stub\n")
-        exp.check("reconcile-final-listing", sorted(os.listdir(dest.applications)),
+        exp.check('sorted(os.listdir(dest.applications)) == ["foo.desktop", "mimeapps.list", APK_HANDLER, "rhizo-com.android.htmlviewer.desktop", "rhizo-com.fixture.alpha.desktop", "rhizo-com.fixture.gamma.desktop", "rhizo-com.notours.stub.desktop"]', sorted(os.listdir(dest.applications)),
                   ["foo.desktop", "mimeapps.list", APK_HANDLER,
                    "rhizo-com.android.htmlviewer.desktop", "rhizo-com.fixture.alpha.desktop",
                    "rhizo-com.fixture.gamma.desktop", "rhizo-com.notours.stub.desktop"])
-        exp.check("reconcile-kept-live-entry",
+        exp.check('read_text(dest.entry("com.fixture.alpha")) == ALPHA_ENTRY after round 2',
                   read_text(dest.entry("com.fixture.alpha")), ALPHA_ENTRY)
-        exp.check("reconcile-kept-live-icons",
+        exp.check('icon_dirs_holding(dest.icons, "rhizo-com.fixture.alpha") == [48, 192] after round 2',
                   icon_dirs_holding(dest.icons, "rhizo-com.fixture.alpha"), [48, 192])
-        exp.check("reconcile-kept-foreign-icon",
+        exp.check('icon_dirs_holding(dest.icons, "other-app") == [48]',
                   icon_dirs_holding(dest.icons, "other-app"), [48])
 
         class DeniedOnce(FixtureBackend):
             def __init__(self, world, victim):
-                """make a fixture backend that denies a package's first badging read"""
+                """make a fixture backend that fails badging for victim while self.denied is 0"""
                 super().__init__(world)
                 self.victim = victim
                 self.denied = 0
             def badging(self, local_apk):
-                """fail the victim's first badging read with a permission error"""
+                """return a permission error for victim while self.denied is 0"""
                 pkg = os.path.basename(local_apk)[: -len(".apk")]
                 if pkg == self.victim and self.denied == 0:
                     self.denied += 1
@@ -2341,37 +2341,37 @@ def run_fixture(corrupt):
         be_denied = DeniedOnce(world, victim)
         sync_apps(be_denied, denied_dest, os.path.join(root, "denied1.json"),
                   min_apps=1, cache_path=denied_cache)
-        exp.check("read-failure-skipped-the-package",
+        exp.check("not os.path.exists(denied_dest.entry(victim)) after denied1",
                   os.path.exists(denied_dest.entry(victim)), False)
-        exp.check("read-failure-not-cached",
+        exp.check('victim not in json.load(open(denied_cache)).get("entries", {})',
                   victim in json.load(open(denied_cache)).get("entries", {}), False)
         sync_apps(be_denied, denied_dest, os.path.join(root, "denied2.json"),
                   min_apps=1, cache_path=denied_cache)
-        exp.check("read-failure-retried-next-run",
+        exp.check("os.path.exists(denied_dest.entry(victim)) after denied2",
                   os.path.exists(denied_dest.entry(victim)), True)
 
         keyed = os.path.join(root, "keyed-cache.json")
         save_cache(keyed, "fp-A", "/usr/share", {"com.fixture.alpha": {"result": "ok"}})
-        exp.check("cache-reused-for-its-own-build-and-prefix",
+        exp.check('load_cache(keyed, "fp-A", "/usr/share") == {"com.fixture.alpha": {"result": "ok"}}',
                   load_cache(keyed, "fp-A", "/usr/share"),
                   {"com.fixture.alpha": {"result": "ok"}})
-        exp.check("cache-refused-for-another-prefix",
+        exp.check('load_cache(keyed, "fp-A", "/root/.local/share") == {}',
                   load_cache(keyed, "fp-A", "/root/.local/share"), {})
-        exp.check("cache-refused-for-another-build",
+        exp.check('load_cache(keyed, "fp-B", "/usr/share") == {}',
                   load_cache(keyed, "fp-B", "/usr/share"), {})
         save_cache(keyed, "fp-A", "/usr/share", {"com.fixture.alpha": {"result": "skip"}}, code="old-appsync")
-        exp.check("cache-refused-for-another-appsync",
+        exp.check('load_cache(keyed, "fp-A", "/usr/share") == {} for a code="old-appsync" cache',
                   load_cache(keyed, "fp-A", "/usr/share"), {})
-        exp.check("cache-reused-for-its-own-appsync",
+        exp.check('load_cache(keyed, "fp-A", "/usr/share", code="old-appsync") == {"com.fixture.alpha": {"result": "skip"}}',
                   load_cache(keyed, "fp-A", "/usr/share", code="old-appsync"),
                   {"com.fixture.alpha": {"result": "skip"}})
         aapt_a, aapt_b = os.path.join(root, "aapt2-a"), os.path.join(root, "aapt2-b")
         for path, body in ((aapt_a, b"aapt2 build 1"), (aapt_b, b"aapt2 build 2")):
             with open(path, "wb") as fh:
                 fh.write(body)
-        exp.check("verdict-code-moves-with-aapt2",
+        exp.check("verdict_code(aapt_a) != verdict_code(aapt_b)",
                   verdict_code(aapt_a) != verdict_code(aapt_b), True)
-        exp.check("verdict-code-same-for-same-aapt2",
+        exp.check("verdict_code(aapt_a) == verdict_code(aapt_a)",
                   verdict_code(aapt_a) == verdict_code(aapt_a), True)
         real_gen = ICON_GEN
         other_gen = os.path.join(root, "gen-rhizo-icon.py")
@@ -2380,16 +2380,16 @@ def run_fixture(corrupt):
         before = verdict_code(aapt_a)
         globals()["ICON_GEN"] = other_gen
         try:
-            exp.check("verdict-code-moves-with-icon-generator", verdict_code(aapt_a) != before, True)
+            exp.check("verdict_code(aapt_a) != before with ICON_GEN = other_gen", verdict_code(aapt_a) != before, True)
         finally:
             globals()["ICON_GEN"] = real_gen
 
         empty = Dest(os.path.join(root, "empty", "share"))
         seed_apk_default(FixtureBackend(FixtureWorld([])), empty, root)
-        exp.check("mimeapps-only-seeds-apk-handler", read_text(empty.mimeapps),
+        exp.check("read_text(empty.mimeapps) == [Default Applications] and APK_MIME=APK_HANDLER", read_text(empty.mimeapps),
                   f"[Default Applications]\n{APK_MIME}={APK_HANDLER}\n")
         claim_appstream_handler(FixtureBackend(FixtureWorld([])), empty, root)
-        exp.check("mimeapps-only-claims-appstream", read_text(empty.kde_mimeapps),
+        exp.check("read_text(empty.kde_mimeapps) == [Default Applications] and APPSTREAM_KEY=APPSTREAM_HANDLER;", read_text(empty.kde_mimeapps),
                   f"[Default Applications]\n{APPSTREAM_KEY}={APPSTREAM_HANDLER};\n")
     return exp
 
@@ -2397,20 +2397,20 @@ def run_fixture(corrupt):
 def _selftest_rc_marker():
     """test _extract_rc_marker on sample outputs"""
     cases = [
-        ("clean marker, nothing after", "RHIZO_UDD_RC=0\n", "0"),
-        ("marker then unrelated stderr noise (the real bug)",
+        ('_extract_rc_marker("RHIZO_UDD_RC=0\\n", "RHIZO_UDD_RC=") == "0"', "RHIZO_UDD_RC=0\n", "0"),
+        ('_extract_rc_marker("RHIZO_UDD_RC=0\\n" + a stderr line, "RHIZO_UDD_RC=") == "0"',
          "RHIZO_UDD_RC=0\n"
          'Could not parse file "/usr/share/applications/x.desktop": '
          "Key file does not have group [Desktop Entry]\n", "0"),
-        ("a genuine non-zero exit, still isolated correctly", "RHIZO_UDD_RC=1\n", "1"),
-        ("marker never printed at all", "something else entirely\n", None),
+        ('_extract_rc_marker("RHIZO_UDD_RC=1\\n", "RHIZO_UDD_RC=") == "1"', "RHIZO_UDD_RC=1\n", "1"),
+        ('_extract_rc_marker("something else entirely\\n", "RHIZO_UDD_RC=") is None', "something else entirely\n", None),
     ]
     failed = [name for name, out, want in cases
               if _extract_rc_marker(out, "RHIZO_UDD_RC=") != want]
     if failed:
-        print(f"rc-marker selftest FAILED: {failed}")
+        print(f"_extract_rc_marker failed {failed}")
         return False
-    print(f"rc-marker selftest ok: all {len(cases)} cases parse correctly")
+    print(f"_extract_rc_marker passed {len(cases)} cases")
     return True
 
 
@@ -2419,9 +2419,9 @@ def _selftest_plasma_manage():
     failed = []
 
     def expect(name, ok, detail=""):
-        """record a failure with its detail when ok is false"""
+        """append name and detail to failed when ok is false"""
         if not ok:
-            failed.append(f"{name}: {detail}")
+            failed.append(f"{name} ({detail})")
 
     other = "org.kde.discover.urlhandler.desktop"
     saved_policy = os.environ.get(capabilities.PATH_ENV)
@@ -2431,7 +2431,7 @@ def _selftest_plasma_manage():
         os.environ[capabilities.PATH_ENV] = policy_conf
         try:
             dest = Dest(os.path.join(root, "usr", "share"))
-            expect("kde-mimeapps-under-etc-xdg", dest.kde_mimeapps == os.path.join(root, "etc", "xdg", "kde-mimeapps.list"),
+            expect('dest.kde_mimeapps == os.path.join(root, "etc", "xdg", "kde-mimeapps.list")', dest.kde_mimeapps == os.path.join(root, "etc", "xdg", "kde-mimeapps.list"),
                    dest.kde_mimeapps)
             os.makedirs(dest.applications)
             os.makedirs(os.path.dirname(dest.kde_mimeapps))
@@ -2443,47 +2443,46 @@ def _selftest_plasma_manage():
             run = dict(manifest_path=os.path.join(root, "apps.json"), min_apps=1,
                        cache_path=os.path.join(root, "cache.json"), claims_path=os.path.join(root, "claims.json"))
             _, ok = sync_apps(be, dest, **run)
-            expect("plasma-sync-ok", ok)
-            expect("sync-leaves-kde-mimeapps-to-the-package", default_handlers(read_text(dest.kde_mimeapps), APPSTREAM_KEY) == [other],
+            expect("ok from sync_apps with world.plasma True", ok)
+            expect("default_handlers(read_text(dest.kde_mimeapps), APPSTREAM_KEY) == [other] after sync_apps", default_handlers(read_text(dest.kde_mimeapps), APPSTREAM_KEY) == [other],
                    read_text(dest.kde_mimeapps))
             with tempfile.TemporaryDirectory() as work:
-                expect("claim-ok", claim_appstream_handler(be, dest, work))
-                expect("claim-again-ok", claim_appstream_handler(be, dest, work))
+                expect("claim_appstream_handler(be, dest, work)", claim_appstream_handler(be, dest, work))
+                expect("claim_appstream_handler(be, dest, work) repeated", claim_appstream_handler(be, dest, work))
             alpha = read_text(dest.entry("com.fixture.alpha"))
-            expect("plasma-entry-has-no-uninstall", "Actions=" not in alpha, alpha)
+            expect('"Actions=" not in alpha', "Actions=" not in alpha, alpha)
             meta = read_text(dest.metainfo_file("com.fixture.alpha"))
-            expect("plasma-metainfo-names-the-entry",
+            expect("the rhizo-com.fixture.alpha id, name and launchable in meta",
                    "<id>rhizo-com.fixture.alpha</id>" in meta and "<name>Alpha's Ball</name>" in meta
                    and '<launchable type="desktop-id">rhizo-com.fixture.alpha.desktop</launchable>' in meta, meta)
             kde = read_text(dest.kde_mimeapps)
-            expect("handler-first-the-other-kept-once", default_handlers(kde, APPSTREAM_KEY) == [APPSTREAM_HANDLER, other], kde)
-            expect("plasma-other-defaults-untouched", "text/html=firefox.desktop;" in kde, kde)
+            expect("default_handlers(kde, APPSTREAM_KEY) == [APPSTREAM_HANDLER, other]", default_handlers(kde, APPSTREAM_KEY) == [APPSTREAM_HANDLER, other], kde)
+            expect('"text/html=firefox.desktop;" in kde', "text/html=firefox.desktop;" in kde, kde)
             _, ok = sync_apps(be, dest, **run)
-            expect("plasma-second-pass-ok", ok)
+            expect("ok from the second sync_apps with world.plasma True", ok)
             world.present.remove("com.fixture.alpha")
             sync_apps(be, dest, **run)
-            expect("plasma-removal-takes-the-metainfo", not os.path.exists(dest.metainfo_file("com.fixture.alpha")))
-            expect("plasma-removal-keeps-the-others", os.path.exists(dest.metainfo_file("com.fixture.beta")))
+            expect('not os.path.exists(dest.metainfo_file("com.fixture.alpha"))', not os.path.exists(dest.metainfo_file("com.fixture.alpha")))
+            expect('os.path.exists(dest.metainfo_file("com.fixture.beta"))', os.path.exists(dest.metainfo_file("com.fixture.beta")))
             world.plasma = False
             _, ok = sync_apps(be, dest, **run)
-            expect("no-plasma-sync-ok", ok)
+            expect("ok from sync_apps with world.plasma False", ok)
             beta = read_text(dest.entry("com.fixture.beta"))
-            expect("no-plasma-entry-has-uninstall",
+            expect('"Actions=Uninstall;", "Icon=edit-delete" and "Exec=rhizo app remove com.fixture.beta" in beta',
                    "Actions=Uninstall;" in beta and "Icon=edit-delete" in beta and "Exec=rhizo app remove com.fixture.beta" in beta,
                    beta)
-            expect("no-plasma-metainfo-gone", not os.path.exists(dest.metainfo_file("com.fixture.beta")))
+            expect('not os.path.exists(dest.metainfo_file("com.fixture.beta")) with world.plasma False', not os.path.exists(dest.metainfo_file("com.fixture.beta")))
         finally:
             if saved_policy is None:
                 os.environ.pop(capabilities.PATH_ENV, None)
             else:
                 os.environ[capabilities.PATH_ENV] = saved_policy
     if failed:
-        print("plasma-manage selftest FAILED:")
+        print("_selftest_plasma_manage failed")
         for f in failed:
             print(f"  {f}")
         return False
-    print("plasma-manage selftest ok: on plasma an entry leaves Uninstall to plasma's manage action and its metainfo "
-          "names it, each going with its app or with plasma; rhizo's appstream:// handler goes first, once, keeping the one before it")
+    print("_selftest_plasma_manage passed")
     return True
 
 
@@ -2493,9 +2492,9 @@ def _selftest_package_queue():
     failed = []
 
     def expect(name, ok, detail=""):
-        """record a failure with its detail when ok is false"""
+        """append name and detail to failed when ok is false"""
         if not ok:
-            failed.append(f"{name}: {detail}")
+            failed.append(f"{name} ({detail})")
 
     with tempfile.TemporaryDirectory() as root:
         dest = Dest(os.path.join(root, "usr", "share"))
@@ -2515,7 +2514,7 @@ def _selftest_package_queue():
             result = {}
 
             def drain():
-                """run drain_queue until the full pass is done"""
+                """run drain_queue until full_pass_done is set"""
                 result["out"] = drain_queue(
                     be, dest, queue, state, alive=lambda: not full_pass_done.is_set(),
                     wait=lambda s: full_pass_done.wait(min(s, 0.05)), map_deadline_s=1.0)
@@ -2528,42 +2527,42 @@ def _selftest_package_queue():
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline and not os.path.exists(dest.entry("com.fixture.alpha")):
                 time.sleep(0.02)
-            expect("entry-before-full-pass-ends", os.path.exists(dest.entry("com.fixture.alpha"))
-                   and not full_pass_done.is_set(), "no rhizo-com.fixture.alpha.desktop while the pass ran")
+            expect('os.path.exists(dest.entry("com.fixture.alpha")) and not full_pass_done.is_set()', os.path.exists(dest.entry("com.fixture.alpha"))
+                   and not full_pass_done.is_set(), "no rhizo-com.fixture.alpha.desktop before full_pass_done.set()")
             full_pass_done.set()
             t.join(20)
-            expect("drain-returns-once-pass-ends", not t.is_alive(), "drain_queue still running")
+            expect("not t.is_alive() after full_pass_done.set()", not t.is_alive(), "drain_queue still running")
             synced, ignored, failed_syncs = result.get("out", ([], [], None))
-            expect("synced-the-mapped-package", synced == ["com.fixture.alpha"], repr(synced))
-            expect("no-failed-sync", failed_syncs == [], repr(failed_syncs))
-            expect("forged-directory-ignored", "~~forged-not-installed==" in ignored, repr(ignored))
-            expect("path-entry-rejected", "../../etc" in ignored, repr(ignored))
-            expect("nothing-for-forged", sorted(f for f in os.listdir(dest.applications)
+            expect('synced == ["com.fixture.alpha"]', synced == ["com.fixture.alpha"], repr(synced))
+            expect("failed_syncs == []", failed_syncs == [], repr(failed_syncs))
+            expect('"~~forged-not-installed==" in ignored', "~~forged-not-installed==" in ignored, repr(ignored))
+            expect('"../../etc" in ignored', "../../etc" in ignored, repr(ignored))
+            expect('the rhizo- entries in dest.applications == ["rhizo-com.fixture.alpha.desktop"]', sorted(f for f in os.listdir(dest.applications)
                                                 if f.startswith("rhizo-")) == ["rhizo-com.fixture.alpha.desktop"],
                    repr(sorted(os.listdir(dest.applications))))
-            expect("entry-text", read_text(dest.entry("com.fixture.alpha")) == ALPHA_ENTRY,
+            expect('read_text(dest.entry("com.fixture.alpha")) == ALPHA_ENTRY', read_text(dest.entry("com.fixture.alpha")) == ALPHA_ENTRY,
                    read_text(dest.entry("com.fixture.alpha")))
-            expect("icons-written", icon_dirs_holding(dest.icons, "rhizo-com.fixture.alpha") != [],
+            expect('icon_dirs_holding(dest.icons, "rhizo-com.fixture.alpha") != []', icon_dirs_holding(dest.icons, "rhizo-com.fixture.alpha") != [],
                    "no rhizo-com.fixture.alpha.png")
             mime = read_text(dest.mimeapps)
-            expect("default-handler-on-claims", "x-scheme-handler/https=rhizo-com.fixture.alpha.desktop" in mime
+            expect('"x-scheme-handler/https=rhizo-com.fixture.alpha.desktop" and APK_MIME=APK_HANDLER in mime', "x-scheme-handler/https=rhizo-com.fixture.alpha.desktop" in mime
                    and f"{APK_MIME}={APK_HANDLER}" in mime, mime)
-            expect("no-default-for-others", "rhizo-com.fixture.beta" not in mime, mime)
+            expect('"rhizo-com.fixture.beta" not in mime', "rhizo-com.fixture.beta" not in mime, mime)
             with open(queue) as fh:
                 size = len(fh.read().encode())
-            expect("state-at-queue-end", read_text(state).strip() == str(size), read_text(state))
-            expect("desktop-db-refreshed", be.refreshed == [dest.applications], repr(be.refreshed))
+            expect("read_text(state).strip() == str(size)", read_text(state).strip() == str(size), read_text(state))
+            expect("be.refreshed == [dest.applications]", be.refreshed == [dest.applications], repr(be.refreshed))
 
             with open(policy_conf, "w") as fh:
                 fh.write("[desktop]\ndefault_handler = no\n")
             os.remove(dest.mimeapps)
-            expect("sync-package-off", sync_package(be, dest, "com.fixture.alpha", 1.0), "sync_package failed")
+            expect('sync_package(be, dest, "com.fixture.alpha", 1.0) with default_handler = no', sync_package(be, dest, "com.fixture.alpha", 1.0), "sync_package failed")
             mime = read_text(dest.mimeapps)
-            expect("default-handler-off-claims-nothing", "rhizo-com.fixture.alpha" not in mime
+            expect('"rhizo-com.fixture.alpha" not in mime and APK_MIME=APK_HANDLER in mime', "rhizo-com.fixture.alpha" not in mime
                    and f"{APK_MIME}={APK_HANDLER}" in mime, mime)
-            expect("unlisted-package-refused", not sync_package(be, dest, "com.fixture.gamma", 0.2),
-                   "synced a package the sandbox does not have")
-            expect("unlisted-package-no-entry", not os.path.exists(dest.entry("com.fixture.gamma")), "")
+            expect('not sync_package(be, dest, "com.fixture.gamma", 0.2)', not sync_package(be, dest, "com.fixture.gamma", 0.2),
+                   "sync_package returned True for com.fixture.gamma")
+            expect('not os.path.exists(dest.entry("com.fixture.gamma"))', not os.path.exists(dest.entry("com.fixture.gamma")), "")
 
             real_sync = globals()["sync_package"]
             globals()["sync_package"] = lambda *a, **k: False
@@ -2574,7 +2573,7 @@ def _selftest_package_queue():
                                   wait=lambda s: None, map_deadline_s=1.0)
             finally:
                 globals()["sync_package"] = real_sync
-            expect("failed-sync-reported", out[2] == ["com.fixture.alpha"], repr(out))
+            expect('out[2] == ["com.fixture.alpha"]', out[2] == ["com.fixture.alpha"], repr(out))
 
             secret = os.path.join(root, "secret")
             with open(secret, "w") as fh:
@@ -2589,7 +2588,7 @@ def _selftest_package_queue():
                                 alive=lambda: False, wait=lambda s: None, map_deadline_s=0.1)
                 except OSError:
                     refused = True
-            expect("queue-symlink-refused", refused and "SECRETHASH" not in caught.getvalue(),
+            expect('drain_queue raised OSError and "SECRETHASH" not in caught.getvalue()', refused and "SECRETHASH" not in caught.getvalue(),
                    caught.getvalue())
 
             def waits(waiter, secs):
@@ -2607,43 +2606,42 @@ def _selftest_package_queue():
             exited_alive, exited_wait = pid_waiter(exited.pid)
             slept = waits(exited_wait, 0.2)
             exited.wait()
-            expect("exited-pid-wait-sleeps", not exited_alive() and slept == [0.2], f"slept {slept}")
+            expect("not exited_alive() and slept == [0.2]", not exited_alive() and slept == [0.2], f"slept {slept}")
             reaped_alive, reaped_wait = pid_waiter(exited.pid)
             slept = waits(reaped_wait, 0.2)
-            expect("reaped-pid-wait-sleeps", not reaped_alive() and slept == [0.2], f"slept {slept}")
+            expect("not reaped_alive() and slept == [0.2]", not reaped_alive() and slept == [0.2], f"slept {slept}")
             none_alive, none_wait = drain_waiter(None)
             slept = waits(none_wait, 0.2)
-            expect("no-pid-drain-wait-sleeps", not none_alive() and slept == [0.2], f"slept {slept}")
+            expect("not none_alive() and slept == [0.2]", not none_alive() and slept == [0.2], f"slept {slept}")
             live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.1)"])
             live_alive, live_wait = pid_waiter(live.pid)
             was_alive = live_alive()
             slept = waits(live_wait, 5)
             live_exited = not live_alive()
             live.wait()
-            expect("live-pid-wait-returns-on-exit", was_alive and live_exited and slept == [],
-                   f"alive before {was_alive}, exited after {live_exited}, slept {slept}")
+            expect("was_alive and live_exited and slept == []", was_alive and live_exited and slept == [],
+                   f"was_alive={was_alive} live_exited={live_exited} slept={slept}")
 
             with open(os.path.abspath(__file__)) as src_file:
                 main_fn = next(n for n in ast.parse(src_file.read()).body
                                if isinstance(n, ast.FunctionDef) and n.name == "main")
             called = [getattr(n.func, "id", "") for n in ast.walk(main_fn) if isinstance(n, ast.Call)]
             lambdas = [n for n in ast.walk(main_fn) if isinstance(n, ast.Lambda)]
-            expect("main-drains-through-drain-waiter",
+            expect('called.count("drain_waiter") == 1 and "pid_waiter" not in called and not lambdas',
                    called.count("drain_waiter") == 1 and "pid_waiter" not in called and not lambdas,
                    f"drain_waiter calls {called.count('drain_waiter')}, pid_waiter in main {'pid_waiter' in called}, "
                    f"lambdas {len(lambdas)}")
         except Exception as e:
-            failed.append(f"raised {type(e).__name__}: {e}")
+            failed.append(f"raised {type(e).__name__} ({e})")
         finally:
             if saved_policy is None:
                 os.environ.pop(capabilities.PATH_ENV, None)
             else:
                 os.environ[capabilities.PATH_ENV] = saved_policy
     if failed:
-        print("package-queue selftest FAILED:\n  " + "\n  ".join(failed))
+        print("_selftest_package_queue failed\n  " + "\n  ".join(failed))
         return False
-    print("package-queue selftest ok: a mid-pass install synced before the pass ended, "
-          "forged and path entries ignored, default-handler gate held")
+    print("_selftest_package_queue passed")
     return True
 
 
@@ -2651,21 +2649,21 @@ class _SlowMimeappsBackend(FixtureBackend):
     """backend with slow mimeapps.list writes"""
 
     def push(self, local_path, guest_path, timeout=60):
-        """push a file, sleeping 0.4 seconds first for mimeapps.list"""
+        """sleep 0.4 seconds for a mimeapps.list guest_path and call push"""
         if guest_path.endswith("/mimeapps.list"):
             time.sleep(0.4)
         return super().push(local_path, guest_path, timeout)
 
 
 def _selftest_full_pass_beside_drain():
-    """test the full pass beside drain_queue"""
+    """test sync_apps beside drain_queue"""
     import threading
     failed = []
 
     def expect(name, ok, detail=""):
-        """record a failure with its detail when ok is false"""
+        """append name and detail to failed when ok is false"""
         if not ok:
-            failed.append(f"{name}: {detail}")
+            failed.append(f"{name} ({detail})")
 
     saved_winner = FIXTURE_WINNERS["x-scheme-handler/https"]
     saved_handlers = FIXTURE_HANDLERS["x-scheme-handler/https"]
@@ -2684,7 +2682,7 @@ def _selftest_full_pass_beside_drain():
             results = []
 
             def writer(key, value):
-                """write a default to mimeapps.list and record whether it worked"""
+                """call write_defaults with key and value and append the result to results"""
                 with tempfile.TemporaryDirectory() as work:
                     results.append(write_defaults(be, dest, work, {key: value}, set(),
                                                   claims, time.time()))
@@ -2695,7 +2693,7 @@ def _selftest_full_pass_beside_drain():
             for t in ts:
                 t.join(20)
             mime = read_text(dest.mimeapps)
-            expect("concurrent-writers-both-kept", results == [True, True]
+            expect("results == [True, True] with text/x-one and text/x-two in mime", results == [True, True]
                    and "text/x-one=rhizo-one.desktop" in mime and "text/x-two=rhizo-two.desktop" in mime,
                    f"results={results} mimeapps={mime!r}")
 
@@ -2707,7 +2705,7 @@ def _selftest_full_pass_beside_drain():
             drained = []
 
             def drain_mid_pass(b, d, w):
-                """sync com.fixture.beta as the new https winner"""
+                """sync com.fixture.beta as the https winner"""
                 globals()["ensure_generic_icon"] = real_icon
                 world.present.append("com.fixture.beta")
                 FIXTURE_WINNERS["x-scheme-handler/https"] = "com.fixture.beta/.Main"
@@ -2721,21 +2719,21 @@ def _selftest_full_pass_beside_drain():
                           cache_path=os.path.join(root, "cache.json"), claims_path=claims)
             finally:
                 globals()["ensure_generic_icon"] = real_icon
-            expect("drain-ran-mid-pass", drained == [True], repr(drained))
-            expect("mid-pass-install-keeps-its-entry", os.path.exists(dest.entry("com.fixture.beta")),
-                   "the full pass's reconcile removed rhizo-com.fixture.beta.desktop")
+            expect("drained == [True]", drained == [True], repr(drained))
+            expect('os.path.exists(dest.entry("com.fixture.beta")) after sync_apps', os.path.exists(dest.entry("com.fixture.beta")),
+                   "reconcile_entries in sync_apps removed rhizo-com.fixture.beta.desktop")
             mime = read_text(dest.mimeapps)
-            expect("newer-drain-default-kept",
+            expect('"x-scheme-handler/https=rhizo-com.fixture.beta.desktop" in mime',
                    "x-scheme-handler/https=rhizo-com.fixture.beta.desktop" in mime, mime)
             FIXTURE_WINNERS["x-scheme-handler/https"] = "com.fixture.alpha/.MainActivity"
             FIXTURE_HANDLERS["x-scheme-handler/https"] = ["com.fixture.alpha"]
             sync_apps(FixtureBackend(world), dest, os.path.join(root, "apps2.json"), min_apps=1,
                       cache_path=os.path.join(root, "cache.json"), claims_path=claims)
             mime = read_text(dest.mimeapps)
-            expect("newer-full-pass-default-wins",
+            expect('"x-scheme-handler/https=rhizo-com.fixture.alpha.desktop" in mime',
                    "x-scheme-handler/https=rhizo-com.fixture.alpha.desktop" in mime, mime)
         except Exception as e:
-            failed.append(f"raised {type(e).__name__}: {e}")
+            failed.append(f"raised {type(e).__name__} ({e})")
         finally:
             globals()["ensure_generic_icon"] = real_icon
             FIXTURE_WINNERS["x-scheme-handler/https"] = saved_winner
@@ -2745,10 +2743,9 @@ def _selftest_full_pass_beside_drain():
             else:
                 os.environ[capabilities.PATH_ENV] = saved_policy
     if failed:
-        print("full-pass-beside-drain selftest FAILED:\n  " + "\n  ".join(failed))
+        print("_selftest_full_pass_beside_drain failed\n  " + "\n  ".join(failed))
         return False
-    print("full-pass-beside-drain selftest ok: concurrent writers keep both defaults, a mid-pass "
-          "install keeps its entry, and the newer resolver read's default stands")
+    print("_selftest_full_pass_beside_drain passed")
     return True
 
 
@@ -2761,18 +2758,18 @@ def _selftest_badging_label():
                "application: label='Rhizo Tone a' icon=''\n"
                "launchable-activity: name='com.rhizo.audiotest.MainActivity'  label='Rhizo Tone a' icon=''\n")
     cases = [
-        ("a literal android:label (rhizo-audiotest-a.apk's own badging)", literal, "Rhizo Tone a"),
-        ("a resource label: application-label: wins", fixture_badging("com.fixture.alpha"), "Alpha's Ball"),
-        ("a literal label carrying an apostrophe", "application: label='Tom's Tone' icon=''\n", "Tom's Tone"),
-        ("no label at all", "application: label='' icon=''\n", None),
-        ("no application line", "package: name='x'\n", None),
+        ('badging_label(literal) == "Rhizo Tone a"', literal, "Rhizo Tone a"),
+        ('badging_label(fixture_badging("com.fixture.alpha")) == "Alpha\'s Ball"', fixture_badging("com.fixture.alpha"), "Alpha's Ball"),
+        ('badging_label("application: label=\'Tom\'s Tone\'") == "Tom\'s Tone"', "application: label='Tom's Tone' icon=''\n", "Tom's Tone"),
+        ('badging_label("application: label=\'\'") is None', "application: label='' icon=''\n", None),
+        ('badging_label("package: name=\'x\'") is None', "package: name='x'\n", None),
     ]
-    failed = [f"{name}: got {badging_label(text)!r}, want {want!r}"
+    failed = [f"{name} (got {badging_label(text)!r}, expected {want!r})"
               for name, text, want in cases if badging_label(text) != want]
     if failed:
-        print("badging-label selftest FAILED:\n  " + "\n  ".join(failed))
+        print("_selftest_badging_label failed\n  " + "\n  ".join(failed))
         return False
-    print(f"badging-label selftest ok: all {len(cases)} badging shapes read")
+    print(f"badging_label passed {len(cases)} cases")
     return True
 
 
@@ -2805,23 +2802,23 @@ def selftest():
         quiet.close()
 
     if clean.failed:
-        print(f"pass 1 FAILED: {len(clean.failed)} of {len(clean.names)} assertions do not hold")
+        print(f"pass 1 failed {len(clean.failed)} of {len(clean.names)} assertions")
         for name, actual, expected in clean.failed:
             print(f"  {name}\n    got      {actual!r}\n    expected {expected!r}")
         return 1
-    print(f"pass 1 ok: all {len(clean.names)} assertions hold on the fixture tree")
+    print(f"pass 1 passed {len(clean.names)} assertions on the fixture tree")
     survived = corrupted.survivors()
     if survived or corrupted.names != clean.names:
-        print(f"pass 2 FAILED: {len(survived)} of {len(corrupted.names)} assertions still "
-              f"passed with their expected value corrupted, so they cannot fail:")
+        print(f"pass 2 passed {len(survived)} of {len(corrupted.names)} assertions "
+              f"with corrupted expected values")
         for name in survived:
             print(f"  {name}")
         missing = [n for n in clean.names if n not in corrupted.names]
         for name in missing:
-            print(f"  {name} did not run at all in pass 2")
+            print(f"  {name} did not run in pass 2")
         return 1
-    print(f"pass 2 ok: each of the {len(clean.names)} assertions fails by name when its "
-          f"expected value is corrupted")
+    print(f"pass 2 failed each of the {len(clean.names)} assertions "
+          f"with corrupted expected values")
     return 0
 
 
@@ -2832,25 +2829,24 @@ def main():
     ap.add_argument("--manifest", default="/tmp/rhizo-apps.json")
     ap.add_argument("--min-apps", type=int, default=2)
     ap.add_argument("--prefix", default=DEFAULT_PREFIX,
-                    help="rebase the /usr/share root the entries, icons and mimeapps.list go under")
+                    help="/usr/share root for the entries, icons and mimeapps.list")
     ap.add_argument("--local", action="store_true",
-                    help="run guest-side: no ssh hop, direct filesystem access")
+                    help="run on the guest without ssh")
     ap.add_argument("--reconcile-only", action="store_true",
-                    help="prune entries whose package is gone and stop -- the cheap half of a sync, "
-                         "for reflecting an uninstall promptly without a full re-enumeration")
+                    help="remove the entries of uninstalled packages and exit")
     ap.add_argument("--package", metavar="P",
-                    help="sync only package P's entry, icons and mimeapps defaults, if pm lists it")
+                    help="sync the entry, icons and mimeapps defaults of package P")
     ap.add_argument("--drain-queue", metavar="QUEUE",
-                    help="sync each package whose /data/app directory rhizo-app-events queued in QUEUE, "
-                         "until --while-pid exits; needs --queue-state")
+                    help="sync the package of each /data/app directory in QUEUE "
+                         "until --while-pid exits")
     ap.add_argument("--queue-state", metavar="FILE",
-                    help="where --drain-queue records the queue offset it has dealt with")
+                    help="file for the --drain-queue offset")
     ap.add_argument("--while-pid", type=int, metavar="PID",
-                    help="keep draining while this process (the full pass) runs")
+                    help="drain QUEUE while process PID runs")
     ap.add_argument("--mimeapps-only", action="store_true",
-                    help="write only the .apk handler default, on this machine, with no sandbox")
+                    help="write the .apk and appstream:// handler defaults on the local host")
     ap.add_argument("--selftest", action="store_true",
-                    help="exercise entry text, icons, mimeapps merge and reconcile on a fixture tree")
+                    help="run the selftests on a fixture tree")
     args = ap.parse_args()
 
     if args.selftest:
@@ -2867,15 +2863,15 @@ def main():
         return reconcile_only(be, dest)
     if args.package:
         if not PKG_RE.match(args.package):
-            ap.error(f"--package {args.package!r} is not a package name")
+            ap.error(f"--package {args.package!r} does not match PKG_RE")
         return 0 if sync_package(be, dest, args.package) else 1
     if args.drain_queue:
         if not args.queue_state:
-            ap.error("--drain-queue needs --queue-state")
+            ap.error("--drain-queue without --queue-state")
         alive, wait = drain_waiter(args.while_pid)
         synced, ignored, failed = drain_queue(be, dest, args.drain_queue, args.queue_state, alive, wait)
-        log(f"queue drained: {len(synced)} package(s) synced {synced}, {len(ignored)} line(s) ignored, "
-            f"{len(failed)} failed {failed}")
+        log(f"queue drained synced={len(synced)} {synced} ignored={len(ignored)} "
+            f"failed={len(failed)} {failed}")
         return 1 if failed else 0
     _, ok = sync_apps(be, dest, args.manifest, args.min_apps)
     return 0 if ok else 1

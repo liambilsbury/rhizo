@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2VA_MEASURE_H
 #define RHIZO_C2VA_MEASURE_H
 
-// measure each component's throughput at a ladder of sizes
+// throughput measurement of each component at a ladder of sizes
 
 #include <stddef.h>
 #include <stdint.h>
@@ -67,7 +67,7 @@ std::vector<std::pair<uint32_t, uint32_t>> MeasureLadder(const ComponentCaps& ca
 // return the CTS clip bitrate in kbit/s for a codec and size
 uint32_t DecodeKbps(Codec codec, uint32_t width, uint32_t height);
 
-// describe a measurement clip from its clips.tsv row
+// a measurement clip with the fields of a clips.tsv row
 struct MeasureClip {
   std::string file;
   Codec codec;
@@ -77,7 +77,7 @@ struct MeasureClip {
   std::vector<std::vector<uint8_t>> units;
 };
 
-// read the clips whose files match their clips.tsv rows
+// read the clips whose files match the clips.tsv rows
 std::vector<MeasureClip> ReadMeasureClips(const std::string& dir, std::vector<std::string>* skipped);
 
 // measure the encoders and the functional decoders of components

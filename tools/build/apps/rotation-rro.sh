@@ -1,5 +1,5 @@
 #!/bin/bash
-# build RhizoRotationRro.apk
+# var/share/RhizoRotationRro.apk RHIZO_ANDROID_SDK=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 SRC="$(cd "src/android/apps/rotation-rro" && pwd)"
@@ -9,10 +9,9 @@ source ./tools/build/toolchain/android-sdk.sh
 android_sdk_resolve || exit 1
 KEYDIR="$(pwd)/aosp-android16-qpr2/build/make/target/product/security"
 [[ -f "$KEYDIR/testkey.pk8" && -f "$KEYDIR/testkey.x509.pem" ]] \
-  || { echo "missing AOSP testkey under $KEYDIR" >&2; exit 1; }
+  || { echo "no testkey.pk8 or testkey.x509.pem in $KEYDIR" >&2; exit 1; }
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
-echo "[build-rotation-rro] aapt2 compile + link"
 mkdir -p "$WORK/compiled"
 "$AAPT2" compile -o "$WORK/compiled" "$SRC/res/values/bools.xml"
 "$AAPT2" link -o "$WORK/base.apk" --manifest "$SRC/AndroidManifest.xml" \
@@ -24,25 +23,25 @@ mkdir -p "$WORK/compiled"
 "$ZIPALIGN" -c 4 "$WORK/signed.apk"
 
 manifest=$("$AAPT2" dump xmltree --file AndroidManifest.xml "$WORK/signed.apk")
-grep -q 'E: overlay' <<<"$manifest" || { echo "[build-rotation-rro] FAIL: no <overlay> element" >&2; exit 1; }
+grep -q 'E: overlay' <<<"$manifest" || { echo "AndroidManifest.xml has no <overlay> element" >&2; exit 1; }
 grep -q 'targetPackage.*="android"' <<<"$manifest" \
-  || { echo "[build-rotation-rro] FAIL: overlay does not target android" >&2; exit 1; }
+  || { echo "<overlay> targetPackage is not android" >&2; exit 1; }
 ! grep -q 'targetName' <<<"$manifest" \
-  || { echo "[build-rotation-rro] FAIL: overlay names an overlayable, which framework-res does not declare" >&2; exit 1; }
-grep -q 'isStatic.*=true' <<<"$manifest" || { echo "[build-rotation-rro] FAIL: overlay is not static" >&2; exit 1; }
+  || { echo "<overlay> has a targetName" >&2; exit 1; }
+grep -q 'isStatic.*=true' <<<"$manifest" || { echo "<overlay> isStatic is not true" >&2; exit 1; }
 resources=$("$AAPT2" dump resources "$WORK/signed.apk")
 for bool in config_supportAutoRotation config_flipToScreenOffEnabled; do
   grep -A1 "bool/$bool" <<<"$resources" | grep -q 'false' \
-    || { echo "[build-rotation-rro] FAIL: $bool is not a false bool in the overlay" >&2; exit 1; }
+    || { echo "bool/$bool is not false" >&2; exit 1; }
 done
 n=$(grep -c ' resource 0x' <<<"$resources")
-[[ "$n" == 2 ]] || { echo "[build-rotation-rro] FAIL: the overlay carries $n resources, not the 2 the contract calls for" >&2; exit 1; }
+[[ "$n" == 2 ]] || { echo "signed.apk has $n resources, expected 2" >&2; exit 1; }
 
 cp --remove-destination "$WORK/signed.apk" "$SHARE/RhizoRotationRro.apk"
 pkg=$("$AAPT2" dump badging "$SHARE/RhizoRotationRro.apk" | grep -m1 "^package:" \
   | sed "s/^package: name='\([^']*\)'.*/\1/")
-[[ "$pkg" == "com.rhizo.overlay.rotation" ]] || { echo "[build-rotation-rro] FAIL: unexpected package '$pkg'" >&2; exit 1; }
+[[ "$pkg" == "com.rhizo.overlay.rotation" ]] || { echo "package name is '$pkg', expected com.rhizo.overlay.rotation" >&2; exit 1; }
 "$AAPT2" dump badging "$SHARE/RhizoRotationRro.apk" | grep -q "^targetSdkVersion:'36'" \
-  || { echo "[build-rotation-rro] FAIL: the overlay does not target SDK 36, which Android 16 requires of a system overlay" >&2; exit 1; }
-echo "[build-rotation-rro] OK -> var/share/RhizoRotationRro.apk ($pkg)"
+  || { echo "targetSdkVersion is not 36" >&2; exit 1; }
+echo "wrote var/share/RhizoRotationRro.apk ($pkg)"
 ./tools/build/stamps.py stamp RhizoRotationRro.apk

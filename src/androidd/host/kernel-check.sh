@@ -1,5 +1,5 @@
 #!/bin/sh
-# check the running kernel for Rhizo's requirements
+# running kernel check for built-in binder, ashmem and /proc/config.gz
 set -u
 
 PROG=rhizo-kernel-check
@@ -11,16 +11,15 @@ lacks=""
 [ -c "$ASHMEM" ] || lacks="${lacks:+$lacks, }$ASHMEM"
 [ -e "$PROC_CONFIG" ] || lacks="${lacks:+$lacks, }$PROC_CONFIG"
 if [ -n "$lacks" ]; then
-  echo "[$PROG] $(uname -r) has no $lacks: boot the Rhizo kernel (linux-image-rhizo on Ubuntu, linux-rhizo on CachyOS)" >&2
+  echo "[$PROG] $(uname -r) has no $lacks" >&2
   exit 1
 fi
 if ! devices=$(cat "$DEVICES_FILE"); then
-  echo "[$PROG] cannot read $DEVICES_FILE" >&2
+  echo "[$PROG] failed to read $DEVICES_FILE" >&2
   exit 1
 fi
 if [ "$devices" != "binder,hwbinder,vndbinder" ]; then
-  echo "[$PROG] the kernel's built-in binder creates devices '$devices', expected binder,hwbinder,vndbinder" \
-       "-- 'rhizo install' writes binder.devices= to the kernel cmdline" >&2
+  echo "[$PROG] $DEVICES_FILE is '$devices', expected binder,hwbinder,vndbinder" >&2
   exit 1
 fi
 exit 0

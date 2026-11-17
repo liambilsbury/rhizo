@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2VA_FUNCTIONAL_MD5_H
 #define RHIZO_C2VA_FUNCTIONAL_MD5_H
 
-// compute RFC 1321 MD5 digests of decoded frames
+// RFC 1321 MD5 digests of decoded frames
 
 #include <stddef.h>
 #include <stdint.h>

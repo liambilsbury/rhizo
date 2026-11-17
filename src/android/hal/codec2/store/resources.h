@@ -46,12 +46,12 @@ C2R UpdateNeeds(C2InterfaceHelper::C2P<C2ResourcesNeededTuning>& me, uint32_t wi
                 float frame_rate, float operating_rate);
 uint64_t ThroughputPart(const C2ResourcesNeededTuning& needs);
 
-// track the throughput a component's started instances hold
+// ledger of the throughput reserved by a component's started instances
 class ThroughputLedger {
  public:
   explicit ThroughputLedger(uint64_t capacity) : capacity_(capacity) {}
 
-  // take amount when it fits within capacity
+  // take amount when held_ + amount fits within capacity
   bool Take(uint64_t amount);
   // take amount past capacity
   void Force(uint64_t amount);

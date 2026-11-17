@@ -1,5 +1,5 @@
 #!/bin/bash
-# build the AES-only rhizo-keymint-service
+# AES-only rhizo-keymint-service build
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
@@ -8,5 +8,4 @@ tools/build/hal/hal.sh rhizo-keymint-service src/android/hal/keymint/src/keymint
   --extra-inc toolchain/boringssl_include \
   --so crypto
 
-echo "[build-keymint-bespoke-aes-only] staged -> var/bin/rhizo-keymint-service and var/share/rhizo-keymint-service"
-echo "[build-keymint-bespoke-aes-only] WARNING: this is the AES-only fallback -- RSA/EC/HMAC/private-key-import will UNSUPPORTED_ALGORITHM. Use keymint.sh for the real port."
+echo "rhizo-keymint-service returns UNSUPPORTED_ALGORITHM for RSA, EC, HMAC and private key import"

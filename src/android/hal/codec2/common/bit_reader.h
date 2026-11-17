@@ -54,7 +54,7 @@ class BitReader {
   size_t BitsLeft() const { return size_ * 8 - pos_; }
   bool overrun() const { return overrun_; }
 
-  // return true when data remains before the rbsp stop bit
+  // return true when BitPos is before the rbsp stop bit
   bool MoreRbspData() const {
     if (pos_ >= size_ * 8) return false;
     size_t last = size_;
@@ -84,7 +84,7 @@ class BitReader {
   bool overrun_ = false;
 };
 
-// a NAL unit inside an Annex B buffer without its start code
+// a NAL unit inside an Annex B buffer without the start code
 struct NalSpan {
   const uint8_t* data;
   size_t size;
@@ -108,7 +108,7 @@ inline std::vector<NalSpan> SplitAnnexB(const uint8_t* data, size_t size) {
   return out;
 }
 
-// return a NAL unit's RBSP without its emulation prevention bytes
+// return a NAL unit's RBSP without emulation prevention bytes
 inline std::vector<uint8_t> Unescape(const uint8_t* data, size_t size) {
   std::vector<uint8_t> out;
   out.reserve(size);

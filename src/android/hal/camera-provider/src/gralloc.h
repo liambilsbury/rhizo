@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_GRALLOC_H
 #define RHIZO_CAMERA_GRALLOC_H
 
-// lock output buffers with rhizo's mapper
+// output buffer locking through rhizo's AIMapper
 
 #include <stddef.h>
 #include <stdint.h>

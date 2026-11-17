@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# apply the composer's window sizes to each display's freeform task and minimize all of the windows on HOME
+# freeform task resize from task-bounds files and display minimize-all on RhizoHome
 D=/data/rhizo_control
 M=/data/local/tmp/rhizo-tasks
 mkdir -p "$M"

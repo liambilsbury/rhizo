@@ -8,7 +8,7 @@ namespace {
 
 constexpr char kDeviceNamePrefix[] = "device@1.1/internal/";
 
-// return whether two cameras list the same modes
+// return whether two mode lists are equal
 bool SameModes(const std::vector<HostMode>& a, const std::vector<HostMode>& b) {
   if (a.size() != b.size()) return false;
   for (size_t i = 0; i < a.size(); i++) {
@@ -44,8 +44,7 @@ std::vector<RegistryChange> CameraRegistry::apply(const std::vector<HostCamera>&
     auto it = present_.find(id);
     if (it != present_.end() && SameModes(it->second.modes, cam.modes)) continue;
     if (it != present_.end()) {
-      // cameraserver caches a device's characteristics until it leaves
-      removed.push_back(RegistryChange{false, id, DeviceName(id), {}, "its modes changed"});
+      removed.push_back(RegistryChange{false, id, DeviceName(id), {}, "modes changed"});
       present_.erase(it);
     }
     present_[id] = cam;
@@ -53,7 +52,7 @@ std::vector<RegistryChange> CameraRegistry::apply(const std::vector<HostCamera>&
   }
   for (auto it = present_.begin(); it != present_.end();) {
     if (listed.count(it->first) == 0) {
-      removed.push_back(RegistryChange{false, it->first, DeviceName(it->first), {}, "camerad no longer lists it"});
+      removed.push_back(RegistryChange{false, it->first, DeviceName(it->first), {}, "absent from camerad LIST"});
       it = present_.erase(it);
     } else {
       ++it;
@@ -63,17 +62,17 @@ std::vector<RegistryChange> CameraRegistry::apply(const std::vector<HostCamera>&
   return removed;
 }
 
-// drop an addition the provider failed to describe
+// erase id from present_
 void CameraRegistry::reject(const std::string& id) { present_.erase(id); }
 
-// return the device names of the present cameras
+// return DeviceName(id) for each present_ entry
 std::vector<std::string> CameraRegistry::presentNames() const {
   std::vector<std::string> out;
   for (const auto& [id, cam] : present_) out.push_back(DeviceName(id));
   return out;
 }
 
-// return whether to send a status for a device name now
+// return whether to call cameraDeviceStatusChange for deviceName
 bool StatusDedupe::shouldSend(const std::string& deviceName, bool present) {
   auto it = sent_.find(deviceName);
   if (it != sent_.end() && it->second == present) return false;

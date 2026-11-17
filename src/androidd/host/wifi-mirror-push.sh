@@ -1,12 +1,12 @@
 #!/bin/sh
-# push netbridged's SSID to RhizoNetwork as a network suggestion
+# netbridged SSID broadcast to RhizoNetwork as a network suggestion
 set -eu
 export LC_ALL=C
 
 TAG=rhizo-wifi-mirror-push
-STATE="${1:?usage: rhizo-wifi-mirror-push STATE_FILE [PROBE_SOCK]}"
+STATE="${1:?rhizo-wifi-mirror-push STATE_FILE [PROBE_SOCK]}"
 SANDBOX_ID="${RHIZO_SANDBOX_ID:-0}"
-case "$SANDBOX_ID" in ''|*[!0-9]*) echo "$TAG: RHIZO_SANDBOX_ID '$SANDBOX_ID' is not a number" >&2; exit 2 ;; esac
+case "$SANDBOX_ID" in ''|*[!0-9]*) echo "$TAG RHIZO_SANDBOX_ID '$SANDBOX_ID' is not a number" >&2; exit 2 ;; esac
 RUN_ROOT=/run/rhizo
 RECORD=/run/rhizo-wifi-mirror-push
 if [ "$SANDBOX_ID" != 0 ]; then
@@ -28,24 +28,24 @@ PROBE_CLIENT=""
 for _pc in "$_here/rhizo-probe-client" /root/share/rhizo-probe-client; do
   [ -x "$_pc" ] && { PROBE_CLIENT="$_pc"; break; }
 done
-[ -n "$PROBE_CLIENT" ] || { echo "$TAG: no rhizo-probe-client beside $0 or in /root/share" >&2; exit 1; }
+[ -n "$PROBE_CLIENT" ] || { echo "$TAG no rhizo-probe-client in $_here or /root/share" >&2; exit 1; }
 
-# write a line to the log
+# write $TAG and a message to stderr
 log() {
-  echo "$TAG: $*" >&2
+  echo "$TAG $*" >&2
 }
 
-# run a command in android as shell
+# run a command as shell in Android through rhizo-probe-client
 probe() {
   "$PROBE_CLIENT" "$PROBE_SOCK" "$1" "export PATH=/system/bin:/system/xbin:/vendor/bin; $2"
 }
 
-# return whether the argument is a non-empty run of digits
+# return whether $1 is a non-empty run of digits
 is_num() {
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
 }
 
-# print the state file's seq and hex
+# print the seq and hex fields of $STATE
 read_state() {
   [ -f "$STATE" ] && [ ! -L "$STATE" ] || return 1
   _line=$(head -c 160 "$STATE" | head -n 1) || return 1
@@ -58,7 +58,7 @@ read_state() {
   echo "$_seq $_hex"
 }
 
-# wait for boot and print system_server's start count and time
+# wait for sys.boot_completed=1 and print the system_server start count and time
 wait_boot() {
   _deadline=$(( $(date +%s) + BOOT_WAIT_S ))
   while :; do
@@ -75,7 +75,7 @@ wait_boot() {
   done
 }
 
-# broadcast the SSID until the app applies the suggestion
+# broadcast the SSID to com.rhizo.network/.Mirror for at most $TRIES attempts
 push() {
   _pseq=$1 _phex=$2
   _extra="" _shown=""
@@ -95,13 +95,13 @@ push() {
         log "push seq=$_pseq attempt=$_try/$TRIES result=applied ($_data)$_shown"
         return 0 ;;
       1|2)
-        log "push seq=$_pseq attempt=$_try/$TRIES result=refused code=$_result ($_data) -- not retried$_shown"
+        log "push seq=$_pseq attempt=$_try/$TRIES result=refused code=$_result ($_data)$_shown"
         return 1 ;;
       "")
         _why=$(printf '%s\n' "$_out" | grep -m1 -o 'RHIZO_PROBE_[A-Z_]*' || true)
         log "push seq=$_pseq attempt=$_try/$TRIES result=no-reply probe_rc=$_rc ${_why:-no-broadcast-result}" ;;
       0)
-        log "push seq=$_pseq attempt=$_try/$TRIES result=not-received code=0 (no receiver ran)" ;;
+        log "push seq=$_pseq attempt=$_try/$TRIES result=not-received code=0" ;;
       *)
         log "push seq=$_pseq attempt=$_try/$TRIES result=failed code=$_result ($_data)" ;;
     esac
@@ -114,23 +114,23 @@ push() {
 exec 9>"$RECORD.lock"
 flock 9
 
-# print the state file's modification time
+# print the mtime of $STATE
 stamp() {
   stat -c %y "$STATE" 2>/dev/null | tr ' ' _
 }
 
 stamp=$(stamp)
-state=$(read_state) || { log "no well-formed state in $STATE -- nothing pushed"; exit 0; }
-boot=$(wait_boot) || { log "android did not reach sys.boot_completed=1 within ${BOOT_WAIT_S}s -- nothing pushed"; exit 1; }
+state=$(read_state) || { log "no valid seq and hex line in $STATE"; exit 0; }
+boot=$(wait_boot) || { log "no sys.boot_completed=1 after ${BOOT_WAIT_S}s"; exit 1; }
 round=1
 last=0
 while :; do
   seq=${state%% *}
   hex=${state#* }
   if [ "$(cat "$RECORD.last" 2>/dev/null || true)" = "$boot $seq $stamp" ]; then
-    log "seq=$seq at $stamp already pushed to this android boot"
+    log "seq=$seq at $stamp is in $RECORD.last for boot $boot"
   else
-    push "$seq" "$hex" || { log "seq=$seq FAILED: the suggestion was not applied"; exit 1; }
+    push "$seq" "$hex" || { log "seq=$seq push failed"; exit 1; }
     printf '%s\n' "$boot $seq $stamp" > "$RECORD.last"
   fi
   [ "$last" = 0 ] || exit 0
@@ -139,7 +139,7 @@ while :; do
   [ "$next" != "$state" ] || exit 0
   round=$((round + 1))
   if [ "$round" -ge "$ROUNDS" ]; then
-    log "the state kept changing over $ROUNDS rounds -- pushing the newest and stopping"
+    log "$STATE changed in each of $ROUNDS rounds"
     last=1
   fi
   state=$next

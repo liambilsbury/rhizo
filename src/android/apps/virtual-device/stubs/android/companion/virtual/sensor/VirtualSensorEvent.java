@@ -2,7 +2,7 @@ package android.companion.virtual.sensor;
 
 // compile-time stub of VirtualSensorEvent
 public final class VirtualSensorEvent {
-    // forbid direct construction
+    // private constructor
     private VirtualSensorEvent() {}
 
     public static final class Builder {

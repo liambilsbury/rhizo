@@ -21,17 +21,17 @@ log() {
   return 0
 }
 # print a refusal reason and exit 3
-refuse() { local t="$1"; shift; log "REFUSED: $*"; echo "RHIZO_APP_REFUSED name=$NAME reason=$t"; exit 3; }
+refuse() { local t="$1"; shift; log "$*"; echo "RHIZO_APP_REFUSED name=$NAME reason=$t"; exit 3; }
 # print a failure reason and exit 1
-failstop() { local t="$1"; shift; log "FAILED: $*"; echo "RHIZO_APP_FAILED name=$NAME reason=$t"; exit 1; }
+failstop() { local t="$1"; shift; log "$*"; echo "RHIZO_APP_FAILED name=$NAME reason=$t"; exit 1; }
 # print the usage text
 usage() {
   cat <<'EOF'
-Usage: fetch-app.sh aurora [--from-file PATH]
-       fetch-app.sh litegapps --release a16|a17 [--from-file PATH]
+fetch-app.sh aurora [--from-file PATH]
+fetch-app.sh litegapps --release a16|a17 [--from-file PATH]
 EOF
 }
-# run store_payload.py isolated from the environment
+# run store_payload.py under python3 -I
 store() { python3 -I "$HERE/store_payload.py" "$@"; }
 # append a captured stderr file to the log
 replay() { local l; while IFS= read -r l; do log "$l"; done < "$1"; }
@@ -39,22 +39,22 @@ replay() { local l; while IFS= read -r l; do log "$l"; done < "$1"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --release|--from-file)
-      [[ $# -ge 2 ]] || refuse usage "$1 takes a value"
+      [[ $# -ge 2 ]] || refuse usage "no value for $1"
       if [[ "$1" == --release ]]; then RELEASE="$2"; else FROM_FILE="$2"; fi
       shift 2 ;;
     -h|--help) usage; exit 0 ;;
     -*) refuse usage "unknown argument '$1'" ;;
-    *) [[ "$NAME" == - ]] || refuse usage "one app at a time, not '$NAME' and '$1'"; NAME="$1"; shift ;;
+    *) [[ "$NAME" == - ]] || refuse usage "two app arguments '$NAME' and '$1'"; NAME="$1"; shift ;;
   esac
 done
 case "$NAME" in
   aurora)
-    [[ -z "$RELEASE" || "$RELEASE" == any ]] || log "Aurora Store is one APK for every release; ignoring --release $RELEASE"
+    [[ -z "$RELEASE" || "$RELEASE" == any ]] || log "ignored --release $RELEASE for aurora"
     RELEASE=any ;;
   litegapps)
-    [[ "$RELEASE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || refuse usage "litegapps takes --release a16|a17" ;;
-  -) refuse usage "name an app: aurora or litegapps" ;;
-  *) refuse unknown-app "no app '$NAME' -- known: aurora litegapps" ;;
+    [[ "$RELEASE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || refuse usage "invalid --release '$RELEASE' for litegapps" ;;
+  -) refuse usage "no app argument" ;;
+  *) refuse unknown-app "unknown app '$NAME'" ;;
 esac
 
 # print the installed or source-tree path of capability-allowed.sh
@@ -75,9 +75,9 @@ if [[ "$NAME" == aurora ]]; then
   [[ -z "$out" ]] || log "$out"
   case "$rc" in
     0) log "policy apps.aurora is on" ;;
-    1) log "policy apps.aurora is off in /etc/rhizo/policy.conf: not fetching Aurora Store"
+    1) log "policy apps.aurora is off in /etc/rhizo/policy.conf"
        echo "RHIZO_APP_SKIPPED name=aurora reason=policy-off"; exit 0 ;;
-    *) failstop policy-check "$cap apps.aurora exited $rc" ;;
+    *) failstop policy-check "$cap apps.aurora failed with exit status $rc" ;;
   esac
 fi
 
@@ -99,32 +99,32 @@ row=$(pin_row "$PINS" "$NAME" "$RELEASE"); rc=$?
 case "$rc" in
   0) IFS=$'\t' read -r URL WANT SIZE SIGNER DESC <<<"$row" ;;
   1) refuse no-pin "no $NAME pin for release '$RELEASE' in $PINS" ;;
-  2) failstop bad-pin "the $NAME $RELEASE row in $PINS is malformed" ;;
-  *) failstop no-pins "cannot read $PINS" ;;
+  2) failstop bad-pin "failed to parse the $NAME $RELEASE row in $PINS" ;;
+  *) failstop no-pins "failed to read $PINS" ;;
 esac
-[[ "$NAME" != aurora || "$SIGNER" != - ]] || failstop bad-pin "the aurora row in $PINS pins no signer"
+[[ "$NAME" != aurora || "$SIGNER" != - ]] || failstop bad-pin "the aurora row in $PINS has signer_sha256 -"
 TAKE="$TAKE_DIR/litegapps-$RELEASE.tsv"
-[[ "$NAME" != litegapps || -f "$TAKE" ]] || failstop no-take-list "no $TAKE for the $RELEASE pin"
+[[ "$NAME" != litegapps || -f "$TAKE" ]] || failstop no-take-list "no $TAKE"
 
-[[ $EUID -eq 0 || -n "${RHIZO_STATE_DIR:-}" ]] || refuse not-root "must run as root (it writes $STATE)"
+[[ $EUID -eq 0 || -n "${RHIZO_STATE_DIR:-}" ]] || refuse not-root "EUID $EUID is not 0"
 . "$(dirname "${BASH_SOURCE[0]}")/../lib/host-flavor.sh" \
-  || refuse library-unreadable "cannot read host-flavor.sh beside $0"
+  || refuse library-unreadable "failed to source host-flavor.sh beside $0"
 why=$(host_state_subvolume_check) || refuse root-snapshot-boot "$why"
-command -v python3 >/dev/null 2>&1 || refuse no-python3 "python3 is required to check and unpack the payload"
-command -v curl >/dev/null 2>&1 || [[ -n "$FROM_FILE" ]] || refuse no-curl "curl is required to download $DESC"
+command -v python3 >/dev/null 2>&1 || refuse no-python3 "no python3"
+command -v curl >/dev/null 2>&1 || [[ -n "$FROM_FILE" ]] || refuse no-curl "no curl"
 if [[ -n "$FROM_FILE" ]]; then
   [[ -f "$FROM_FILE" ]] || refuse no-such-file "--from-file '$FROM_FILE' does not exist"
   have=$(sha256sum "$FROM_FILE" | cut -d' ' -f1)
-  [[ "$have" == "$WANT" ]] || failstop sha256-mismatch "$FROM_FILE is $have, the pin is $WANT"
+  [[ "$have" == "$WANT" ]] || failstop sha256-mismatch "sha256 of $FROM_FILE is $have, expected $WANT"
 fi
 
 if [[ "$NAME" == aurora ]]; then DEST_ROOT="$STATE/aurora"; else DEST_ROOT="$STATE/gapps/$RELEASE"; fi
 SHA12="${WANT:0:12}"
-{ mkdir -p "$DEST_ROOT" && chmod 0755 "$DEST_ROOT"; } || failstop mkdir-failed "cannot create $DEST_ROOT"
-exec 9>"$DEST_ROOT/.lock" || failstop lock-failed "cannot open $DEST_ROOT/.lock"
-flock -n 9 || refuse busy "another fetch of $NAME $RELEASE holds $DEST_ROOT/.lock"
+{ mkdir -p "$DEST_ROOT" && chmod 0755 "$DEST_ROOT"; } || failstop mkdir-failed "failed to create $DEST_ROOT"
+exec 9>"$DEST_ROOT/.lock" || failstop lock-failed "failed to open $DEST_ROOT/.lock"
+flock -n 9 || refuse busy "flock -n $DEST_ROOT/.lock failed"
 
-# print a verifying payload directory already unpacked from this pin
+# print the payload directory for $SHA12 that store verify passes
 existing_payload() {
   local d
   for d in "$DEST_ROOT"/*"$SHA12"; do
@@ -140,42 +140,42 @@ make_current() {
   local key="$1" d
   rm -f "$DEST_ROOT/.current.new"
   { ln -s "$key" "$DEST_ROOT/.current.new" && mv -T "$DEST_ROOT/.current.new" "$DEST_ROOT/current"; } \
-    || failstop current-failed "cannot point $DEST_ROOT/current at $key"
+    || failstop current-failed "failed to link $DEST_ROOT/current to $key"
   for d in "$DEST_ROOT"/* "$DEST_ROOT"/.[!.]*; do
     [[ -d "$d" && ! -L "$d" && "${d##*/}" != "$key" ]] || continue
-    rm -rf --one-file-system -- "$d" && log "removed the older payload $d"
+    rm -rf --one-file-system -- "$d" && log "removed $d"
   done
   sync -f "$DEST_ROOT" 2>/dev/null
 }
 
 if d=$(existing_payload); then
   make_current "${d##*/}"
-  log "$DESC is already unpacked and verified at $d"
+  log "$DESC verified at $d"
   echo "RHIZO_APP_FETCHED name=$NAME release=$RELEASE dir=$d"
   exit 0
 fi
 
 SCRATCH_ROOT="$STATE/fetch-scratch"
-# remove scratch directories an earlier run left
+# remove app.* scratch directories older than 1440 minutes
 sweep_stale_scratch() {
   local d
   [[ -d "$SCRATCH_ROOT" ]] || return 0
   while IFS= read -r -d '' d; do
-    rm -rf --one-file-system -- "$d" || log "could not remove $d"
+    rm -rf --one-file-system -- "$d" || log "failed to remove $d"
   done < <(find "$SCRATCH_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'app.*' -user "$(id -u)" -mmin +1440 -print0)
 }
 sweep_stale_scratch
 # shellcheck disable=SC2174
-mkdir -p -m 0700 "$SCRATCH_ROOT" || failstop mktemp-failed "cannot create $SCRATCH_ROOT"
-TMP=$(mktemp -d "$SCRATCH_ROOT/app.XXXXXX") || failstop mktemp-failed "cannot create a scratch directory below $SCRATCH_ROOT"
-# remove the scratch directory and its download
+mkdir -p -m 0700 "$SCRATCH_ROOT" || failstop mktemp-failed "failed to create $SCRATCH_ROOT"
+TMP=$(mktemp -d "$SCRATCH_ROOT/app.XXXXXX") || failstop mktemp-failed "mktemp -d in $SCRATCH_ROOT failed"
+# remove $TMP and $SCRATCH_ROOT
 cleanup() { rm -rf --one-file-system -- "$TMP"; rmdir -- "$SCRATCH_ROOT" 2>/dev/null; }
 trap cleanup EXIT
 
 avail_kb=$(df -Pk "$STATE" 2>/dev/null | awk 'NR == 2 {print $4}')
 need_kb=$(( SIZE * 4 / 1024 ))
 [[ ! "$avail_kb" =~ ^[0-9]+$ ]] || (( avail_kb >= need_kb )) \
-  || failstop no-space "$STATE has $((avail_kb / 1024)) MiB free; unpacking $DESC needs $((need_kb / 1024)) MiB"
+  || failstop no-space "$STATE has $((avail_kb / 1024)) MiB free, expected $((need_kb / 1024)) MiB"
 
 # download an https url, capped at the pinned size
 download() {
@@ -187,21 +187,20 @@ download() {
 
 if [[ -n "$FROM_FILE" ]]; then
   FILE="$FROM_FILE"
-  log "using $FILE (its sha256 matched the pin)"
 else
   urls=("$URL")
   [[ "$URL" == https://f-droid.org/repo/* ]] && urls+=("https://f-droid.org/archive/${URL#https://f-droid.org/repo/}")
   FILE="$TMP/download"
   for u in "${urls[@]}"; do
-    log "downloading $DESC from $u"
+    log "curl $u"
     download "$u" "$FILE" && break
-    log "could not fetch $u"
+    log "curl $u failed"
   done
-  [[ -f "$FILE" ]] || failstop download-failed "could not fetch $DESC from ${urls[*]}"
+  [[ -f "$FILE" ]] || failstop download-failed "failed to download $DESC from ${urls[*]}"
   have=$(sha256sum "$FILE" | cut -d' ' -f1)
-  [[ "$have" == "$WANT" ]] || failstop sha256-mismatch "the download is $have, the pin is $WANT"
+  [[ "$have" == "$WANT" ]] || failstop sha256-mismatch "sha256 of the download is $have, expected $WANT"
 fi
-log "sha256 verified against the pin: $WANT"
+log "sha256 $WANT matches the pin"
 
 # print the reason= token of store_payload.py's last line
 reason_of() { local r; r=$(sed -n 's/^RHIZO_PAYLOAD_[A-Z]* reason=\([a-z0-9-]*\)$/\1/p' <<<"$1" | tail -1); printf '%s' "${r:-$2}"; }
@@ -209,7 +208,7 @@ reason_of() { local r; r=$(sed -n 's/^RHIZO_PAYLOAD_[A-Z]* reason=\([a-z0-9-]*\)
 if [[ "$NAME" == aurora ]]; then
   info=$(store apk-info "$FILE" 2>"$TMP/store.log"); rc=$?
   replay "$TMP/store.log"
-  (( rc == 0 )) || refuse "$(reason_of "$info" bad-apk)" "cannot read the Aurora Store APK"
+  (( rc == 0 )) || refuse "$(reason_of "$info" bad-apk)" "failed to read the Aurora Store APK"
   pkg="" vc="" signers=""
   for kv in $info; do
     case "$kv" in
@@ -219,10 +218,10 @@ if [[ "$NAME" == aurora ]]; then
     esac
   done
   [[ "$signers" == "$SIGNER" ]] \
-    || refuse signer-mismatch "the APK is signed by '${signers:-nothing}', the pin is $SIGNER"
+    || refuse signer-mismatch "APK signer_sha256 is '${signers:-nothing}', expected $SIGNER"
   [[ "$vc" =~ ^[0-9]+$ && "${URL##*/}" == "${pkg}_${vc}.apk" ]] \
-    || refuse apk-mismatch "the APK is ${pkg:-no package} version ${vc:-none}, the pin names ${URL##*/}"
-  log "the APK is $pkg version $vc, signed by the pinned key $SIGNER"
+    || refuse apk-mismatch "APK is ${pkg:-no package} version ${vc:-none}, expected ${URL##*/}"
+  log "APK package=$pkg version_code=$vc signer_sha256=$SIGNER"
   KEY="$vc-$SHA12"
   out=$(store extract --file "$FILE" --dest app/AuroraStore/AuroraStore.apk --sha256 "$WANT" --out "$TMP/payload" \
           2>"$TMP/store.log"); rc=$?
@@ -234,16 +233,16 @@ else
 fi
 replay "$TMP/store.log"
 case "$rc" in
-  0) log "unpacked: ${out##*RHIZO_PAYLOAD_OK }" ;;
+  0) log "unpacked ${out##*RHIZO_PAYLOAD_OK }" ;;
   3) refuse "$(reason_of "$out" unsafe-archive)" "store_payload.py refused $DESC" ;;
-  *) failstop "$(reason_of "$out" extract-failed)" "store_payload.py could not unpack $DESC" ;;
+  *) failstop "$(reason_of "$out" extract-failed)" "store_payload.py extract failed for $DESC" ;;
 esac
 [[ -n "$FROM_FILE" ]] || rm -f "$FILE"
-store verify "$TMP/payload" >"$TMP/verify.log" 2>&1 || { replay "$TMP/verify.log"; failstop verify-failed "the unpacked payload does not verify"; }
+store verify "$TMP/payload" >"$TMP/verify.log" 2>&1 || { replay "$TMP/verify.log"; failstop verify-failed "store verify $TMP/payload failed"; }
 
 [[ ! -e "$DEST_ROOT/$KEY" ]] || mv -T "$DEST_ROOT/$KEY" "$TMP/stale" \
-  || failstop rename-failed "cannot move the stale $DEST_ROOT/$KEY aside"
-mv -T "$TMP/payload" "$DEST_ROOT/$KEY" || failstop rename-failed "cannot move the payload into $DEST_ROOT/$KEY"
+  || failstop rename-failed "failed to move $DEST_ROOT/$KEY to $TMP/stale"
+mv -T "$TMP/payload" "$DEST_ROOT/$KEY" || failstop rename-failed "failed to move $TMP/payload to $DEST_ROOT/$KEY"
 sync -f "$DEST_ROOT/$KEY" 2>/dev/null
 make_current "$KEY"
 log "unpacked $DESC at $DEST_ROOT/$KEY"

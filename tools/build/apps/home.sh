@@ -1,5 +1,5 @@
 #!/bin/bash
-# build RhizoHome.apk into var/share
+# var/share/RhizoHome.apk RHIZO_ANDROID_SDK=
 # shellcheck disable=SC2046
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
@@ -11,15 +11,12 @@ android_sdk_resolve || exit 1
 android_debug_keystore || exit 1
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
-echo "[build-home] aapt2 link"
 "$AAPT2" link -o "$WORK/base.apk" --manifest "$SRC/AndroidManifest.xml" \
   -I "$ANDROID_JAR" --min-sdk-version 26 --target-sdk-version 34
-echo "[build-home] javac + d8"
 mkdir -p "$WORK/classes"
 javac -source 8 -target 8 -nowarn -Xlint:none -bootclasspath "$ANDROID_JAR" \
   -d "$WORK/classes" $(find "$SRC/src" -name '*.java')
 "$D8" --release --min-api 26 --output "$WORK" $(find "$WORK/classes" -name '*.class')
-echo "[build-home] packing dex, aligning, signing"
 cp "$WORK/base.apk" "$WORK/unsigned.apk"
 ( cd "$WORK" && zip -q unsigned.apk classes.dex )
 "$ZIPALIGN" -p 4 "$WORK/unsigned.apk" "$WORK/aligned.apk"
@@ -30,11 +27,11 @@ cp "$WORK/base.apk" "$WORK/unsigned.apk"
 cp --remove-destination "$WORK/signed.apk" "$SHARE/RhizoHome.apk"
 badging=$("$AAPT2" dump badging "$SHARE/RhizoHome.apk")
 pkg=$(grep -m1 "^package:" <<<"$badging" | sed "s/^package: name='\([^']*\)'.*/\1/")
-[[ "$pkg" == "com.rhizo.home" ]] || { echo "[build-home] FAIL: unexpected package '$pkg'" >&2; exit 1; }
+[[ "$pkg" == "com.rhizo.home" ]] || { echo "package name is '$pkg', expected com.rhizo.home" >&2; exit 1; }
 manifest=$("$AAPT2" dump xmltree --file AndroidManifest.xml "$SHARE/RhizoHome.apk")
 grep -q 'android.intent.category.HOME' <<<"$manifest" \
-  || { echo "[build-home] FAIL: HomeActivity carries no HOME category" >&2; exit 1; }
+  || { echo "AndroidManifest.xml has no android.intent.category.HOME" >&2; exit 1; }
 grep -q 'priority.*=1' <<<"$manifest" \
-  || { echo "[build-home] FAIL: the HOME filter has no priority" >&2; exit 1; }
-echo "[build-home] OK -> var/share/RhizoHome.apk ($pkg)"
+  || { echo "AndroidManifest.xml has no priority=1" >&2; exit 1; }
+echo "wrote var/share/RhizoHome.apk ($pkg)"
 ./tools/build/stamps.py stamp RhizoHome.apk

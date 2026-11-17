@@ -51,15 +51,15 @@ inline Read ReadPayload(int fd, int64_t timeoutMs, std::vector<uint8_t>* out, in
   }
 }
 
-// outcome of a finished selection read
+// Sequencer::Judge result
 enum class Verdict { kReport, kUncarried, kSuperseded };
 
 // sequence numbers for selection events
 class Sequencer {
  public:
-  // start a new read and return its sequence number
+  // increment newest_ and return newest_
   uint64_t Begin() { return ++newest_; }
-  // report the verdict for a finished read
+  // return a Verdict for outcome and seq
   Verdict Judge(Read outcome, uint64_t seq) const {
     if (seq != newest_.load()) return Verdict::kSuperseded;
     return outcome == Read::kComplete ? Verdict::kReport : Verdict::kUncarried;
@@ -71,7 +71,7 @@ class Sequencer {
 
 using ReadDone = std::function<void(Verdict verdict, Read outcome, int err, std::vector<uint8_t>&& bytes)>;
 
-// read the file descriptor on a new thread
+// read the file descriptor on a detached thread
 inline void ReadInThread(Sequencer& seqr, std::mutex& lock, int fd, uint64_t seq, int64_t timeoutMs,
                          ReadDone done) {
   std::thread([&seqr, &lock, fd, seq, timeoutMs, done = std::move(done)]() mutable {

@@ -1,8 +1,8 @@
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 2ae1a9b13..706277dfd 100644
+index 29741d804..c6df90072 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -477,6 +477,84 @@ static int may_context_mount_inode_relabel(u32 sid,
+@@ -478,6 +478,84 @@ static int may_context_mount_inode_relabel(u32 sid,
  				 FILESYSTEM__ASSOCIATE, NULL);
  }
  
@@ -84,10 +84,10 @@ index 2ae1a9b13..706277dfd 100644
 +	return 0;
 +}
 +
- static int selinux_is_genfs_special_handling(struct super_block *sb)
+ static int selinux_is_genfs_special_handling(struct super_block *sb,
+ 					     struct selinux_state *state)
  {
- 	/* Special handling. Genfs but also in-core setxattr handler */
-@@ -668,6 +746,8 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
+@@ -671,6 +749,8 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
  			}
  			if (current_selinux_state == init_selinux_state)
  				sbsec->flags |= SE_SBINITNSDEFER;
@@ -96,7 +96,7 @@ index 2ae1a9b13..706277dfd 100644
  			goto out;
  		}
  		rc = -EINVAL;
-@@ -738,6 +818,8 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
+@@ -748,6 +828,8 @@ static int __selinux_set_mnt_opts(struct super_block *sb,
  	}
  
  	sbsec->creator_sid = creator_sid;
@@ -105,7 +105,7 @@ index 2ae1a9b13..706277dfd 100644
  
  	if (strcmp(sb->s_type->name, "proc") == 0)
  		sbsec->flags |= SE_SBPROC | SE_SBGENFS;
-@@ -1014,6 +1096,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
+@@ -1024,6 +1106,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
  		}
  		if (current_selinux_state == init_selinux_state)
  			newsbsec->flags |= SE_SBINITNSDEFER;
@@ -114,7 +114,7 @@ index 2ae1a9b13..706277dfd 100644
  		goto out;
  	}
  
-@@ -1029,6 +1113,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
+@@ -1039,6 +1123,8 @@ static int selinux_sb_clone_mnt_opts(const struct super_block *oldsb,
  	}
  
  	newsbsec->flags = oldsbsec->flags;
@@ -123,7 +123,7 @@ index 2ae1a9b13..706277dfd 100644
  
  	newsbsec->sid = oldsbsec->sid;
  	newsbsec->def_sid = oldsbsec->def_sid;
-@@ -1596,7 +1682,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+@@ -1605,7 +1691,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
  		break;
  	case SECURITY_FS_USE_TRANS:
  		/* Default to the fs SID. */
@@ -132,7 +132,7 @@ index 2ae1a9b13..706277dfd 100644
  
  		/* Try to obtain a transition SID. */
  		rc = security_transition_sid(state, task_sid, sid, sclass,
-@@ -1609,7 +1695,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+@@ -1618,7 +1704,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
  		break;
  	default:
  		/* Default to the fs superblock SID. */
@@ -141,7 +141,7 @@ index 2ae1a9b13..706277dfd 100644
  
  		if ((sbsec->flags & SE_SBGENFS) &&
  		     (!S_ISLNK(inode->i_mode) ||
-@@ -1930,13 +2016,11 @@ static int may_create(struct inode *dir,
+@@ -1948,13 +2034,11 @@ static int may_create(struct inode *dir,
  	const struct cred *cred = current_cred();
  	const struct cred_security_struct *crsec = selinux_cred(cred);
  	struct inode_security_struct *dsec;
@@ -155,7 +155,7 @@ index 2ae1a9b13..706277dfd 100644
  
  	ad.type = LSM_AUDIT_DATA_DENTRY;
  	ad.u.dentry = dentry;
-@@ -1956,9 +2040,7 @@ static int may_create(struct inode *dir,
+@@ -1974,9 +2058,7 @@ static int may_create(struct inode *dir,
  	if (rc)
  		return rc;
  
@@ -166,7 +166,7 @@ index 2ae1a9b13..706277dfd 100644
  }
  
  #define MAY_LINK	0
-@@ -2069,11 +2151,7 @@ static int superblock_has_perm(const struct cred *cred,
+@@ -2087,11 +2169,7 @@ static int superblock_has_perm(const struct cred *cred,
  			       u32 perms,
  			       struct common_audit_data *ad)
  {
@@ -179,7 +179,7 @@ index 2ae1a9b13..706277dfd 100644
  }
  
  /* Convert a Linux mode and permission mask to an access vector. */
-@@ -3577,7 +3655,6 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+@@ -3571,7 +3649,6 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
  	const struct cred *cred = current_cred();
  	struct inode *inode = d_backing_inode(dentry);
  	struct inode_security_struct *isec;
@@ -187,7 +187,7 @@ index 2ae1a9b13..706277dfd 100644
  	struct common_audit_data ad;
  	u32 newsid;
  	int rc = 0;
-@@ -3589,7 +3666,6 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+@@ -3583,7 +3660,6 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
  	if (!selinux_initialized(current_selinux_state))
  		return (inode_owner_or_capable(idmap, inode) ? 0 : -EPERM);
  
@@ -195,7 +195,7 @@ index 2ae1a9b13..706277dfd 100644
  	if (!selinux_is_sblabel_mnt(inode->i_sb))
  		return -EOPNOTSUPP;
  
-@@ -3650,9 +3726,7 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+@@ -3644,9 +3720,7 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
  	if (rc)
  		return rc;
  
@@ -207,7 +207,7 @@ index 2ae1a9b13..706277dfd 100644
  
  static int selinux_inode_set_acl(struct mnt_idmap *idmap,
 diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
-index 5f43e950a..b3a1e4950 100644
+index a2dd82e4f..fb1bf7ade 100644
 --- a/security/selinux/include/security.h
 +++ b/security/selinux/include/security.h
 @@ -70,6 +70,7 @@

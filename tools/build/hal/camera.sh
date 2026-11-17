@@ -1,11 +1,11 @@
 #!/bin/bash
-# build rhizo-camera-provider-service into gfx_hal
+# var/share/gfx_hal/rhizo-camera-provider-service RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ABI_ARGS=(); [[ -n "${RHIZO_HAL_ABI:-}" ]] && ABI_ARGS=(--abi "$RHIZO_HAL_ABI")
 SRC=src/android/hal/camera-provider
 META=aosp-android16-qpr2/system/media
-[[ -d "$META/camera" ]] || { echo "camera: no AOSP checkout at $META -- run make inputs" >&2; exit 1; }
+[[ -d "$META/camera" ]] || { echo "no $META/camera" >&2; exit 1; }
 
 tools/build/hal/hal.sh rhizo-camera-provider-service "$SRC/src/camera_provider.cpp" \
   --extra-src "$SRC/src/camera_device.cpp" \

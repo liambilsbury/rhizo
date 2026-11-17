@@ -75,7 +75,7 @@ std::string FieldString(const char* field, size_t size) {
   return std::string(field, strnlen(field, size));
 }
 
-// return true for a mode the provider can describe and scale
+// return whether a mode has even dimensions up to kMaxDimension and a nonzero rate
 bool ValidMode(const rhizo_camera_mode& m) {
   return m.width > 0 && m.height > 0 && m.width % 2 == 0 && m.height % 2 == 0 &&
          m.width <= kMaxDimension && m.height <= kMaxDimension && m.fps_num > 0 && m.fps_den > 0;
@@ -103,7 +103,7 @@ void FrameMailbox::publish(const rhizo_camera_frame& header) {
   cv_.notify_all();
 }
 
-// mark the stream started at its negotiated rate
+// mark the stream started at the negotiated rate
 void FrameMailbox::markStarted(uint32_t fpsNum, uint32_t fpsDen) {
   std::lock_guard<std::mutex> lk(mu_);
   started_ = true;
@@ -119,7 +119,7 @@ void FrameMailbox::markStopped(int32_t error) {
   cv_.notify_all();
 }
 
-// return the counter interrupt() bumps
+// return generation_
 uint64_t FrameMailbox::generation() const {
   std::lock_guard<std::mutex> lk(mu_);
   return generation_;
@@ -146,7 +146,7 @@ FrameMailbox::Wait FrameMailbox::waitNewer(uint64_t afterSeq, int timeoutMs, uin
   }
 }
 
-// wake a waiter
+// increment generation_ and wake the waitNewer callers
 void FrameMailbox::interrupt() {
   std::lock_guard<std::mutex> lk(mu_);
   generation_++;
@@ -200,19 +200,19 @@ void CameradClient::stop() {
   if (thread_.joinable()) thread_.join();
 }
 
-// wait up to timeoutMs for the first LIST
+// wait up to timeoutMs for haveList_
 bool CameradClient::waitForFirstList(int timeoutMs) {
   std::unique_lock<std::mutex> lk(stateMu_);
   return stateCv_.wait_for(lk, std::chrono::milliseconds(timeoutMs), [this] { return haveList_; });
 }
 
-// sleep between connection attempts unless stopping
+// wait up to ms for stopping_
 void CameradClient::sleepBackoff(int ms) {
   std::unique_lock<std::mutex> lk(stateMu_);
   stateCv_.wait_for(lk, std::chrono::milliseconds(ms), [this] { return stopping_.load(); });
 }
 
-// connect to the daemon's socket, or return -1
+// connect to socketPath_, or return -1
 int CameradClient::connectOnce() {
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
@@ -232,7 +232,7 @@ int CameradClient::connectOnce() {
   return fd;
 }
 
-// connect, serve and reconnect with backoff until stopped
+// connect, serve and reconnect with backoff while stopping_ is false
 void CameradClient::run() {
   int backoff = kBackoffFirstMs;
   bool absentLogged = false;
@@ -240,7 +240,7 @@ void CameradClient::run() {
     int fd = connectOnce();
     if (fd < 0) {
       if (!absentLogged) {
-        klogf("camerad not reachable at %s (%s); retrying with backoff", socketPath_.c_str(),
+        klogf("failed to connect to camerad at %s (%s)", socketPath_.c_str(),
               strerror(errno));
         absentLogged = true;
       }
@@ -270,28 +270,28 @@ void CameradClient::run() {
     dropStreams(-ENOTCONN);
     if (stopping_) break;
     if (onList_) onList_({});
-    klogf("camerad connection closed; cameras withdrawn until it is back");
+    klogf("camerad connection closed");
     backoff = connListed_ ? kBackoffFirstMs : std::min(backoff * 2, kBackoffMaxMs);
     sleepBackoff(backoff);
   }
 }
 
-// read a message header and check it
+// read and check a message header
 bool CameradClient::readMessage(int fd, rhizo_camera_msg_header* header) {
   if (!ReadFull(fd, header, sizeof(*header))) return false;
   if (header->magic != RHIZO_CAMERA_MAGIC) {
-    klogf("camerad sent bad magic 0x%08x; dropping the connection", header->magic);
+    klogf("camerad magic 0x%08x != RHIZO_CAMERA_MAGIC", header->magic);
     return false;
   }
   if (header->length > RHIZO_CAMERA_MAX_PAYLOAD) {
-    klogf("camerad sent a %u-byte payload, past the %u-byte limit; dropping the connection",
+    klogf("camerad payload length %u > RHIZO_CAMERA_MAX_PAYLOAD %u",
           header->length, RHIZO_CAMERA_MAX_PAYLOAD);
     return false;
   }
   return true;
 }
 
-// read messages until the connection drops or breaks the protocol
+// dispatch the messages on fd until a call returns false or a length check fails
 void CameradClient::serve(int fd) {
   for (;;) {
     rhizo_camera_msg_header h{};
@@ -306,7 +306,7 @@ void CameradClient::serve(int fd) {
       case RHIZO_CAMERA_STARTED: {
         rhizo_camera_started s{};
         if (h.length != sizeof(s)) {
-          klogf("camerad STARTED is %u bytes, want %zu; dropping the connection", h.length, sizeof(s));
+          klogf("camerad STARTED length %u != %zu", h.length, sizeof(s));
           return;
         }
         if (!ReadFull(fd, &s, sizeof(s))) return;
@@ -320,7 +320,7 @@ void CameradClient::serve(int fd) {
       case RHIZO_CAMERA_STOPPED: {
         rhizo_camera_stopped s{};
         if (h.length != sizeof(s)) {
-          klogf("camerad STOPPED is %u bytes, want %zu; dropping the connection", h.length, sizeof(s));
+          klogf("camerad STOPPED length %u != %zu", h.length, sizeof(s));
           return;
         }
         if (!ReadFull(fd, &s, sizeof(s))) return;
@@ -346,22 +346,22 @@ void CameradClient::serve(int fd) {
   }
 }
 
-// read a LIST and pass its cameras to the callback
+// read a LIST and pass the listed cameras to onList_
 bool CameradClient::handleList(int fd, uint32_t length) {
   rhizo_camera_list list{};
   if (length < sizeof(list)) {
-    klogf("camerad LIST is %u bytes, shorter than its header; dropping the connection", length);
+    klogf("camerad LIST length %u < sizeof(rhizo_camera_list)", length);
     return false;
   }
   if (!ReadFull(fd, &list, sizeof(list))) return false;
   if (list.version != RHIZO_CAMERA_PROTOCOL_VERSION) {
-    klogf("camerad speaks protocol %u, want %u; dropping the connection", list.version,
+    klogf("camerad LIST version %u != RHIZO_CAMERA_PROTOCOL_VERSION %u", list.version,
           RHIZO_CAMERA_PROTOCOL_VERSION);
     return false;
   }
   uint64_t want = sizeof(list) + static_cast<uint64_t>(list.count) * sizeof(rhizo_camera_info);
   if (list.count > RHIZO_CAMERA_MAX_CAMERAS || want != length) {
-    klogf("camerad LIST of %u cameras is %u bytes, want %llu (at most %u cameras); dropping the connection",
+    klogf("camerad LIST count %u length %u, expected length %llu and count <= %u",
           list.count, length, static_cast<unsigned long long>(want), RHIZO_CAMERA_MAX_CAMERAS);
     return false;
   }
@@ -371,7 +371,7 @@ bool CameradClient::handleList(int fd, uint32_t length) {
   std::vector<HostCamera> cameras;
   for (const rhizo_camera_info& info : infos) {
     if (info.mode_count > RHIZO_CAMERA_MAX_MODES) {
-      klogf("camerad listed %u modes for one camera, more than %u; dropping the connection",
+      klogf("camerad camera mode_count %u > RHIZO_CAMERA_MAX_MODES %u",
             info.mode_count, RHIZO_CAMERA_MAX_MODES);
       return false;
     }
@@ -385,8 +385,8 @@ bool CameradClient::handleList(int fd, uint32_t length) {
       cam.modes.push_back(HostMode{m.width, m.height, m.fps_num, m.fps_den});
     }
     if (cam.key.empty() || cam.modes.empty()) {
-      klogf("skipping listed camera '%s': %s", cam.name.c_str(),
-            cam.key.empty() ? "no key" : "no usable mode");
+      klogf("skipping camera '%s' with %s", cam.name.c_str(),
+            cam.key.empty() ? "no key" : "no valid mode");
       continue;
     }
     cameras.push_back(std::move(cam));
@@ -401,18 +401,18 @@ bool CameradClient::handleList(int fd, uint32_t length) {
   return true;
 }
 
-// read a FRAME into its stream's mailbox or drop it
+// read a FRAME into the stream's mailbox or discard the FRAME
 bool CameradClient::handleFrame(int fd, uint32_t length) {
   rhizo_camera_frame f{};
   if (length < sizeof(f)) {
-    klogf("camerad FRAME is %u bytes, shorter than its header; dropping the connection", length);
+    klogf("camerad FRAME length %u < sizeof(rhizo_camera_frame)", length);
     return false;
   }
   if (!ReadFull(fd, &f, sizeof(f))) return false;
   uint64_t image = static_cast<uint64_t>(f.width) * f.height * 3 / 2;
   if (f.width == 0 || f.height == 0 || f.width % 2 != 0 || f.height % 2 != 0 || f.width > kMaxDimension ||
       f.height > kMaxDimension || sizeof(f) + image != length) {
-    klogf("camerad FRAME %ux%u does not fit its %u-byte payload; dropping the connection", f.width,
+    klogf("camerad FRAME %ux%u does not match payload length %u", f.width,
           f.height, length);
     return false;
   }
@@ -424,7 +424,7 @@ bool CameradClient::handleFrame(int fd, uint32_t length) {
   return true;
 }
 
-// send a whole message to the daemon
+// write a whole message to camerad
 bool CameradClient::sendMessage(uint32_t type, const void* payload, uint32_t length) {
   std::lock_guard<std::mutex> lk(writeMu_);
   if (fd_ < 0) return false;

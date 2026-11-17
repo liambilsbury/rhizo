@@ -1,4 +1,4 @@
-// write rhizo-sensors-service messages to logcat and the kernel log
+// logcat and kernel log writer for rhizo-sensors-service
 #include "log.h"
 
 #include <fcntl.h>
@@ -19,12 +19,12 @@ namespace {
 std::atomic<void (*)(const std::string&)> gHook{nullptr};
 }
 
-// route each message to a hook as well
+// set the hook that receives each message
 void setLogHook(void (*hook)(const std::string& message)) {
   gHook.store(hook);
 }
 
-// format a message and write it to kmsg and logcat
+// write a formatted message to /dev/kmsg and logcat
 void klogf(const char* fmt, ...) {
   char msg[512];
   va_list ap;

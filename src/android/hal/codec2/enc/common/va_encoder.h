@@ -65,7 +65,7 @@ class VaEncoderBase : public EncoderCore {
   virtual Status AddPackedParameterSets(const EncPicture& pic, std::vector<VABufferID>* bufs) = 0;
   // add the slice parameters and any packed slice header
   virtual Status AddSliceParams(const EncPicture& pic, std::vector<VABufferID>* bufs) = 0;
-  // classify an escaped NAL unit without its start code
+  // classify an escaped NAL unit with no start code
   virtual NalClass Classify(const uint8_t* nal, size_t size) const = 0;
   // write the core's parameter sets in Annex B
   virtual void OwnParameterSets(std::vector<uint8_t>* out) const = 0;
@@ -74,7 +74,7 @@ class VaEncoderBase : public EncoderCore {
                           int* slice_qp) = 0;
 
   Status AddBuffer(VABufferType type, const void* data, size_t size, std::vector<VABufferID>* bufs);
-  // add an escaped packed NAL unit with its start code
+  // add an escaped packed NAL unit with a start code
   Status AddPacked(uint32_t packed_type, const std::vector<uint8_t>& data, size_t bit_length,
                    std::vector<VABufferID>* bufs);
   uint32_t packed_headers() const { return packed_used_; }
@@ -104,7 +104,7 @@ class VaEncoderBase : public EncoderCore {
   Status AddRateControl(const EncPicture& pic, std::vector<VABufferID>* bufs);
   // return the VBR peak for a bit rate
   uint32_t PeakFor(uint32_t bitrate) const;
-  // check that pic names this encoder's surfaces and buffers
+  // check pic.input, pic.recon, pic.ref and coded_[slot]
   bool Valid(const EncPicture& pic, int slot) const;
   Status Retire();
   Status SubmitAndRetire(EncPicture pic);

@@ -55,7 +55,7 @@ constexpr uint32_t kShapeAllScroll = 32;
 constexpr uint32_t kShapeZoomIn = 33;
 constexpr uint32_t kShapeZoomOut = 34;
 
-// return the host cursor shape for an Android pointer type; kShapeUseImage means show Android's image
+// return the host cursor shape for an Android pointer type
 inline uint32_t CursorShapeForPointerType(int32_t type) {
   switch (type) {
     case kPointerTypeCustom: return kShapeUseImage;
@@ -83,7 +83,7 @@ inline uint32_t CursorShapeForPointerType(int32_t type) {
   }
 }
 
-// a request to displayd for a cursor image's pointer type
+// outstanding "display cursor-unknown" write for a cursor digest
 struct PointerTypeAsk {
   bool outstanding = false;
   uint32_t digest = 0;
@@ -91,18 +91,16 @@ struct PointerTypeAsk {
   int64_t sinceNs = 0;
 };
 
-// timeout of an unanswered request
 constexpr int64_t kPointerTypeAskTimeoutNs = 5LL * 1000000000LL;
-// maximum requests per image
 constexpr int kPointerTypeAskAttempts = 3;
 
-// return whether to request the shown image's type now
+// return whether to write "display cursor-unknown" at nowNs
 inline bool ShouldAskPointerType(const PointerTypeAsk& ask, int64_t nowNs, int attemptsForImage) {
   if (attemptsForImage >= kPointerTypeAskAttempts) return false;
   return !ask.outstanding || nowNs - ask.sinceNs >= kPointerTypeAskTimeoutNs;
 }
 
-// return whether a reply names the shown image
+// compare ask with answeredDigest, shownDigest and shownImageChanges
 inline bool PointerTypeAnswerFits(const PointerTypeAsk& ask, uint32_t answeredDigest,
                                   uint32_t shownDigest, uint64_t shownImageChanges) {
   return ask.outstanding && ask.digest == answeredDigest && shownDigest == answeredDigest &&

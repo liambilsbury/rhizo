@@ -18,7 +18,7 @@ final class DeskAuth {
     private static final Pattern CHALLENGE = Pattern.compile(
             "\\{\"t\":\"challenge\",\"nonce\":\"([0-9a-f]{32})\",\"proof\":\"([0-9a-f]{64})\"\\}");
 
-    // forbid instances
+    // private constructor
     private DeskAuth() {}
 
     // line I/O for the bridge connection
@@ -43,17 +43,17 @@ final class DeskAuth {
         io.write("{\"t\":\"hello\",\"nonce\":\"" + androidNonce + "\"}");
         String line = io.read();
         if (line == null) {
-            throw new IOException("connection closed before the host's challenge");
+            throw new IOException("io.read() returned null before challenge");
         }
         Matcher m = CHALLENGE.matcher(line);
         if (!m.matches()) {
-            throw new HostUnproven("no well-formed challenge: "
+            throw new HostUnproven("CHALLENGE does not match line "
                     + line.substring(0, Math.min(line.length(), SHOWN_CHARS)));
         }
         String hostNonce = m.group(1);
         byte[] want = proof(token, "host", androidNonce, hostNonce).getBytes(StandardCharsets.US_ASCII);
         if (!MessageDigest.isEqual(want, m.group(2).getBytes(StandardCharsets.US_ASCII))) {
-            throw new HostUnproven("the host's proof does not match this token");
+            throw new HostUnproven("host proof does not match token");
         }
         io.write("{\"t\":\"auth\",\"proof\":\"" + proof(token, "android", androidNonce, hostNonce) + "\"}");
     }
@@ -66,7 +66,7 @@ final class DeskAuth {
             String msg = "rhizo-desk " + role + "\n" + androidNonce + "\n" + hostNonce;
             return hex(mac.doFinal(msg.getBytes(StandardCharsets.US_ASCII)));
         } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("HmacSHA256 unavailable: " + e);
+            throw new IllegalStateException("HmacSHA256 failed with " + e);
         }
     }
 

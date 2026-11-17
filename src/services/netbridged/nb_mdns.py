@@ -28,7 +28,7 @@ def digest(payload):
 
 
 def should_relay(seen, payload_digest, mono, window=DEDUPE_WINDOW):
-    """check the payload digest against recent relays"""
+    """return whether seen has no payload_digest within window"""
     last = seen.get(payload_digest)
     return last is None or mono - last >= window
 
@@ -43,7 +43,7 @@ def expire_seen(seen, mono, window=DEDUPE_WINDOW, max_seen=MAX_SEEN):
 
 
 class _RateLimiter:
-    """Per-second packet rate limit"""
+    """per-second packet rate limit"""
 
     def __init__(self, limit_per_sec=RATE_LIMIT_PER_SEC):
         """set the per-second packet limit and an empty window"""
@@ -229,7 +229,7 @@ class MdnsService(Service):
     name = "mdns"
 
     def __init__(self, cfg):
-        """store the interface names and empty socket tables"""
+        """store the cfg interfaces and empty socket tables"""
         self.cfg = cfg
         self.veth_if = cfg.veth_if
         self.uplink_if = cfg.mdns_uplink_if or cfg.uplink
@@ -281,7 +281,7 @@ class MdnsService(Service):
         return list(self._socks.values())
 
     def unhealthy(self):
-        """report missing v4 sockets"""
+        """return the sides with no IPv4 socket, or an empty string"""
         missing = [s for s in SIDES if (s, 4) not in self._socks]
         if missing:
             return "no v4 socket on %s (%s)" % (

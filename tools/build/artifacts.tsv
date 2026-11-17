@@ -1,4 +1,4 @@
-# name (under var/share, or toolchain/...)	build command	sources hashed into its stamp	set (payload|test)	built after (row names, or -)
+# name (var/share/<name> or toolchain/<name>)	build command	sources hashed into the stamp	set (payload|test)	built after (rows or -)
 toolchain/gen	tools/build/toolchain/regen-aidl-glue.sh	tools/build/toolchain/regen-aidl-glue.sh tools/build/toolchain/own-output-lib.sh tools/fetch/build-inputs.sh	payload	-
 toolchain/wayland-android	tools/build/toolchain/wayland-android.sh	tools/build/toolchain/wayland-android.sh tools/build/toolchain/own-output-lib.sh tools/mesa tools/fetch/build-inputs.sh	payload	gsi_libs
 toolchain/llvm-android	tools/build/toolchain/llvm-android.sh	tools/build/toolchain/llvm-android.sh tools/fetch/build-inputs.sh	payload	-
@@ -19,10 +19,10 @@ RhizoDesktop.apk	tools/build/apps/desktop-bridge.sh	src/android/apps/desktop-bri
 RhizoAudioRouter.apk	tools/build/apps/audio-router.sh	src/android/apps/audio-router tools/build/apps/audio-router.sh tools/build/toolchain/android-sdk.sh	payload	aapt2
 RhizoNetworkLocation.apk	tools/build/apps/network-location.sh	src/android/apps/network-location tools/build/apps/network-location.sh tools/build/toolchain/android-sdk.sh	payload	aapt2
 rhizo-audiod	tools/build/services/audiod.sh	src/services/audiod tools/build/services/audiod.sh	payload	-
-rhizo-camerad	tools/build/services/camerad.sh	src/services/camerad tools/build/services/camerad.sh src/android/hal/common/include/rhizo/camera_protocol.h	payload	-
+rhizo-camerad	tools/build/services/camerad.sh	src/services/camerad tools/build/services/camerad.sh src/android/hal/common/include/rhizo/camera_protocol.h src/services/common/peer.h	payload	-
 rhizo-delayd	tools/build/services/delayd.sh	src/services/delayd tools/build/services/delayd.sh	payload	-
 rhizo-headroomd	tools/build/services/headroomd.sh	src/services/headroomd tools/build/services/headroomd.sh	payload	-
-rhizo-streamd	tools/build/services/streamd.sh	src/services/streamd tools/build/services/streamd.sh src/android/hal/common/include/rhizo/stream_protocol.h	payload	-
+rhizo-streamd	tools/build/services/streamd.sh	src/services/streamd tools/build/services/streamd.sh src/android/hal/common/include/rhizo/stream_protocol.h src/services/common/peer.h	payload	-
 rhizo-stream-export-test	tools/build/services/streamd.sh	src/services/streamd tools/build/services/streamd.sh src/android/hal/common/include/rhizo/stream_protocol.h	payload	-
 RhizoBootRro.apk	tools/build/apps/boot-rro.sh	src/android/apps/boot-rro tools/build/apps/boot-rro.sh	payload	aapt2
 RhizoSettingsRro.apk	tools/build/apps/settings-rro.sh	src/android/apps/settings-rro tools/build/apps/settings-rro.sh	payload	aapt2

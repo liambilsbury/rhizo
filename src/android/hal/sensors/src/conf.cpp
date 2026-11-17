@@ -1,4 +1,4 @@
-// parse rhizo-sensors.conf
+// rhizo-sensors.conf parser
 #include "conf.h"
 
 #include <errno.h>
@@ -89,7 +89,7 @@ class Parser {
  public:
   Parser(const std::string& root, ConfError* err) : root_(root), err_(err) {}
 
-  // record an error and return false
+  // set *err_ and return false
   bool fail(const char* code, int line, const std::string& detail) {
     if (err_) {
       err_->code = code;
@@ -113,12 +113,12 @@ class Parser {
       else if (t[0] == "gyroscope") s.kind = Kind::Gyroscope;
       else if (t[0] == "magnetometer") s.kind = Kind::Magnetometer;
       else if (t[0] == "light") s.kind = Kind::Light;
-      else if (t[0] == "proximity") return fail("proximity-not-served", line, "proximity is never served");
+      else if (t[0] == "proximity") return fail("proximity-not-served", line, "proximity is not served");
       else return fail("bad-value", line, "unknown kind '" + t[0] + "'");
       b.hasKind = true;
       return true;
     }
-    if (word == "near") return fail("proximity-not-served", line, "'near' belongs to proximity, never served");
+    if (word == "near") return fail("proximity-not-served", line, "'near' is a proximity directive");
     if (word == "name" || word == "vendor") {
       std::string text = rtrim(rest);
       if (text.empty()) return fail("bad-value", line, word + " is empty");
@@ -180,7 +180,7 @@ class Parser {
     return fail("unknown-directive", line, "unknown directive '" + word + "'");
   }
 
-  // check a block at its end line
+  // check a sensor block at the end line
   bool finish(Block& b, int line) {
     static const char* const kRequired[] = {"kind", "name", "vendor", "device", "range", "resolution",
                                             "power", "min_delay_us", "max_delay_us", "mode"};
@@ -195,18 +195,18 @@ class Parser {
     if (isVector(s.kind) && !b.hasMatrix) return fail("matrix", line, std::string(kindName(s.kind)) + " has no matrix");
     if (!isVector(s.kind) && b.hasMatrix) return fail("matrix", line, "a matrix on a scalar kind");
     Mode want_mode = s.kind == Kind::Light ? Mode::OnChange : Mode::Continuous;
-    if (s.mode != want_mode) return fail("mode", line, std::string(kindName(s.kind)) + " must be " + (want_mode == Mode::OnChange ? "on_change" : "continuous"));
-    if (s.mode == Mode::Continuous && s.minDelayUs <= 0) return fail("delays", line, "a continuous sensor needs min_delay_us > 0");
-    if (s.maxDelayUs <= 0 || s.maxDelayUs < s.minDelayUs) return fail("delays", line, "max_delay_us must be positive and at least min_delay_us");
+    if (s.mode != want_mode) return fail("mode", line, std::string(kindName(s.kind)) + " mode is not " + (want_mode == Mode::OnChange ? "on_change" : "continuous"));
+    if (s.mode == Mode::Continuous && s.minDelayUs <= 0) return fail("delays", line, "a continuous sensor has min_delay_us <= 0");
+    if (s.maxDelayUs <= 0 || s.maxDelayUs < s.minDelayUs) return fail("delays", line, "max_delay_us <= 0 or max_delay_us < min_delay_us");
     auto key = std::make_pair(static_cast<int>(s.kind), s.name);
-    if (names_.count(key)) return fail("duplicate-name", line, "two " + std::string(kindName(s.kind)) + " sensors named '" + s.name + "'");
+    if (names_.count(key)) return fail("duplicate-name", line, "two " + std::string(kindName(s.kind)) + " sensors '" + s.name + "'");
     names_.insert(key);
     return true;
   }
 
   // parse a whole conf
   bool run(const std::string& text, Conf* out) {
-    if (text.find('\0') != std::string::npos) return fail("malformed", 0, "the file holds a NUL byte");
+    if (text.find('\0') != std::string::npos) return fail("malformed", 0, "the file contains a NUL byte");
     bool header = false;
     bool inBlock = false;
     Block b;
@@ -234,7 +234,7 @@ class Parser {
       if (!header) {
         if (word != "rhizo-sensors") return fail("header", line, "the first directive is not 'rhizo-sensors 1'");
         std::vector<std::string> t = tokens(rest);
-        if (t.size() != 1 || t[0] != "1") return fail("version", line, "contract version '" + rtrim(rest) + "', this HAL reads 1");
+        if (t.size() != 1 || t[0] != "1") return fail("version", line, "contract version '" + rtrim(rest) + "' is not 1");
         header = true;
         continue;
       }
@@ -270,7 +270,7 @@ class Parser {
     if (out->sensors.empty()) return fail("no-sensors", 0, "the conf declares no sensor");
     if (out->sensors.size() > kMaxSensors) return fail("too-many", 0, std::to_string(out->sensors.size()) + " sensors, at most " + std::to_string(kMaxSensors));
     int64_t top = *handles.rbegin();
-    if (top + static_cast<int64_t>(out->sensors.size()) >= kRuntimeHandleBase) return fail("handle", 0, "derived handles would reach the runtime range");
+    if (top + static_cast<int64_t>(out->sensors.size()) >= kRuntimeHandleBase) return fail("handle", 0, "derived handles overlap the runtime handle range");
     return true;
   }
 
@@ -316,7 +316,7 @@ bool parseConf(const std::string& text, Conf* out, ConfError* err, const std::st
 bool loadConf(const std::string& path, Conf* out, ConfError* err, const std::string& channelRoot) {
   int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) {
-    if (err) *err = {"unreadable", 0, path + ": " + strerror(errno)};
+    if (err) *err = {"unreadable", 0, path + " open() failed with " + strerror(errno)};
     return false;
   }
   std::string text;
@@ -327,7 +327,7 @@ bool loadConf(const std::string& path, Conf* out, ConfError* err, const std::str
     if (n < 0) {
       int e = errno;
       close(fd);
-      if (err) *err = {"unreadable", 0, path + ": " + strerror(e)};
+      if (err) *err = {"unreadable", 0, path + " read() failed with " + strerror(e)};
       return false;
     }
     if (n == 0) break;

@@ -1,5 +1,5 @@
 [Unit]
-Description=Rhizo Android sandbox (androidd), instance %i
+Description=Rhizo Android sandbox, instance %i
 # rhizo-template-allowlist: ConditionPathExists -- a launcher script on disk, execed identically by all of the instances
 ConditionPathExists=/root/launcher3.py
 After=systemd-modules-load.service

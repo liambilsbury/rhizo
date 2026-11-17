@@ -71,7 +71,7 @@ class SocketLink {
     return false;
   }
 
-  // send a message and return whether it was sent
+  // call send() with msg and return whether send() wrote msg.size() bytes
   bool Send(const std::string& msg) const {
     return send(fd_, msg.data(), msg.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(msg.size());
   }
@@ -91,7 +91,7 @@ class SocketLink {
     return last_error_ == EACCES || last_error_ == EPERM ? kDeniedRetryNs : kRetryNs;
   }
 
-  // set the send and receive timeout on the socket
+  // set SO_SNDTIMEO and SO_RCVTIMEO on fd
   bool SetTimeouts(int fd) const {
     if (timeout_us_ <= 0) return true;
     struct timeval tv {};
@@ -101,7 +101,7 @@ class SocketLink {
            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0;
   }
 
-  // log the on marker or a new off reason
+  // log the on marker or a changed off reason
   void Mark(int err) {
     char buf[200];
     if (err == 0) {

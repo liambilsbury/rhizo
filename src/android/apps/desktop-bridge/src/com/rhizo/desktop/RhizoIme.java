@@ -12,13 +12,13 @@ public class RhizoIme extends InputMethodService {
         BridgeService.startIfMinted(this, "ime");
     }
 
-    // return no input view
+    // return null
     @Override
     public View onCreateInputView() {
         return null;
     }
 
-    // report that no input view is shown
+    // return false
     @Override
     public boolean onEvaluateInputViewShown() {
         return false;

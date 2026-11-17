@@ -27,18 +27,18 @@ struct FrameRcParams {
   double alpha = kVirglRadeonsiAlpha;
 };
 
-// pick each picture's QP from a size model per picture type
+// frame-level rate controller with a size model per picture type
 class FrameRateController {
  public:
   void Reset(const FrameRcParams& params);
-  // set the bit rate for the next Pick
+  // set the bit rate and peak and scale the buffers
   void SetBitrate(uint32_t bitrate, uint32_t peak);
   int Pick(bool idr, uint32_t frames_since_idr);
   // drop the last picked picture
   void Unpick() {
     if (!pending_.empty()) pending_.pop_back();
   }
-  // update the model from the oldest picture in flight
+  // pop the oldest pending_ entry and update the model with the coded bytes
   void Done(bool idr, int asked_qp, int used_qp, size_t bytes);
 
   bool p_qp_followed() const { return !p_locked_; }

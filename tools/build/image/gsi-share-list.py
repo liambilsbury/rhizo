@@ -12,13 +12,13 @@ GPL_TEXT = re.compile(r"GNU (LESSER |LIBRARY |AFFERO )?GENERAL PUBLIC LICENSE|GN
 GPL_KIND = re.compile(r"SPDX-license-identifier-(A|L)?GPL|legacy_restricted")
 PREBUILT_TYPES = re.compile(r"prebuilt|_import$")
 
-USAGE = """usage: gsi-share-list.py <aosp dir> <product out, relative to it> <compliance-metadata.db> <apex listing>
-                         <image listing> [<prebuilt table>]
-       gsi-share-list.py --selftest"""
+USAGE = """gsi-share-list.py <aosp dir> <product out under aosp dir> <compliance-metadata.db> <apex listing>
+                  <image listing> [<prebuilt table>]
+gsi-share-list.py --selftest"""
 
 
 def notice_gpl_files(notice_gz):
-    """return {installed path: lib} for every file whose notice text is GPL-family"""
+    """return {installed path: lib} for the files with GPL-family notice text"""
     text = gzip.open(notice_gz).read().decode("utf-8", "replace")
     contents = dict(re.findall(r'<file-content contentId="([0-9a-f]+)"><!\[CDATA\[(.*?)\]\]></file-content>', text, re.S))
     hits = {}
@@ -29,12 +29,12 @@ def notice_gpl_files(notice_gz):
 
 
 def prebuilts_only(project):
-    """tell whether a project holds prebuilt binaries rather than their source"""
+    """return whether a project path starts with prebuilts/ or ends with prebuilts"""
     return project.startswith("prebuilts/") or project.split("/")[-1].endswith("prebuilts")
 
 
 def nearest(package, by_package):
-    """return the value for a package or its nearest ancestor directory, or None"""
+    """return by_package of package or of the nearest ancestor directory, else None"""
     p = package
     while p:
         if p in by_package:
@@ -44,7 +44,7 @@ def nearest(package, by_package):
 
 
 def share_list(aosp, product_out, db, apex_listing, image_listing, prebuilt_table):
-    """return (sorted project,reason rows, sorted problems: notice GPL files no project accounts for, unreviewed prebuilts)"""
+    """return the sorted project,reason rows and the sorted unmapped notice files and unreviewed prebuilts"""
     with open(os.path.join(aosp, ".repo/project.list")) as f:
         projects = sorted((p.strip() for p in f if p.strip()), key=len, reverse=True)
 
@@ -121,7 +121,7 @@ def share_list(aosp, product_out, db, apex_listing, image_listing, prebuilt_tabl
             if verdict == "gpl":
                 out.add("%s,PREBUILT:%s %s" % (project, name, table[project][1]))
             elif verdict != "not-gpl":
-                problems.append("unreviewed prebuilt: %s %s" % (project, name))
+                problems.append("unreviewed prebuilt %s %s" % (project, name))
         else:
             out.add("%s,module:%s %s" % (project, name, why))
     for match, (verdict, note) in table.items():
@@ -140,7 +140,7 @@ def share_list(aosp, product_out, db, apex_listing, image_listing, prebuilt_tabl
         src = source_of.get(product_out + path)
         project = project_of(src) if src else None
         if project is None:
-            unmapped.append("no AOSP project installs " + path)
+            unmapped.append("no AOSP project for " + path)
         else:
             out.add("%s,notice:%s %s" % (project, path, lib))
     return sorted(out), sorted(unmapped)
@@ -220,29 +220,29 @@ def selftest():
         want = ["UPSTREAM", "device/x/prebuilts", "external/erofs-utils", "external/ethtool", "external/iptables",
                 "external/selinux"]
         if projects != want:
-            fails.append("system, APEX and static-dep modules under GPL-family licenses, and the notice's GPL files,"
-                         " map to their projects and BSD ones do not: %r" % projects)
+            fails.append("share_list() projects == UPSTREAM, device/x/prebuilts, external/erofs-utils, external/ethtool,"
+                         " external/iptables, external/selinux (%r)" % projects)
         if "device/x/prebuilts,PREBUILT:u-boot.rom U-Boot, upstream source" not in rows:
-            fails.append("a GPL prebuilt from a prebuilts-only project is marked PREBUILT: %r" % rows)
+            fails.append("rows has device/x/prebuilts,PREBUILT:u-boot.rom U-Boot, upstream source (%r)" % rows)
         if any("prebuilts/vndk" in r for r in rows):
-            fails.append("a prebuilt sharing a file name with a source-built APEX module is not picked: %r" % rows)
+            fails.append("rows has no prebuilts/vndk (%r)" % rows)
         if any("PREBUILT:hyph-ru" in r for r in rows):
-            fails.append("a data file from a source project is not marked PREBUILT: %r" % rows)
+            fails.append("rows has no PREBUILT:hyph-ru (%r)" % rows)
         if not any(r.startswith("external/selinux,") and "libsepol" in r for r in rows):
-            fails.append("a static dependency is named as the reason: %r" % rows)
+            fails.append("rows has external/selinux with libsepol (%r)" % rows)
         if any(r.startswith("external/qemu") for r in rows):
-            fails.append("a module built but not in the image is not picked: %r" % rows)
+            fails.append("rows has no external/qemu (%r)" % rows)
         if any("prebuilts/vndk/v1" in r for r in rows):
-            fails.append("a prebuilt the table rules not-gpl is dropped: %r" % rows)
+            fails.append("rows has no prebuilts/vndk/v1 (%r)" % rows)
         if "UPSTREAM,apex:com.x.apex/etc/fs/kernel Linux, kernel build 1" not in rows:
-            fails.append("a table gpl row for a file in the image is listed as UPSTREAM: %r" % rows)
+            fails.append("rows has UPSTREAM,apex:com.x.apex/etc/fs/kernel Linux, kernel build 1 (%r)" % rows)
         if any("etc/absent" in r for r in rows):
-            fails.append("a table row for a file not in the image adds nothing: %r" % rows)
-        if unmapped != ["unreviewed prebuilt: prebuilts/foo libfoo"]:
-            fails.append("a GPL-flagged prebuilt with no table row is reported: %r" % unmapped)
+            fails.append("rows has no etc/absent (%r)" % rows)
+        if unmapped != ["unreviewed prebuilt prebuilts/foo libfoo"]:
+            fails.append("unmapped == [unreviewed prebuilt prebuilts/foo libfoo] (%r)" % unmapped)
     for f in fails:
         print("FAIL " + f)
-    print("gsi-share-list.py selftest: " + ("FAILED" if fails else "ok"))
+    print(("FAIL" if fails else "ok") + " gsi-share-list.py --selftest")
     return 1 if fails else 0
 
 
@@ -257,7 +257,7 @@ def main(argv):
     for r in rows:
         print(r)
     for u in unmapped:
-        print("gsi-share-list: %s" % u, file=sys.stderr)
+        print("%s" % u, file=sys.stderr)
     return 1 if unmapped else 0
 
 

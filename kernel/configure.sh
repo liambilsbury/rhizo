@@ -1,5 +1,5 @@
 #!/bin/bash
-# write a Rhizo kernel .config into a kernel tree from a distro config
+# Rhizo kernel .config from a distro config
 set -euo pipefail
 tree=$1 cfg=$2 distro=$3
 cp "$cfg" "$tree/.config"
@@ -14,5 +14,7 @@ cd "$tree"
   --module IP_NF_FILTER --module IP_NF_MANGLE --module IP_NF_RAW --module IP_NF_NAT \
   --module IP6_NF_FILTER --module IP6_NF_MANGLE --module IP6_NF_RAW --module IP6_NF_NAT
 ./scripts/config --module RHIZO_WLAN
+./scripts/config --enable SECURITY_LOCKDOWN_LSM --disable LOCK_DOWN_KERNEL_FORCE_NONE --enable LOCK_DOWN_KERNEL_FORCE_INTEGRITY \
+  --disable LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY --enable MODULE_SIG --enable MODULE_SIG_ALL --disable MODULE_SIG_FORCE
 [ "$distro" = ubuntu ] && ./scripts/config --disable DEFAULT_SECURITY_APPARMOR
 [ "${RHIZO_SKIP_OLDDEFCONFIG:-0}" = 1 ] || make olddefconfig >/dev/null

@@ -30,7 +30,7 @@ class CallbackList {
     inner_->on_death = std::move(fn);
   }
 
-  // add a callback unless its binder is already held
+  // add a callback unless the callback binder is in the list
   void Add(const std::shared_ptr<T>& cb) {
     if (!cb) return;
     AIBinder* b = cb->asBinder().get();
@@ -90,7 +90,7 @@ class CallbackList {
     std::function<void(size_t)> on_death;
   };
 
-  // drop the dead callback and report the count left
+  // remove the dead callback and call on_death with the count left
   static void OnDied(void* cookie) {
     auto* c = static_cast<Cookie*>(cookie);
     auto inner = c->inner.lock();
@@ -111,7 +111,7 @@ class CallbackList {
     if (fn) fn(left);
   }
 
-  // free a cookie once its link is gone
+  // delete a cookie on unlink
   static void OnUnlinked(void* cookie) { delete static_cast<Cookie*>(cookie); }
 
   std::shared_ptr<Inner> inner_;

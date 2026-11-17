@@ -16,7 +16,7 @@ import android.util.Log;
 
 import java.io.PrintWriter;
 
-// report the gnss HAL's host gps fixes as network fixes
+// LocationProviderBase that forwards GPS_PROVIDER fixes as NETWORK_PROVIDER fixes
 public final class NetworkLocationProvider extends LocationProviderBase implements LocationListener, Runnable {
     static final String TAG = "RhizoNetworkLocation";
     private static final long OFF = Long.MAX_VALUE;
@@ -44,7 +44,7 @@ public final class NetworkLocationProvider extends LocationProviderBase implemen
         this.lm = context.getSystemService(LocationManager.class);
     }
 
-    // apply the framework's merged request
+    // apply the ProviderRequest
     @Override
     public void onSetRequest(ProviderRequest request) {
         synchronized (lock) {
@@ -62,7 +62,7 @@ public final class NetworkLocationProvider extends LocationProviderBase implemen
     @Override
     public void onSendExtraCommand(String command, Bundle extras) {}
 
-    // drop the gps request
+    // set wantMs to OFF and call applyLocked
     void stop() {
         synchronized (lock) {
             wantMs = OFF;
@@ -70,7 +70,7 @@ public final class NetworkLocationProvider extends LocationProviderBase implemen
         }
     }
 
-    // retry a refused gps request
+    // call applyLocked
     @Override
     public void run() {
         synchronized (lock) {
@@ -78,7 +78,7 @@ public final class NetworkLocationProvider extends LocationProviderBase implemen
         }
     }
 
-    // hold gps at the request's interval
+    // set the GPS_PROVIDER LocationRequest interval to wantMs
     private void applyLocked() {
         if (wantMs == gpsMs) {
             return;
@@ -87,7 +87,7 @@ public final class NetworkLocationProvider extends LocationProviderBase implemen
         if (gpsMs != OFF) {
             lm.removeUpdates(this);
             gpsMs = OFF;
-            Log.i(TAG, "gps request removed");
+            Log.i(TAG, "removeUpdates for GPS_PROVIDER");
         }
         if (wantMs == OFF) {
             refusedLogged = false;
@@ -98,18 +98,18 @@ public final class NetworkLocationProvider extends LocationProviderBase implemen
             lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, gps, context.getMainExecutor(), this);
             gpsMs = wantMs;
             refusedLogged = false;
-            Log.i(TAG, "gps request interval_ms=" + wantMs);
+            Log.i(TAG, "requestLocationUpdates GPS_PROVIDER interval_ms=" + wantMs);
         } catch (SecurityException | IllegalArgumentException e) {
             if (!refusedLogged) {
-                Log.w(TAG, "gps request refused (" + e.getClass().getSimpleName() + "), retrying every "
-                        + RETRY_MS + " ms while network location is asked for");
+                Log.w(TAG, "requestLocationUpdates failed (" + e.getClass().getSimpleName() + ") retry_ms="
+                        + RETRY_MS);
                 refusedLogged = true;
             }
             handler.postDelayed(this, RETRY_MS);
         }
     }
 
-    // report each gps fix as a network fix
+    // call reportLocation with each gps fix as a network fix
     @Override
     public void onLocationChanged(Location gps) {
         Location fix = asNetwork(gps);

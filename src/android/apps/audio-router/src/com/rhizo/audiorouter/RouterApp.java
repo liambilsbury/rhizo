@@ -58,7 +58,7 @@ public class RouterApp extends Application {
             }
         };
         mObserver.startWatching();
-        Log.i(TAG, "router up, watching " + new File(dir, MAP_FILE));
+        Log.i(TAG, "startWatching for " + new File(dir, MAP_FILE));
         reload();
     }
 
@@ -80,11 +80,11 @@ public class RouterApp extends Application {
                         int uid = getPackageManager().getPackageUid(pkg, 0);
                         mUidToBus.put(uid, bus);
                     } catch (Exception e) {
-                        Log.e(TAG, "reload: cannot resolve " + pkg, e);
+                        Log.e(TAG, "getPackageUid failed for " + pkg, e);
                     }
                 }
             } catch (Exception e) {
-                Log.e(TAG, "reload: cannot read " + map, e);
+                Log.e(TAG, "failed to read " + map, e);
             }
         }
         boolean ok = rebuild();
@@ -114,9 +114,9 @@ public class RouterApp extends Application {
         tmp.setReadable(true, false);
         tmp.setWritable(true, false);
         if (!tmp.renameTo(new File(MAP_DIR, STATE_FILE))) {
-            Log.e(TAG, "writeState: rename failed");
+            Log.e(TAG, "failed to rename audio_map.state.tmp");
         }
-        Log.i(TAG, "state: " + state);
+        Log.i(TAG, "state=" + state);
     }
 
     // attach and detach the uid audio mixes
@@ -156,7 +156,7 @@ public class RouterApp extends Application {
             }
             mPolicy = policy;
             mAttached.putAll(added);
-            Log.i(TAG, "registered policy with " + added.size() + " uid mix(es)");
+            Log.i(TAG, "registered policy with " + added.size() + " uid mixes");
             return true;
         }
 
@@ -169,7 +169,7 @@ public class RouterApp extends Application {
                 return false;
             }
             mAttached.putAll(added);
-            Log.i(TAG, "attached " + added.size() + " new uid mix(es)");
+            Log.i(TAG, "attached " + added.size() + " uid mixes");
         }
         return true;
     }
@@ -203,7 +203,7 @@ public class RouterApp extends Application {
                     Class.forName("android.media.audiopolicy.AudioPolicy"));
             int status = (Integer) register.invoke(mAudioManager, policy);
             if (status != 0) {
-                Log.e(TAG, "registerAudioPolicy failed, status " + status);
+                Log.e(TAG, "registerAudioPolicy failed with status " + status);
                 return false;
             }
             return true;

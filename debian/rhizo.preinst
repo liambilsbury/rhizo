@@ -26,7 +26,7 @@ case "$1" in
       systemctl disable --now rhizo-final-cleanup.service >/dev/null 2>&1 || true
       rm -f /etc/systemd/system/rhizo-final-cleanup.service
       systemctl daemon-reload >/dev/null 2>&1 || true
-      echo "[$PROG] canceled a pending post-removal cleanup from an earlier 'apt remove' -- this install keeps its files"
+      echo "[$PROG] disabled and removed rhizo-final-cleanup.service"
     fi
 
     if [ -n "${2:-}" ]; then
@@ -45,7 +45,7 @@ case "$1" in
            && ! grep -qx group:rhizo-appwatch "$RECORD"; then
           echo group:rhizo-appwatch >> "$RECORD"
         fi
-        echo "[$PROG] recorded uid 1000's rhizo-appwatch as this install's own: Rhizo $2 created it before installs recorded that"
+        echo "[$PROG] wrote user:rhizo-appwatch to $RECORD"
       fi
     fi
     if [ -n "${2:-}" ] && ! grep -qx user:rhizo-netbridged "$RECORD" 2>/dev/null \
@@ -60,7 +60,7 @@ case "$1" in
            && ! grep -qx group:rhizo-netbridged "$RECORD"; then
           echo group:rhizo-netbridged >> "$RECORD"
         fi
-        echo "[$PROG] recorded rhizo-netbridged as this install's own: Rhizo $2 created it before installs recorded that"
+        echo "[$PROG] wrote user:rhizo-netbridged to $RECORD"
       fi
     fi
 
@@ -75,12 +75,11 @@ case "$1" in
          && [ "$meta_release" != "$good_release" ] && [ "$meta_release" != "$env_release" ]; then
         current_release=${good_release:-$env_release}
         if [ -n "$current_release" ]; then
-          echo "[$PROG] REFUSED: /var/lib/rhizo/data.img was instantiated for release=$meta_release, but 'rhizo gsi status' names release=$current_release current and this package prepares release=$SHIPPED_RELEASE by default." >&2
-          echo "[$PROG] run 'rhizo gsi update --release $meta_release' and let it complete a boot to make the release your data has current, then install again." >&2
+          echo "[$PROG] REFUSED /var/lib/rhizo/data.img release=$meta_release current_release=$current_release shipped_release=$SHIPPED_RELEASE" >&2
+          echo "[$PROG] rhizo gsi update --release $meta_release writes good_release=$meta_release to $UPDATE_STATE" >&2
         else
-          echo "[$PROG] REFUSED: /var/lib/rhizo/data.img was instantiated for release=$meta_release, this package prepares release=$SHIPPED_RELEASE by default, and nothing pins $meta_release: no good_release in $UPDATE_STATE, no RHIZO_RELEASE in /etc/rhizo/androidd.env or /var/lib/rhizo/androidd-runtime.env." >&2
+          echo "[$PROG] REFUSED /var/lib/rhizo/data.img release=$meta_release good_release= RHIZO_RELEASE= shipped_release=$SHIPPED_RELEASE" >&2
         fi
-        echo "[$PROG] RHIZO_WIPE_DATA=1 before this install/upgrade skips this check and nothing more: data.img is kept, and a prepare or boot of another release still refuses it until told to wipe it." >&2
         exit 1
       fi
     fi

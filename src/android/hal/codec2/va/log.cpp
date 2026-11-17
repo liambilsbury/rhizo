@@ -29,11 +29,11 @@ void Write(bool error, const char* fmt, va_list ap) {
     return;
   }
 #endif
-  fprintf(stderr, "rhizo-c2va: %s%s\n", error ? "error: " : "", msg);
+  fprintf(stderr, "rhizo-c2va: %s%s\n", error ? "level=error " : "", msg);
 }
 
-void VaError(void*, const char* message) { LogErrorf("libva: %s", message); }
-void VaInfo(void*, const char* message) { Logf("libva: %s", message); }
+void VaError(void*, const char* message) { LogErrorf("libva %s", message); }
+void VaInfo(void*, const char* message) { Logf("libva %s", message); }
 
 }
 

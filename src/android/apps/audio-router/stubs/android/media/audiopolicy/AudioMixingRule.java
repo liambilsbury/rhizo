@@ -4,7 +4,7 @@ package android.media.audiopolicy;
 public class AudioMixingRule {
     public static final int RULE_MATCH_UID = 0x1 << 2;
 
-    // forbid direct construction
+    // private constructor
     private AudioMixingRule() {}
 
     public static class Builder {

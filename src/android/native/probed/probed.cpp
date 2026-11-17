@@ -51,16 +51,16 @@ static bool peer_allowed(int cfd, struct ucred *cred) {
     return cred->uid == kPeerUid;
 }
 
-// send a refusal message and close cfd
+// call send() with a RHIZO_PROBE_REFUSED line and close cfd
 static void refuse(int cfd, const struct ucred *cred) {
     char msg[96];
-    int n = snprintf(msg, sizeof(msg), "RHIZO_PROBE_REFUSED: peer uid %d is not root\n", (int)cred->uid);
+    int n = snprintf(msg, sizeof(msg), "RHIZO_PROBE_REFUSED uid=%d\n", (int)cred->uid);
     send(cfd, msg, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL);
-    note("refused a connection from uid %d pid %d", (int)cred->uid, (int)cred->pid);
+    note("refused connection (uid %d pid %d)", (int)cred->uid, (int)cred->pid);
     close(cfd);
 }
 
-// set the socket mode and access list
+// chmod path 0600 and set a POSIX ACL for the owner and kPeerUid
 static int restrict_socket(const char *path) {
     if (chmod(path, 0600) != 0) return -1;
     struct {
@@ -75,11 +75,11 @@ static int restrict_socket(const char *path) {
          {ACL_OTHER, 0, (__u32)ACL_UNDEFINED_ID}},
     };
     static_assert(sizeof(acl) == sizeof(struct posix_acl_xattr_header) + 5 * sizeof(struct posix_acl_xattr_entry),
-                  "posix acl xattr must be packed");
+                  "sizeof(acl) == sizeof(struct posix_acl_xattr_header) + 5 * sizeof(struct posix_acl_xattr_entry)");
     return setxattr(path, "system.posix_acl_access", &acl, sizeof(acl), 0);
 }
 
-// run a command and send its output
+// run the command line from cfd with sh -c and write the output and RHIZO_PROBE_RC to cfd
 static void handle_conn(int cfd) {
     char buf[MAX_CMD];
     size_t len = 0;
@@ -117,7 +117,7 @@ static void handle_conn(int cfd) {
     close(cfd);
 }
 
-// serve connections on rhizo-probe.sock
+// serve connections on SOCK_PATH
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
     struct sigaction sa;
@@ -136,7 +136,7 @@ int main(void) {
     strncpy(addr.sun_path, SOCK_PATH, sizeof(addr.sun_path) - 1);
     if (bind(lfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { perror("bind"); return 1; }
     if (restrict_socket(SOCK_PATH) != 0) {
-        note("restrict %s to owner and uid %d: %s", SOCK_PATH, (int)kPeerUid, strerror(errno));
+        note("failed to restrict %s to owner and uid %d (%s)", SOCK_PATH, (int)kPeerUid, strerror(errno));
         return 1;
     }
     if (listen(lfd, 32) < 0) { perror("listen"); return 1; }

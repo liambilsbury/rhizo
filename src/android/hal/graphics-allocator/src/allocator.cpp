@@ -27,7 +27,7 @@ using ndk::ScopedFileDescriptor;
 
 namespace {
 
-// write the message to kmsg
+// write "<5>rhizo-graphics-allocator: msg" to /dev/kmsg
 void klog(const char* msg) {
   int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
   if (fd >= 0) {
@@ -36,7 +36,7 @@ void klog(const char* msg) {
   }
 }
 
-// check RHIZO_ALLOC_RING for the allocation ring
+// return whether RHIZO_ALLOC_RING is set and not 0
 bool AllocRingEnabled() {
   static const bool on = [] {
     const char* v = getenv("RHIZO_ALLOC_RING");
@@ -61,14 +61,14 @@ constexpr uint64_t kUsageComposerOverlay = 1ULL << 11;
 constexpr uint64_t kUsageComposerClientTarget = 1ULL << 12;
 constexpr uint64_t kUsageProtected = 1ULL << 14;
 
-// a GBM buffer object and its exported dmabuf
+// GBM buffer object and the exported dmabuf fd
 struct PlaneBo {
   struct gbm_bo* bo = nullptr;
   int fd = -1;
   int32_t stride = 0;
   uint32_t width = 0;
   uint32_t height = 0;
-  // destroy the bo and close its fd
+  // close fd and destroy bo
   void Release() {
     if (fd >= 0) close(fd);
     if (bo) gbm_bo_destroy(bo);
@@ -77,7 +77,7 @@ struct PlaneBo {
   }
 };
 
-// create a bo, trying the linear modifier first
+// create a bo with the linear modifier or with gbm_bo_create on failure
 struct gbm_bo* CreateBo(struct gbm_device* gbm, uint32_t width, uint32_t height, uint32_t format, uint32_t flags) {
   uint64_t modifier = 0;
   struct gbm_bo* bo = gbm_bo_create_with_modifiers2(gbm, width, height, format, &modifier, 1, flags);
@@ -90,7 +90,7 @@ bool CreatePlaneBo(struct gbm_device* gbm, uint32_t width, uint32_t height, Plan
   struct gbm_bo* bo = CreateBo(gbm, width, height, GBM_FORMAT_R8, GBM_BO_USE_LINEAR);
   if (!bo) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "gbm_bo_create failed for a %ux%u R8 plane", width, height);
+    snprintf(buf, sizeof(buf), "gbm_bo_create failed (R8 %ux%u)", width, height);
     klog(buf);
     return false;
   }
@@ -121,11 +121,11 @@ bool CreateYuv420Planes(struct gbm_device* gbm, uint32_t width, uint32_t height,
     lumaWidth = std::max(lumaWidth, target);
     chromaWidth = std::max(chromaWidth, target / 2);
   }
-  klog("no luma pitch twice the chroma pitch after 3 tries");
+  klog("failed to create R8 planes with luma stride == 2 * chroma stride in 3 attempts");
   return false;
 }
 
-// zero a bo and its host copy
+// zero bo and transfer the zeroed bo to the host resource
 void ZeroFill(int drmFd, struct gbm_bo* bo, int boFd, uint64_t size, uint32_t width, uint32_t height,
               uint64_t bufferId, int32_t stride) {
   void* zaddr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, boFd, 0);
@@ -141,13 +141,13 @@ void ZeroFill(int drmFd, struct gbm_bo* bo, int boFd, uint64_t size, uint32_t wi
   if (!rhizo::VirtgpuTransferToHostHandle(drmFd, gbm_bo_get_handle(bo).u32, static_cast<int>(width),
                                           static_cast<int>(height))) {
     char buf[160];
-    snprintf(buf, sizeof(buf), "zero-fill TransferToHost FAILED bufferId=%llu w=%u h=%u stride=%d",
+    snprintf(buf, sizeof(buf), "zero-fill TransferToHost failed bufferId=%llu w=%u h=%u stride=%d",
              (unsigned long long)bufferId, width, height, stride);
     klog(buf);
   }
 }
 
-// make a buffer's sealed one-page shared-metadata memfd
+// create a sealed one-page SharedMetadata memfd
 int CreateSharedMetadata() {
   int fd = rhizo::CreateBufferMemfd("rhizo-metadata", rhizo::kSharedMetadataBytes);
   if (fd < 0) return -1;
@@ -184,34 +184,33 @@ constexpr uint64_t kKnownUsageMask =
 
 class RhizoAllocator : public BnAllocator {
  public:
-  // choose memfd buffers or the GBM render node
+  // open /dev/dri/renderD128 and a GBM device unless RHIZO_ALLOCATOR=memfd
   RhizoAllocator() {
     const char* a = getenv("RHIZO_ALLOCATOR");
     memfd_ = a && strcmp(a, "memfd") == 0;
     if (memfd_) {
-      klog("memfd buffers (RHIZO_ALLOCATOR=memfd), no render node opened");
+      klog("RHIZO_ALLOCATOR=memfd");
       return;
     }
     fd_ = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
     if (fd_ < 0) {
-      klog("FATAL: cannot open /dev/dri/renderD128");
+      klog("failed to open /dev/dri/renderD128");
       return;
     }
     gbm_ = gbm_create_device(fd_);
     if (!gbm_) {
-      klog("FATAL: gbm_create_device failed");
+      klog("gbm_create_device failed");
       return;
     }
-    klog("gbm device created");
   }
 
-  // return an unsupported error
+  // return kErrUnsupported
   ScopedAStatus allocate(const std::vector<uint8_t>&, int32_t,
                           AllocationResult*) override {
-    return allocationError(kErrUnsupported, "V1 allocate() not implemented; use allocate2");
+    return allocationError(kErrUnsupported, "allocate() is not implemented");
   }
 
-  // allocate GBM or memfd buffers and encode their handles
+  // allocate GBM or memfd buffers and encode the buffer handles
   ScopedAStatus allocate2(const BufferDescriptorInfo& descriptor, int32_t count,
                            AllocationResult* out) override {
     if (!ready()) return allocationError(kErrNoResources, "no GBM device");
@@ -226,7 +225,7 @@ class RhizoAllocator : public BnAllocator {
       return allocationError(kErrUnsupported, "unknown additionalOptions");
     }
     if (usage & kUsageProtected) {
-      return allocationError(kErrUnsupported, "PROTECTED unsupported in v1");
+      return allocationError(kErrUnsupported, "PROTECTED usage is unsupported");
     }
     int32_t layoutFormat = rhizo::ResolvePixelFormat(pixelFormat, usage);
     int32_t drmFourcc, bytesPerPixel;
@@ -321,7 +320,7 @@ class RhizoAllocator : public BnAllocator {
         PlaneBo planes[3];
         if (!CreateYuv420Planes(gbm_, static_cast<uint32_t>(descriptor.width),
                                 static_cast<uint32_t>(descriptor.height), planes)) {
-          return allocationError(kErrNoResources, "GBM allocation of a 4:2:0 plane failed");
+          return allocationError(kErrNoResources, "failed to allocate a GBM 4:2:0 plane");
         }
         numFds = 3;
         f.numPlanes = 3;
@@ -348,7 +347,7 @@ class RhizoAllocator : public BnAllocator {
         rhizo::CpuLayout cpu;
         if (!rhizo::ComputeCpuLayout(layout, page, &cpu)) {
           for (int p = 0; p < 3; p++) close(fds[p]);
-          return allocationError(kErrNoResources, "4:2:0 planes have no CPU layout");
+          return allocationError(kErrNoResources, "ComputeCpuLayout failed for 4:2:0 planes");
         }
         f.allocSize = cpu.span;
       } else {
@@ -359,7 +358,7 @@ class RhizoAllocator : public BnAllocator {
           snprintf(buf, sizeof(buf), "gbm_bo_create failed (%dx%d fmt=0x%x flags=0x%x)", width,
                    height, gbmFormat, flags);
           klog(buf);
-          return allocationError(kErrNoResources, "GBM allocation failed");
+          return allocationError(kErrNoResources, "gbm_bo_create failed");
         }
         plane.fd = gbm_bo_get_fd(plane.bo);
         if (plane.fd < 0) {
@@ -382,7 +381,7 @@ class RhizoAllocator : public BnAllocator {
         int meta = CreateSharedMetadata();
         if (meta < 0) {
           for (int p = 0; p < numFds; p++) close(fds[p]);
-          return allocationError(kErrNoResources, "shared metadata memfd failed");
+          return allocationError(kErrNoResources, "failed to create the SharedMetadata memfd");
         }
         fds[numFds++] = meta;
         f.hasMetaFd = true;
@@ -425,7 +424,7 @@ class RhizoAllocator : public BnAllocator {
     return ScopedAStatus::ok();
   }
 
-  // answer whether a descriptor can be allocated
+  // set *out to whether allocate2 supports descriptor
   ScopedAStatus isSupported(const BufferDescriptorInfo& descriptor, bool* out) override {
     int32_t pixelFormat = static_cast<int32_t>(descriptor.format);
     uint64_t usage = static_cast<uint64_t>(descriptor.usage);
@@ -446,7 +445,7 @@ class RhizoAllocator : public BnAllocator {
     return ScopedAStatus::ok();
   }
 
-  // return whether buffers can be made
+  // return whether memfd_ is set or gbm_ is open
   bool ready() const { return memfd_ || gbm_ != nullptr; }
 
  private:
@@ -459,10 +458,9 @@ class RhizoAllocator : public BnAllocator {
 
 // register the allocator service and serve binder calls
 int main() {
-  klog("main() entered");
   auto device = ndk::SharedRefBase::make<RhizoAllocator>();
   if (!device->ready()) {
-    klog("FATAL: allocator not ready (no GBM device, and RHIZO_ALLOCATOR is not memfd), exiting");
+    klog("no GBM device and RHIZO_ALLOCATOR is not memfd");
     return 1;
   }
   const std::string instance =
@@ -471,13 +469,12 @@ int main() {
       AServiceManager_addService(device->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

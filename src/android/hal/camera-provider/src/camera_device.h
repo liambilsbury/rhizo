@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_CAMERA_DEVICE_H
 #define RHIZO_CAMERA_CAMERA_DEVICE_H
 
-// serve ICameraDevice and ICameraDeviceSession for a host camera
+// ICameraDevice and ICameraDeviceSession of a host camera
 
 #include <atomic>
 #include <chrono>
@@ -30,7 +30,7 @@ namespace rhizo::camera {
 
 namespace device = ::aidl::android::hardware::camera::device;
 
-// fixed state of a present host camera
+// fixed state of a host camera
 struct CameraContext {
   std::string id;
   std::string deviceName;
@@ -75,7 +75,7 @@ class CameraSession : public device::BnCameraDeviceSession {
   ndk::ScopedAStatus repeatingRequestEnd(int32_t frameNumber, const std::vector<int32_t>& streamIds) override;
 
  private:
-  // an output buffer of a queued request
+  // an output buffer of a CaptureRequest
   struct OutBuffer {
     int32_t streamId = 0;
     int64_t bufferId = 0;
@@ -85,7 +85,7 @@ class CameraSession : public device::BnCameraDeviceSession {
     int32_t height = 0;
     bool blob = false;
   };
-  // a capture request waiting for a frame
+  // a CaptureRequest in queue_
   struct Request {
     int32_t frameNumber = 0;
     std::shared_ptr<camera_metadata_t> settings;

@@ -9,7 +9,7 @@
 
 #include <linux/fuse.h>
 
-// write bytes of an iovec array
+// call writev until the iovec array is written
 static inline int writev_all(int fd, struct iovec *iov, int iovcnt)
 {
 	while (iovcnt > 0) {
@@ -38,7 +38,7 @@ static inline int writev_all(int fd, struct iovec *iov, int iovcnt)
 	return 0;
 }
 
-// write the fuse reply to fd
+// write a fuse_out_header and the data iovecs to fd
 static inline int fuse_wire_reply(int fd, uint64_t unique, int32_t error,
 				  const struct iovec *data, int ndata)
 {

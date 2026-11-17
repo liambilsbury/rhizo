@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# extract, check and verify Aurora Store and LiteGapps payloads
+# Aurora Store and LiteGapps payload extraction and verification
 import argparse
 import hashlib
 import io
@@ -83,30 +83,30 @@ class Refused(Exception):
 
 def log(msg):
     """print a log line to stderr"""
-    print("store_payload: %s" % msg, file=sys.stderr)
+    print("%s" % msg, file=sys.stderr)
 
 
 def safe_name(name, label):
     """return a member name without ./ or a trailing /"""
     if not name or "\0" in name or "\\" in name or name.startswith("/"):
-        raise Refused("unsafe-name", "%s holds a member named %r" % (label, name))
+        raise Refused("unsafe-name", "%s contains member %r" % (label, name))
     while name.startswith("./"):
         name = name[2:]
     name = name.rstrip("/")
     parts = name.split("/")
     if not name or any(p in ("", ".", "..") for p in parts):
-        raise Refused("unsafe-name", "%s holds a member named %r" % (label, name))
+        raise Refused("unsafe-name", "%s contains member %r" % (label, name))
     return name
 
 
 def check_dest(dest):
-    """refuse a destination no payload may hold"""
+    """raise Refused for a dest outside DEST_PATTERNS"""
     if not any(p.fullmatch(dest) for p in DEST_PATTERNS):
-        raise Refused("bad-dest", "%r is not a payload destination (an APK, an x86_64 library or a gapps-*.xml)" % dest)
+        raise Refused("bad-dest", "%r matches no DEST_PATTERNS entry" % dest)
 
 
 def read_capped(src, cap, label):
-    """read a whole stream of at most cap bytes"""
+    """read a stream of at most cap bytes"""
     data = src.read(cap + 1)
     if len(data) > cap:
         raise Refused("oversize-member", "%s is larger than %d bytes" % (label, cap))
@@ -114,7 +114,7 @@ def read_capped(src, cap, label):
 
 
 def copy_hashed(src, dst, cap, label):
-    """copy a capped stream into a file and hash it"""
+    """copy at most cap bytes of src to dst and return the sha256 and size"""
     h, n = hashlib.sha256(), 0
     while True:
         b = src.read(CHUNK)
@@ -143,21 +143,21 @@ def describe(elem):
 
 
 def filter_xml(data, label):
-    """filter an XML by the element allowlist"""
+    """filter an XML document by XML_KEEP"""
     if len(data) > MAX_XML:
         raise Refused("xml-too-large", "%s is larger than %d bytes" % (label, MAX_XML))
     if re.search(rb"<!\s*(DOCTYPE|ENTITY)", data, re.I):
-        raise Refused("xml-doctype", "%s carries a DOCTYPE or ENTITY declaration" % label)
+        raise Refused("xml-doctype", "%s contains a DOCTYPE or ENTITY declaration" % label)
     try:
         root = ET.fromstring(data)
     except ET.ParseError as e:
-        raise Refused("xml-unparsable", "%s does not parse: %s" % (label, e))
+        raise Refused("xml-unparsable", "failed to parse %s (%s)" % (label, e))
     if root.tag not in XML_ROOTS:
         raise Refused("xml-root", "%s has root <%s>, not <permissions> or <config>" % (label, root.tag))
     dropped = []
 
     def kept(elem, depth):
-        """return the lines for elem's children that pass the allowlist"""
+        """return the lines for the children of elem in XML_KEEP"""
         allowed = XML_KEEP.get(elem.tag, {})
         lines = []
         for child in elem:
@@ -166,13 +166,13 @@ def filter_xml(data, label):
             attrs = allowed.get(child.tag)
             why = None
             if attrs is None:
-                why = "not on the element allowlist"
+                why = "not in XML_KEEP"
             elif set(child.attrib) != set(attrs):
-                why = "attributes %s, not %s" % (sorted(child.attrib), list(attrs))
+                why = "attributes %s, expected %s" % (sorted(child.attrib), list(attrs))
             elif not all(PLAIN.fullmatch(child.attrib[a]) for a in attrs):
-                why = "a value that is not a plain name"
+                why = "an attribute value outside PLAIN"
             if why:
-                dropped.append("%s from %s: %s" % (describe(child), label, why))
+                dropped.append("%s from %s, %s" % (describe(child), label, why))
                 continue
             pad = "    " * depth
             tag = child.tag + "".join(" %s=%s" % (a, quoteattr(child.attrib[a])) for a in attrs)
@@ -185,13 +185,13 @@ def filter_xml(data, label):
 
     source = re.sub(r"[^A-Za-z0-9_./!+-]", "_", label).replace("--", "__")
     lines = ['<?xml version="1.0" encoding="utf-8"?>',
-             "<!-- %s, re-emitted through Rhizo's element allowlist -->" % source,
+             "<!-- %s filtered by XML_KEEP -->" % source,
              "<%s>" % root.tag] + kept(root, 1) + ["</%s>" % root.tag]
     return ("\n".join(lines) + "\n").encode(), dropped
 
 
 class Writer:
-    """write payload files under a directory once per destination"""
+    """payload file writer for a directory"""
 
     def __init__(self, out):
         self.out = out
@@ -202,7 +202,7 @@ class Writer:
         """create and open the file for a destination"""
         check_dest(dest)
         if dest in self.written:
-            raise Refused("bad-take-list", "%s and %s both land on %s" % (self.written[dest], label, dest))
+            raise Refused("bad-take-list", "%s and %s both map to %s" % (self.written[dest], label, dest))
         self.written[dest] = label
         full = os.path.join(self.out, dest)
         d = self.out
@@ -216,12 +216,12 @@ class Writer:
         return f
 
     def put(self, src, dest, want, label):
-        """write a member, checked against its sha256 when given"""
+        """write a member and compare the sha256 with want"""
         if dest.endswith(".xml"):
             data = read_capped(src, MAX_XML, label)
             have = hashlib.sha256(data).hexdigest()
             if want and have != want:
-                raise Refused("member-sha256-mismatch", "%s is %s, the take list says %s" % (label, have, want))
+                raise Refused("member-sha256-mismatch", "sha256 of %s is %s, expected %s" % (label, have, want))
             body, dropped = filter_xml(data, label)
             for d in dropped:
                 log("dropped %s" % d)
@@ -232,14 +232,14 @@ class Writer:
         with self.open_dest(dest, label) as f:
             have, _ = copy_hashed(src, f, MAX_MEMBER, label)
         if want and have != want:
-            raise Refused("member-sha256-mismatch", "%s is %s, the take list says %s" % (label, have, want))
+            raise Refused("member-sha256-mismatch", "sha256 of %s is %s, expected %s" % (label, have, want))
 
 
 def zip_members(zf, label):
-    """return a safe archive's members by name"""
+    """return the members of zf by name"""
     infos = zf.infolist()
     if len(infos) > MAX_MEMBERS:
-        raise Refused("too-many-members", "%s holds %d members" % (label, len(infos)))
+        raise Refused("too-many-members", "%s contains %d members" % (label, len(infos)))
     members, total = {}, 0
     for info in infos:
         name = safe_name(info.filename, label)
@@ -249,12 +249,12 @@ def zip_members(zf, label):
         if info.flag_bits & 0x1:
             raise Refused("encrypted-member", "%s!%s is encrypted" % (label, name))
         if name in members:
-            raise Refused("duplicate-member", "%s holds %s twice" % (label, name))
+            raise Refused("duplicate-member", "%s contains %s twice" % (label, name))
         if info.file_size > MAX_MEMBER:
-            raise Refused("oversize-member", "%s!%s declares %d bytes" % (label, name, info.file_size))
+            raise Refused("oversize-member", "%s!%s file_size is %d bytes" % (label, name, info.file_size))
         total += info.file_size
         if total > MAX_TOTAL:
-            raise Refused("oversize-archive", "%s declares more than %d bytes" % (label, MAX_TOTAL))
+            raise Refused("oversize-archive", "%s file_size total is more than %d bytes" % (label, MAX_TOTAL))
         members[name] = info
     return members
 
@@ -272,7 +272,7 @@ def group(entries, label):
 
 
 def take_member(name, src, subs, writer, label):
-    """write a member or take entries from it"""
+    """write a member or take entries from the member"""
     if not subs[0][0]:
         writer.put(src, subs[0][1], subs[0][2], label)
     elif name.endswith(".zip"):
@@ -281,13 +281,13 @@ def take_member(name, src, subs, writer, label):
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 take_from_zip(zf, subs, writer, label)
         except zipfile.BadZipFile as e:
-            raise Refused("bad-archive", "%s: %s" % (label, e))
+            raise Refused("bad-archive", "%s (%s)" % (label, e))
     elif name.endswith(".tar.xz"):
         take_from_tar(src, "r|xz", subs, writer, label)
     elif name.endswith(".tar"):
         take_from_tar(src, "r|", subs, writer, label)
     else:
-        raise Refused("bad-take-list", "%s is not a .zip, .tar or .tar.xz to open" % label)
+        raise Refused("bad-take-list", "%s is not a .zip, .tar or .tar.xz" % label)
 
 
 def take_from_zip(zf, entries, writer, label):
@@ -296,12 +296,12 @@ def take_from_zip(zf, entries, writer, label):
     for name, subs in group(entries, label).items():
         info = members.get(name)
         if info is None or info.is_dir():
-            raise Refused("missing-member", "%s holds no file %s" % (label, name))
+            raise Refused("missing-member", "%s contains no file %s" % (label, name))
         try:
             with zf.open(info) as src:
                 take_member(name, src, subs, writer, "%s!%s" % (label, name))
         except (zipfile.BadZipFile, zlib.error, EOFError) as e:
-            raise Refused("bad-archive", "%s!%s: %s" % (label, name, e))
+            raise Refused("bad-archive", "%s!%s (%s)" % (label, name, e))
 
 
 def take_from_tar(raw, mode, entries, writer, label):
@@ -314,31 +314,31 @@ def take_from_tar(raw, mode, entries, writer, label):
             for m in tf:
                 name = safe_name(m.name, label)
                 if name in seen:
-                    raise Refused("duplicate-member", "%s holds %s twice" % (label, name))
+                    raise Refused("duplicate-member", "%s contains %s twice" % (label, name))
                 seen.add(name)
                 if len(seen) > MAX_MEMBERS:
-                    raise Refused("too-many-members", "%s holds more than %d members" % (label, MAX_MEMBERS))
+                    raise Refused("too-many-members", "%s contains more than %d members" % (label, MAX_MEMBERS))
                 if not (m.isreg() or m.isdir()) or m.issparse():
                     raise Refused("unsafe-member", "%s!%s is a link, device or sparse file" % (label, name))
                 if data_filter:
                     try:
                         data_filter(m, writer.out)
                     except tarfile.FilterError as e:
-                        raise Refused("unsafe-member", "%s!%s: %s" % (label, name, e))
+                        raise Refused("unsafe-member", "%s!%s (%s)" % (label, name, e))
                 if m.isdir():
                     continue
                 if m.size > MAX_MEMBER:
-                    raise Refused("oversize-member", "%s!%s declares %d bytes" % (label, name, m.size))
+                    raise Refused("oversize-member", "%s!%s size is %d bytes" % (label, name, m.size))
                 total += m.size
                 if total > MAX_TOTAL:
-                    raise Refused("oversize-archive", "%s declares more than %d bytes" % (label, MAX_TOTAL))
+                    raise Refused("oversize-archive", "%s size total is more than %d bytes" % (label, MAX_TOTAL))
                 if name in wanted:
                     take_member(name, tf.extractfile(m), wanted[name], writer, "%s!%s" % (label, name))
     except (tarfile.TarError, lzma.LZMAError, EOFError) as e:
-        raise Refused("bad-archive", "%s: %s" % (label, e))
+        raise Refused("bad-archive", "%s (%s)" % (label, e))
     missing = sorted(set(wanted) - seen)
     if missing:
-        raise Refused("missing-member", "%s holds no %s" % (label, ", ".join(missing)))
+        raise Refused("missing-member", "%s contains no %s" % (label, ", ".join(missing)))
 
 
 def read_take_list(path):
@@ -361,7 +361,7 @@ def read_take_list(path):
 
 
 def data_offset(fp, info):
-    """return where a zip member's data starts in the file"""
+    """return the file offset of the data of zip member info"""
     fp.seek(info.header_offset)
     head = fp.read(30)
     if len(head) != 30 or head[:4] != b"PK\x03\x04":
@@ -371,7 +371,7 @@ def data_offset(fp, info):
 
 
 def native_libs(path):
-    """return the APK's x86_64 libraries and whether any need extracting"""
+    """return the lib/x86_64 members of path and whether any is compressed or unaligned"""
     with open(path, "rb") as fp, zipfile.ZipFile(fp) as zf:
         members = zip_members(zf, os.path.basename(path))
         libs = [(LIB.fullmatch(n).group(1), i) for n, i in sorted(members.items()) if LIB.fullmatch(n)]
@@ -380,7 +380,7 @@ def native_libs(path):
 
 
 def preextract_libs(writer):
-    """extract the x86_64 libraries staged APKs need"""
+    """extract the lib/x86_64 members of each staged APK with a compressed or unaligned library"""
     for dest in sorted(d for d in writer.written if d.endswith(".apk")):
         path = os.path.join(writer.out, dest)
         try:
@@ -393,8 +393,8 @@ def preextract_libs(writer):
                         writer.put(src, "%s/lib/x86_64/%s" % (os.path.dirname(dest), name), None,
                                    "%s!%s" % (dest, info.filename))
         except (zipfile.BadZipFile, zlib.error, EOFError) as e:
-            raise Refused("bad-apk", "%s: %s" % (dest, e))
-        log("pre-extracted %d x86_64 librar(ies) out of %s: compressed or not page-aligned" % (len(libs), dest))
+            raise Refused("bad-apk", "%s (%s)" % (dest, e))
+        log("pre-extracted %d x86_64 libraries from %s" % (len(libs), dest))
 
 
 def payload_files(d):
@@ -440,7 +440,7 @@ def extract_zip(archive, take, out, adds=()):
         with zipfile.ZipFile(archive) as zf:
             take_from_zip(zf, entries, writer, label)
     except zipfile.BadZipFile as e:
-        raise Refused("bad-archive", "%s: %s" % (label, e))
+        raise Refused("bad-archive", "%s (%s)" % (label, e))
     for src, dest in adds:
         with open(src, "rb") as f:
             writer.put(f, dest, None, os.path.basename(src))
@@ -458,7 +458,7 @@ def extract_file(path, dest, want, out):
 
 
 def verify_dir(d):
-    """return the problems with a payload directory against its manifest.tsv"""
+    """return the problems with a payload directory against manifest.tsv"""
     d = os.path.realpath(d)
     mpath = os.path.join(d, MANIFEST)
     if not os.path.isfile(mpath) or os.path.islink(mpath):
@@ -480,7 +480,7 @@ def verify_dir(d):
                     raise Refused("unsafe-name", "%r is not a plain relative path" % rel)
                 check_dest(rel)
             except Refused as e:
-                problems.append("%s:%d: %s" % (MANIFEST, n, e))
+                problems.append("%s line %d (%s)" % (MANIFEST, n, e))
                 continue
             if rel in listed:
                 problems.append("%s lists %s twice" % (MANIFEST, rel))
@@ -488,9 +488,9 @@ def verify_dir(d):
             if rel not in files:
                 problems.append("%s is missing" % rel)
             elif os.path.getsize(os.path.join(d, rel)) != size:
-                problems.append("%s is %d bytes, the manifest says %d" % (rel, os.path.getsize(os.path.join(d, rel)), size))
+                problems.append("%s is %d bytes, expected %d" % (rel, os.path.getsize(os.path.join(d, rel)), size))
             elif sha256_file(os.path.join(d, rel)) != want:
-                problems.append("%s does not match its sha256" % rel)
+                problems.append("sha256 of %s does not match the manifest" % rel)
     problems += ["%s is not in the manifest" % rel for rel in sorted(files - listed)]
     if not listed and not problems:
         problems.append("%s lists nothing" % MANIFEST)
@@ -501,7 +501,7 @@ def lp(buf, p):
     """return a u32-length-prefixed field of buf and the next offset"""
     n = struct.unpack_from("<I", buf, p)[0]
     if p + 4 + n > len(buf):
-        raise ValueError("a length runs past its block")
+        raise ValueError("a length runs past the block")
     return buf[p + 4:p + 4 + n], p + 4 + n
 
 
@@ -522,7 +522,7 @@ def signer_certs(value):
 def apk_signers(path):
     """return an APK's signer certificate sha256s by scheme"""
     if os.path.getsize(path) < 22:
-        raise Refused("bad-apk", "%s is too short to be an APK" % path)
+        raise Refused("bad-apk", "%s is shorter than 22 bytes" % path)
     with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
         eocd = m.rfind(b"PK\x05\x06", max(0, len(m) - 65557))
         if eocd < 0 or eocd + 22 > len(m):
@@ -544,7 +544,7 @@ def apk_signers(path):
                     out[pid] = signer_certs(bytes(m[p + 12:p + 8 + n]))
                 p += 8 + n
         except (ValueError, struct.error) as e:
-            raise Refused("bad-apk", "%s: %s" % (path, e))
+            raise Refused("bad-apk", "%s (%s)" % (path, e))
     return out
 
 
@@ -576,7 +576,7 @@ def axml_manifest(data):
                 return package, version
             off += csize
     except (ValueError, IndexError, struct.error) as e:
-        raise Refused("bad-apk", "AndroidManifest.xml: %s" % e)
+        raise Refused("bad-apk", "failed to parse AndroidManifest.xml (%s)" % e)
     raise Refused("bad-apk", "AndroidManifest.xml has no <manifest> element")
 
 
@@ -585,7 +585,7 @@ def string_pool(data, off, csize):
     hsize = struct.unpack_from("<H", data, off + 2)[0]
     count, _, flags, sstart, _ = struct.unpack_from("<IIIII", data, off + 8)
     if count * 4 > csize:
-        raise ValueError("a string pool counts more strings than it holds")
+        raise ValueError("string pool count exceeds the chunk size")
     base, out = off + sstart, []
     for so in struct.unpack_from("<%dI" % count, data, off + hsize):
         p = base + so
@@ -617,7 +617,7 @@ def apk_info(path):
             with zf.open(members["AndroidManifest.xml"]) as src:
                 package, version = axml_manifest(read_capped(src, MAX_MANIFEST, "AndroidManifest.xml"))
     except (zipfile.BadZipFile, zlib.error, EOFError) as e:
-        raise Refused("bad-apk", "%s: %s" % (path, e))
+        raise Refused("bad-apk", "%s (%s)" % (path, e))
     signers = apk_signers(path)
     libs, extract = native_libs(path)
     return {
@@ -703,7 +703,7 @@ def fx_txz(members):
 
 
 def fx_axml(package, version):
-    """return a minimal binary AndroidManifest.xml naming a package and versionCode"""
+    """return a minimal binary AndroidManifest.xml with package and versionCode"""
     strs = ["versionCode", "package", "manifest", package]
     enc = b"".join(struct.pack("<H", len(s)) + s.encode("utf-16-le") + b"\0\0" for s in strs)
     enc += b"\0" * (-len(enc) % 4)
@@ -724,7 +724,7 @@ def fx_axml(package, version):
 
 
 def fx_signed(apk, cert):
-    """return an APK whose v2 and v3 blocks name cert"""
+    """return apk with v2 and v3 signing blocks for cert"""
     eocd = apk.rfind(b"PK\x05\x06")
     cd = struct.unpack_from("<I", apk, eocd + 16)[0]
 
@@ -783,7 +783,7 @@ def write_take_list(path, rows):
 
 
 def write_fixtures(d):
-    """write the fetch tests' fixtures and print their pins"""
+    """write the fetch test fixtures and print the pins"""
     os.makedirs(d, exist_ok=True)
     files = {"aurora.apk": fx_apk("com.aurora.store", 76, lib="libaurora.so", compress=True)}
     members, rows = fx_litegapps()
@@ -809,7 +809,7 @@ def selftest():
             failed.append(name)
 
     def refusal(fn, *args):
-        """return the reason fn refuses with, or None"""
+        """return the Refused reason fn(*args) raises, or None"""
         try:
             fn(*args)
         except Refused as e:
@@ -822,7 +822,7 @@ def selftest():
     count = [0]
 
     def run(members, rows=take_rows, adds=()):
-        """extract a synthetic archive, returning its writer or refusal"""
+        """extract a synthetic archive and return the Writer or the refusal reason"""
         count[0] += 1
         d = os.path.join(work, str(count[0]))
         os.makedirs(d)
@@ -841,70 +841,70 @@ def selftest():
                     b'<deny-permission name="android.permission.Q"/></privapp-permissions></permissions>')
         w = run(good, adds=[(own, "etc/permissions/gapps-own.xml")])
         ok = isinstance(w, Writer)
-        check("a good archive extracts", ok)
+        check("isinstance(run(good, adds), Writer)", ok)
         if ok:
             files = payload_files(w.out)
-            check("only the listed members, the added file and compressed libraries are taken",
+            check("payload_files(w.out) == the 7 take, add and libv.so paths",
                   files == ["etc/permissions/gapps-own.xml", "etc/permissions/gapps-perm.xml",
                             "etc/sysconfig/gapps-google.xml", "priv-app/GmsCore/GmsCore.apk",
                             "priv-app/GoogleServicesFramework/GoogleServicesFramework.apk",
                             "priv-app/Phonesky/Phonesky.apk", "priv-app/Phonesky/lib/x86_64/libv.so"])
             body = open(os.path.join(w.out, "etc/permissions/gapps-perm.xml")).read()
-            check("the allowlist keeps privapp permission and deny-permission",
+            check("READ_LOGS <permission> and Y <deny-permission> in gapps-perm.xml",
                   '<permission name="android.permission.READ_LOGS"/>' in body
                   and '<deny-permission name="android.permission.Y"/>' in body)
-            check("the allowlist drops <feature>, a gid <permission> and an unknown attribute",
+            check("feature, gid and android.permission.Z not in gapps-perm.xml",
                   "feature" not in body and "gid" not in body and "android.permission.Z" not in body)
             drops = "\n".join(w.dropped)
-            check("every dropped element is reported",
+            check("w.dropped contains the 6 dropped elements",
                   all(t in drops for t in ("<feature", "<permission name=\"android.permission.X\"",
                                            "android.permission.Z", "<allow-ignore-location-settings",
                                            "<unavailable-feature", "org.ex ample")))
             conf = open(os.path.join(w.out, "etc/sysconfig/gapps-google.xml")).read()
-            check("a sysconfig allowlist entry survives", '<allow-in-power-save package="org.example.gms"/>' in conf)
-            check("the added file passes the allowlist", "android.permission.Q" in
+            check("allow-in-power-save in gapps-google.xml", '<allow-in-power-save package="org.example.gms"/>' in conf)
+            check("android.permission.Q in gapps-own.xml", "android.permission.Q" in
                   open(os.path.join(w.out, "etc/permissions/gapps-own.xml")).read())
             n, _ = write_manifest(w.out)
-            check("manifest lists every file", n == 7)
-            check("verify passes a fresh payload", verify_dir(w.out) == [])
+            check("write_manifest(w.out)[0] == 7", n == 7)
+            check("verify_dir(w.out) == []", verify_dir(w.out) == [])
             with open(os.path.join(w.out, "priv-app/GmsCore/GmsCore.apk"), "r+b") as f:
                 f.seek(100)
                 f.write(b"X")
-            check("verify fails a changed file", any("sha256" in p for p in verify_dir(w.out)))
+            check("sha256 in verify_dir(w.out) after a changed byte", any("sha256" in p for p in verify_dir(w.out)))
             with open(os.path.join(w.out, "priv-app/GmsCore/extra.apk"), "w") as f:
                 f.write("x")
-            check("verify fails a file not in the manifest", any("not in the manifest" in p for p in verify_dir(w.out)))
+            check("not in the manifest in verify_dir(w.out) for extra.apk", any("not in the manifest" in p for p in verify_dir(w.out)))
             os.unlink(os.path.join(w.out, "priv-app/GmsCore/extra.apk"))
             os.symlink("/etc/passwd", os.path.join(w.out, "etc/permissions/gapps-link.xml"))
-            check("verify fails a symlink in the payload", any("not a plain file" in p for p in verify_dir(w.out)))
-        check("a member that does not match its sha256 is refused",
+            check("not a plain file in verify_dir(w.out) for a symlink", any("not a plain file" in p for p in verify_dir(w.out)))
+        check("run(good, sha256 0 * 64) == member-sha256-mismatch",
               run(good, [(take_rows[0][0], take_rows[0][1], "0" * 64)]) == "member-sha256-mismatch")
-        check("a symlink member is refused",
+        check("run(good + bin/sh symlink) == unsafe-member",
               run(good + [("bin/sh", b"/system/bin/sh", 0o120777)]) == "unsafe-member")
-        check("a member named ../x is refused", run(good + [("../x", b"x")]) == "unsafe-name")
-        check("an absolute member is refused", run(good + [("/etc/x", b"x")]) == "unsafe-name")
-        check("a duplicate member is refused", run(good + [("files/files.tar.xz", b"x")]) == "duplicate-member")
+        check("run(good + ../x) == unsafe-name", run(good + [("../x", b"x")]) == "unsafe-name")
+        check("run(good + /etc/x) == unsafe-name", run(good + [("/etc/x", b"x")]) == "unsafe-name")
+        check("run(good + files/files.tar.xz) == duplicate-member", run(good + [("files/files.tar.xz", b"x")]) == "duplicate-member")
         saved, MAX_MEMBER = MAX_MEMBER, 1 << 16
         try:
-            check("an oversize member is refused", run(good + [("big.bin", b"\0" * (1 << 17))]) == "oversize-member")
+            check("run(good + big.bin over MAX_MEMBER) == oversize-member", run(good + [("big.bin", b"\0" * (1 << 17))]) == "oversize-member")
         finally:
             MAX_MEMBER = saved
         bad_nested = fx_zip([("system/product/etc/permissions/perm.xml", FX_PERM_XML), ("system/x", b"/", 0o120777)])
-        check("a symlink inside a nested zip is refused",
+        check("run(nested zip with system/x symlink) == unsafe-member",
               run([m for m in good if m[0] != COMMON] + [(COMMON, bad_nested)]) == "unsafe-member")
         for kind in ("link", "chr"):
             t = fx_txz([("x86_64/36/system/product/priv-app/GmsCore/GmsCore.apk", gms), (kind, "x86_64/36/odd")])
-            check("a %s member in the tar is refused" % kind, run([("files/files.tar.xz", t)]) == "unsafe-member")
+            check("run(tar with a %s member) == unsafe-member" % kind, run([("files/files.tar.xz", t)]) == "unsafe-member")
         t = fx_txz([("x86_64/36/system/product/priv-app/GmsCore/GmsCore.apk", gms), ("../../escape", b"x")])
-        check("a tar member named ../ is refused", run([("files/files.tar.xz", t)]) == "unsafe-name")
-        check("a member the archive lacks is refused",
+        check("run(tar with ../../escape) == unsafe-name", run([("files/files.tar.xz", t)]) == "unsafe-name")
+        check("run(good, nope.apk) == missing-member",
               run(good, [("files/files.tar.xz!x86_64/36/nope.apk", "priv-app/Nope/Nope.apk", "0" * 64)])
               == "missing-member")
         for dest in ("bin/sh", "etc/permissions/privapp.xml", "build.prop", "priv-app/Foo/../../x.apk"):
-            check("destination %s is refused" % dest, run(good, [(take_rows[0][0], dest, take_rows[0][2])]) == "bad-dest")
+            check("run(good, dest %s) == bad-dest" % dest, run(good, [(take_rows[0][0], dest, take_rows[0][2])]) == "bad-dest")
         doc = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><permissions/>'
         bad_doc = fx_zip([("system/product/etc/permissions/perm.xml", doc)])
-        check("an XML with a DOCTYPE is refused",
+        check("run(DOCTYPE perm.xml) == xml-doctype",
               run([(COMMON, bad_doc)], [take_rows[3][:2] + (sha256_bytes(doc),)]) == "xml-doctype")
         info = None
         with open(os.path.join(work, "app.apk"), "wb") as f:
@@ -913,34 +913,34 @@ def selftest():
             info = apk_info(os.path.join(work, "app.apk"))
         except Refused as e:
             print("       %s" % e)
-        check("apk-info reads package, versionCode, signer and stored libraries",
+        check("apk_info(app.apk) == package, version_code 76, signer_sha256 and libs stored",
               info == {"package": "org.example.app", "version_code": "76", "signer_sha256": sha256_bytes(b"pinned"),
                        "libs": "stored"})
         w = extract_file(os.path.join(work, "app.apk"), "app/App/App.apk", sha256_file(os.path.join(work, "app.apk")),
                          os.path.join(work, "single"))
-        check("a page-aligned stored library stays in the APK", payload_files(w.out) == ["app/App/App.apk"])
+        check("payload_files(single) == [app/App/App.apk]", payload_files(w.out) == ["app/App/App.apk"])
         with open(os.path.join(work, "zapp.apk"), "wb") as f:
             f.write(fx_apk(lib="libz.so", compress=True))
-        check("apk-info sees a compressed library", apk_info(os.path.join(work, "zapp.apk"))["libs"] == "extract")
+        check("apk_info(zapp.apk)[libs] == extract", apk_info(os.path.join(work, "zapp.apk"))["libs"] == "extract")
         w = extract_file(os.path.join(work, "zapp.apk"), "app/App/App.apk", None, os.path.join(work, "zsingle"))
-        check("a compressed library is pre-extracted beside the APK",
+        check("payload_files(zsingle) == [app/App/App.apk, app/App/lib/x86_64/libz.so]",
               payload_files(w.out) == ["app/App/App.apk", "app/App/lib/x86_64/libz.so"])
-        check("a single file that does not match its sha256 is refused",
+        check("refusal(extract_file, sha256 0 * 64) == member-sha256-mismatch",
               refusal(extract_file, os.path.join(work, "app.apk"), "app/App/App.apk", "0" * 64,
                       os.path.join(work, "bad-single")) == "member-sha256-mismatch")
-        check("verify fails a directory with no manifest", verify_dir(work) != [])
+        check("verify_dir(work) != []", verify_dir(work) != [])
         gdir = os.path.join(work, "gsf")
         os.makedirs(gdir)
-        check("gsf-id is absent with no gservices.db", gsf_id(gdir) is None)
+        check("gsf_id(gdir) is None without gservices.db", gsf_id(gdir) is None)
         con = sqlite3.connect(os.path.join(gdir, "gservices.db"))
         con.execute("CREATE TABLE main (name TEXT PRIMARY KEY, value TEXT)")
         con.execute("INSERT INTO main VALUES ('digest', 'x')")
         con.commit()
-        check("gsf-id is absent with no android_id row", gsf_id(gdir) is None)
+        check("gsf_id(gdir) is None without an android_id row", gsf_id(gdir) is None)
         con.execute("INSERT INTO main VALUES ('android_id', '4012345678901234567')")
         con.commit()
         con.close()
-        check("gsf-id reads the android_id", gsf_id(gdir) == 4012345678901234567)
+        check("gsf_id(gdir) == 4012345678901234567", gsf_id(gdir) == 4012345678901234567)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print("%d failed" % len(failed) if failed else "all passed")
@@ -953,7 +953,7 @@ def main(argv):
         return selftest()
     ap = argparse.ArgumentParser(prog="store_payload.py")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    ex = sub.add_parser("extract", help="take a payload out of an archive (--zip) or copy one APK (--file)")
+    ex = sub.add_parser("extract", help="extract --zip and --take, or copy --file to --dest")
     ex.add_argument("--zip")
     ex.add_argument("--take")
     ex.add_argument("--add", action="append", default=[], metavar="SRC=DEST")
@@ -971,21 +971,21 @@ def main(argv):
             if a.zip and a.take and not a.file:
                 adds = [tuple(x.split("=", 1)) for x in a.add]
                 if any(len(x) != 2 for x in adds):
-                    ap.error("--add takes SRC=DEST")
+                    ap.error("--add value is not SRC=DEST")
                 w = extract_zip(a.zip, a.take, a.out, adds)
             elif a.file and a.dest and a.sha256 and not (a.zip or a.take or a.add):
                 w = extract_file(a.file, a.dest, a.sha256, a.out)
             else:
-                ap.error("extract takes --zip and --take, or --file, --dest and --sha256")
+                ap.error("extract requires --zip and --take, or --file, --dest and --sha256")
             n, size = write_manifest(a.out)
             if any(d.endswith(".xml") for d in w.written):
-                log("%d element(s) dropped by the XML allowlist" % len(w.dropped))
+                log("%d elements dropped by XML_KEEP" % len(w.dropped))
             print("RHIZO_PAYLOAD_OK files=%d bytes=%d" % (n, size))
             return 0
         if a.cmd == "verify":
             problems = verify_dir(a.dir)
             for p in problems:
-                print("BAD: %s" % p)
+                print("%s" % p)
             if not problems:
                 print("ok %s" % os.path.realpath(a.dir))
             return 1 if problems else 0
@@ -1004,11 +1004,11 @@ def main(argv):
             write_fixtures(a.dir)
             return 0
     except Refused as e:
-        log("REFUSED: %s" % e)
+        log("%s" % e)
         print("RHIZO_PAYLOAD_REFUSED reason=%s" % e.reason)
         return 3
     except (OSError, sqlite3.Error) as e:
-        log("FAILED: %s" % e)
+        log("%s" % e)
         print("RHIZO_PAYLOAD_FAILED reason=io")
         return 1
     return 2

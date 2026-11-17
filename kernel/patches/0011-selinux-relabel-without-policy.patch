@@ -1,9 +1,9 @@
 diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
-index 898486aef..be97f81bf 100644
+index 6cf7d6e64..0a4d16893 100644
 --- a/security/selinux/global_sidtab.c
 +++ b/security/selinux/global_sidtab.c
-@@ -977,8 +977,11 @@ bool security_sid_defined(struct selinux_state *state, u32 sid)
- 	u32 len, ss_sid;
+@@ -1140,8 +1140,11 @@ bool security_sid_defined(struct selinux_state *state, u32 sid)
+ 	int rc;
  
  	sid = security_sid_for_state(sid, state);
 -	if (sid <= SECINITSID_NUM || !selinux_initialized(state))
@@ -14,12 +14,12 @@ index 898486aef..be97f81bf 100644
 +		return false;
  	if (global_sid_to_context(sid, &scontext, &len))
  		return true;
- 	return !selinux_ss_context_to_sid(state, scontext, len, &ss_sid,
+ 	rc = selinux_ss_context_to_sid(state, scontext, len, &ss_sid,
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 99a2a54e5..9fa03e8d6 100644
+index c2e1ac144..2315df191 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -683,6 +683,61 @@ static int fd_use_has_perm(const struct cred *cred,
+@@ -684,6 +684,61 @@ static int fd_use_has_perm(const struct cred *cred,
  	return 0;
  }
  
@@ -81,7 +81,7 @@ index 99a2a54e5..9fa03e8d6 100644
  /* return @sb's labelling behavior, or before its set-up, the nearest policy's for its type */
  static unsigned short sb_behavior_seen(const struct cred_security_struct *crsec,
  				       const struct super_block *sb)
-@@ -2213,6 +2268,13 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+@@ -2231,6 +2286,13 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
  	    (sbsec->behavior == SECURITY_FS_USE_MNTPOINT)) {
  		*_new_isid = sbsec->mntpoint_sid;
  		return 0;
@@ -95,7 +95,7 @@ index 99a2a54e5..9fa03e8d6 100644
  	} else if (selinux_is_sblabel_mnt(dir->i_sb) &&
  		   crsec->create_sid) {
  		*_new_isid = security_sid_primary(crsec->create_sid);
-@@ -2745,7 +2807,14 @@ static int selinux_bprm_creds_for_exec(struct linux_binprm *bprm)
+@@ -2763,7 +2825,14 @@ static int selinux_bprm_creds_for_exec(struct linux_binprm *bprm)
  		new_crsec->sid = SECINITSID_INIT;
  		/* also clear the exec_sid just in case */
  		new_crsec->exec_sid = 0;
@@ -111,7 +111,7 @@ index 99a2a54e5..9fa03e8d6 100644
  	}
  
  	if (old_crsec->exec_sid) {
-@@ -3480,18 +3549,21 @@ static int selinux_inode_init_security_anon(struct inode *inode,
+@@ -3475,18 +3544,21 @@ static int selinux_inode_init_security_anon(struct inode *inode,
  					    const struct qstr *name,
  					    const struct inode *context_inode)
  {
@@ -135,7 +135,7 @@ index 99a2a54e5..9fa03e8d6 100644
  			return 0;
  		is_memfd = true;
  	}
-@@ -3898,7 +3970,8 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+@@ -3892,7 +3964,8 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
  	if (strcmp(name, XATTR_NAME_SELINUX))
  		return dentry_has_perm(current_cred(), dentry, FILE__SETATTR);
  
@@ -145,7 +145,7 @@ index 99a2a54e5..9fa03e8d6 100644
  		return (inode_owner_or_capable(idmap, inode) ? 0 : -EPERM);
  
  	if (!selinux_is_sblabel_mnt(inode->i_sb))
-@@ -3916,37 +3989,30 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+@@ -3910,37 +3983,30 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
  	if (rc)
  		return rc;
  
@@ -205,7 +205,7 @@ index 99a2a54e5..9fa03e8d6 100644
  	}
  	if (rc)
  		return rc;
-@@ -4065,7 +4131,7 @@ static int selinux_inode_removexattr(struct mnt_idmap *idmap,
+@@ -4059,7 +4125,7 @@ static int selinux_inode_removexattr(struct mnt_idmap *idmap,
  	if (strcmp(name, XATTR_NAME_SELINUX))
  		return dentry_has_perm(current_cred(), dentry, FILE__SETATTR);
  
@@ -214,7 +214,7 @@ index 99a2a54e5..9fa03e8d6 100644
  		return 0;
  
  	/* No one is allowed to remove a SELinux security label.
-@@ -4225,8 +4291,13 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
+@@ -4217,8 +4283,13 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
  		return 0;
  	}
  
@@ -230,7 +230,7 @@ index 99a2a54e5..9fa03e8d6 100644
  	if (rc)
  		return rc;
  
-@@ -5556,8 +5627,10 @@ static int socket_sockcreate_sid(const struct cred_security_struct *crsec,
+@@ -5648,8 +5719,10 @@ static int socket_sockcreate_sid(const struct cred_security_struct *crsec,
  	return rc;
  }
  
@@ -242,7 +242,7 @@ index 99a2a54e5..9fa03e8d6 100644
  	if (sid == SECINITSID_KERNEL)
  		return true;
  
-@@ -5572,12 +5645,42 @@ static bool sock_skip_has_perm(u32 sid)
+@@ -5664,12 +5737,42 @@ static bool sock_skip_has_perm(u32 sid)
  	 * still be skipped in this check regardless of the policycap
  	 * setting.
  	 */
@@ -286,7 +286,7 @@ index 99a2a54e5..9fa03e8d6 100644
  
  static int sock_has_perm(struct sock *sk, u32 perms)
  {
-@@ -5585,13 +5688,10 @@ static int sock_has_perm(struct sock *sk, u32 perms)
+@@ -5677,13 +5780,10 @@ static int sock_has_perm(struct sock *sk, u32 perms)
  	struct common_audit_data ad;
  	struct lsm_network_audit net;
  
@@ -302,7 +302,7 @@ index 99a2a54e5..9fa03e8d6 100644
  }
  
  static int selinux_socket_create(int family, int type,
-@@ -6959,18 +7059,14 @@ static int nlmsg_sock_has_extended_perms(struct sock *sk, u32 perms, u16 nlmsg_t
+@@ -7056,18 +7156,14 @@ static int nlmsg_sock_has_extended_perms(struct sock *sk, u32 perms, u16 nlmsg_t
  	u8 driver;
  	u8 xperm;
  
@@ -323,7 +323,7 @@ index 99a2a54e5..9fa03e8d6 100644
  }
  
  static int selinux_netlink_send(struct sock *sk, struct sk_buff *skb)
-@@ -7539,26 +7635,7 @@ static int selinux_lsm_setattr(u64 attr, void *value, size_t size)
+@@ -7637,26 +7733,7 @@ static int selinux_lsm_setattr(u64 attr, void *value, size_t size)
  						&sid, GFP_KERNEL);
  		if (error == -EINVAL && attr == LSM_ATTR_FSCREATE) {
  			if (!has_cap_mac_admin(true)) {
@@ -350,8 +350,8 @@ index 99a2a54e5..9fa03e8d6 100644
 +				audit_invalid_context("fscreate", str, size);
  				return error;
  			}
- 			error = security_context_to_sid_force(state, value,
-@@ -7566,6 +7643,12 @@ static int selinux_lsm_setattr(u64 attr, void *value, size_t size)
+ 			error = security_context_to_sid_force(state, value, size,
+@@ -7664,6 +7741,12 @@ static int selinux_lsm_setattr(u64 attr, void *value, size_t size)
  		}
  		if (error)
  			return error;

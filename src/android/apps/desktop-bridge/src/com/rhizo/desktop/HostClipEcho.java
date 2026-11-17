@@ -9,7 +9,7 @@ final class HostClipEcho {
     private String mMime;
     private byte[] mBytes;
 
-    // record the host clip and its mime type
+    // record the host clip mime type and bytes
     synchronized void hostSet(String mime, byte[] bytes) {
         mMime = mime;
         mBytes = bytes.clone();

@@ -4,9 +4,9 @@ Description=Rhizo stream export socket
 [Socket]
 ListenStream=/run/rhizo-stream/streamd
 DirectoryMode=0755
-SocketMode=0666
+SocketMode=0660
 SocketUser=root
-SocketGroup=root
+ExecStartPost=/usr/bin/chgrp 1003 /run/rhizo-stream/streamd
 Accept=no
 RemoveOnStop=yes
 

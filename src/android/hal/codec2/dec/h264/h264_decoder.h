@@ -20,11 +20,11 @@ namespace rhizo::c2va::h264 {
 // derive the VA and DPB stream info from an SPS
 Status DeriveStreamInfo(const Sps& sps, StreamInfo* info, uint32_t* dpb_size, uint32_t* reorder_depth);
 
-// receive each finished picture
+// receiver of the finished pictures
 class PictureObserver {
  public:
   virtual ~PictureObserver() = default;
-  // report a finished picture and its list completeness
+  // receive a finished picture and lists_complete
   virtual void PictureDone(const SliceHeader& first, const CurrentPicture& cur, const Dpb& dpb, bool decoded,
                            bool lists_complete) = 0;
 };
@@ -42,7 +42,7 @@ class H264Decoder : public DecoderCore, private DpbSink {
   void set_observer(PictureObserver* observer) { observer_ = observer; }
 
  private:
-  // count the DPB frames holding an input's tag
+  // the DPB frame count and output flag of an input tag
   struct TagRef {
     int holders = 0;
     bool done = false;
@@ -54,7 +54,7 @@ class H264Decoder : public DecoderCore, private DpbSink {
     const uint8_t* nal;
     size_t size;
   };
-  // hold the slice fields that mark a new picture
+  // the slice fields compared in 7.4.1.2.4
   struct PicKey {
     uint32_t frame_num, pps_id, poc_lsb, idr_pic_id;
     int32_t delta_bottom, delta[2];

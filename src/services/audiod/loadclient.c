@@ -16,7 +16,7 @@ static long long now_ns(void)
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-// send synthetic PCM to rhizo-audiod
+// write synthetic PCM to rhizo-audiod
 int main(int argc, char **argv)
 {
     const char *sock_path = NULL;
@@ -45,14 +45,14 @@ int main(int argc, char **argv)
             raw_header = argv[++i];
         } else {
             fprintf(stderr,
-                    "usage: %s --socket PATH [--port LABEL] [--rate HZ] [--channels N]\n"
-                    "       [--seconds S] [--feed-mult F] [--silent] [--raw-header STR]\n",
+                    "%s --socket PATH [--port LABEL] [--rate HZ] [--channels N]\n"
+                    "    [--seconds S] [--feed-mult F] [--silent] [--raw-header STR]\n",
                     argv[0]);
             return 2;
         }
     }
     if (sock_path == NULL) {
-        fprintf(stderr, "%s: --socket is required\n", argv[0]);
+        fprintf(stderr, "%s without --socket\n", argv[0]);
         return 2;
     }
 

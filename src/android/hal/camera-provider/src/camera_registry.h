@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_CAMERA_REGISTRY_H
 #define RHIZO_CAMERA_CAMERA_REGISTRY_H
 
-// map host cameras to camera ids and status changes
+// map of host cameras to camera ids and status changes
 
 #include <map>
 #include <string>
@@ -11,7 +11,7 @@
 
 namespace rhizo::camera {
 
-// a camera coming or going
+// a camera addition or removal
 struct RegistryChange {
   bool added = false;
   std::string id;
@@ -32,7 +32,7 @@ class CameraRegistry {
   bool present(const std::string& id) const { return present_.count(id) != 0; }
 
  private:
-  // order ids numerically
+  // numeric id comparator
   struct IdLess {
     bool operator()(const std::string& a, const std::string& b) const {
       return a.size() != b.size() ? a.size() < b.size() : a < b;
@@ -43,7 +43,7 @@ class CameraRegistry {
   int nextId_ = 0;
 };
 
-// drop repeated statuses and a NOT_PRESENT before any PRESENT
+// filter of a status equal to sent_[deviceName] and of NOT_PRESENT with no sent_ entry
 class StatusDedupe {
  public:
   void reset() { sent_.clear(); }

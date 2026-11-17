@@ -1,5 +1,5 @@
 diff --git a/fs/kernfs/mount.c b/fs/kernfs/mount.c
-index 6e3217b6e..1855abefb 100644
+index a57399021..870f252af 100644
 --- a/fs/kernfs/mount.c
 +++ b/fs/kernfs/mount.c
 @@ -187,6 +187,35 @@ struct kernfs_root *kernfs_root_from_sb(struct super_block *sb)
@@ -39,10 +39,10 @@ index 6e3217b6e..1855abefb 100644
   * find the next ancestor in the path down to @child, where @parent was the
   * ancestor whose descendant we want to find.
 diff --git a/include/linux/kernfs.h b/include/linux/kernfs.h
-index e21b2f7f4..d4a8aaa96 100644
+index 351a5101c..7dfece465 100644
 --- a/include/linux/kernfs.h
 +++ b/include/linux/kernfs.h
-@@ -415,6 +415,9 @@ void kernfs_put(struct kernfs_node *kn);
+@@ -420,6 +420,9 @@ void kernfs_put(struct kernfs_node *kn);
  
  struct kernfs_node *kernfs_node_from_dentry(struct dentry *dentry);
  struct kernfs_root *kernfs_root_from_sb(struct super_block *sb);
@@ -52,7 +52,7 @@ index e21b2f7f4..d4a8aaa96 100644
  struct inode *kernfs_get_inode(struct super_block *sb, struct kernfs_node *kn);
  
  struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
-@@ -513,6 +516,11 @@ static inline struct kernfs_node *kernfs_node_from_dentry(struct dentry *dentry)
+@@ -518,6 +521,11 @@ static inline struct kernfs_node *kernfs_node_from_dentry(struct dentry *dentry)
  static inline struct kernfs_root *kernfs_root_from_sb(struct super_block *sb)
  { return NULL; }
  
@@ -100,10 +100,10 @@ index 737f5a263..722d8d17c 100644
  		audit_log_format(ab, " nl-msgtype=%hu", a->u.nlmsg_type);
  		break;
 diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
-index be97f81bf..01a1b3e15 100644
+index 0a4d16893..7ad944c34 100644
 --- a/security/selinux/global_sidtab.c
 +++ b/security/selinux/global_sidtab.c
-@@ -1060,3 +1060,39 @@ int security_sid_with_records_of(u32 sid, u32 from, u32 *out_sid)
+@@ -1228,3 +1228,39 @@ int security_sid_with_records_of(u32 sid, u32 from, u32 *out_sid)
  	rcu_read_unlock();
  	return security_sid_with_records(sid, ids, sids, n, out_sid);
  }
@@ -144,10 +144,10 @@ index be97f81bf..01a1b3e15 100644
 +	return found;
 +}
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 64814fc7c..bf0a2e634 100644
+index ec4522d0d..765ef4673 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -279,8 +279,27 @@ static inline u32 task_sid_obj(const struct task_struct *task)
+@@ -280,8 +280,27 @@ static inline u32 task_sid_obj(const struct task_struct *task)
  }
  
  static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dentry);
@@ -175,7 +175,7 @@ index 64814fc7c..bf0a2e634 100644
  /*
   * Try reloading inode security labels that have been marked as invalid.  The
   * @may_sleep parameter indicates when sleeping and thus reloading labels is
-@@ -307,6 +326,7 @@ static int __inode_security_revalidate(struct inode *inode,
+@@ -308,6 +327,7 @@ static int __inode_security_revalidate(struct inode *inode,
  	 */
  	sb_init_deferred(inode->i_sb, true);
  	inode_doinit_with_dentry(inode, dentry);
@@ -183,7 +183,7 @@ index 64814fc7c..bf0a2e634 100644
  	return 0;
  }
  
-@@ -323,7 +343,7 @@ static inline struct inode_security_struct *inode_security_rcu(struct inode *ino
+@@ -324,7 +344,7 @@ static inline struct inode_security_struct *inode_security_rcu(struct inode *ino
  
  	/* check below is racy, but revalidate will recheck with lock held */
  	if (data_race(likely(isec->initialized == LABEL_INITIALIZED)))
@@ -192,7 +192,7 @@ index 64814fc7c..bf0a2e634 100644
  	rc = __inode_security_revalidate(inode, NULL, !rcu);
  	if (rc)
  		return ERR_PTR(rc);
-@@ -339,7 +359,7 @@ static inline struct inode_security_struct *inode_security(struct inode *inode)
+@@ -340,7 +360,7 @@ static inline struct inode_security_struct *inode_security(struct inode *inode)
  
  	/* check below is racy, but revalidate will recheck with lock held */
  	if (data_race(likely(isec->initialized == LABEL_INITIALIZED)))
@@ -201,7 +201,7 @@ index 64814fc7c..bf0a2e634 100644
  	__inode_security_revalidate(inode, NULL, true);
  	return isec;
  }
-@@ -359,7 +379,7 @@ static inline struct inode_security_struct *backing_inode_security(struct dentry
+@@ -360,7 +380,7 @@ static inline struct inode_security_struct *backing_inode_security(struct dentry
  
  	/* check below is racy, but revalidate will recheck with lock held */
  	if (data_race(likely(isec->initialized == LABEL_INITIALIZED)))
@@ -210,7 +210,7 @@ index 64814fc7c..bf0a2e634 100644
  	__inode_security_revalidate(inode, dentry, true);
  	return isec;
  }
-@@ -1831,6 +1851,185 @@ static int inode_doinit_use_xattr(struct selinux_state *state,
+@@ -1840,6 +1860,185 @@ static int inode_doinit_use_xattr(struct selinux_state *state,
  	return 0;
  }
  
@@ -396,7 +396,7 @@ index 64814fc7c..bf0a2e634 100644
  /* The inode's security attributes must be initialized before first use. */
  static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dentry)
  {
-@@ -1841,6 +2040,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+@@ -1850,6 +2049,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
  	u32 task_sid, sid = 0;
  	u16 sclass;
  	struct dentry *dentry;
@@ -404,7 +404,7 @@ index 64814fc7c..bf0a2e634 100644
  	int rc = 0;
  
  	/* check below is racy, but we will recheck with lock held */
-@@ -1948,6 +2148,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+@@ -1957,6 +2157,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
  	default:
  		/* Default to the fs superblock SID. */
  		sid = sb_sid_for_state(state, sb);
@@ -412,7 +412,7 @@ index 64814fc7c..bf0a2e634 100644
  
  		if ((sbsec->flags & SE_SBGENFS) &&
  		     (!S_ISLNK(inode->i_mode) ||
-@@ -1980,31 +2181,14 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+@@ -1989,31 +2190,14 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
  				goto out_invalid;
  			rc = selinux_genfs_get_sid(state, dentry, sclass,
  						   sbsec->flags, &sid);
@@ -423,7 +423,7 @@ index 64814fc7c..bf0a2e634 100644
 -
 -			if ((inode->i_opflags & IOP_XATTR) &&
 -			    (!strcmp(sb->s_type->name, "sysfs") ||
--			     (selinux_policycap_cgroupseclabel() &&
+-			     (selinux_policycap_cgroupseclabel(state) &&
 -			      (!strcmp(sb->s_type->name, "cgroup") ||
 -			       !strcmp(sb->s_type->name, "cgroup2"))))) {
 -				u32 xsid = sid;
@@ -451,7 +451,7 @@ index 64814fc7c..bf0a2e634 100644
  		}
  		break;
  	}
-@@ -2016,6 +2200,8 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+@@ -2025,6 +2209,8 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
  			isec->initialized = LABEL_INVALID;
  			goto out_unlock;
  		}
@@ -460,7 +460,7 @@ index 64814fc7c..bf0a2e634 100644
  		isec->initialized = LABEL_INITIALIZED;
  		isec->sid = sid;
  	}
-@@ -2131,6 +2317,8 @@ static inline int dentry_has_perm(const struct cred *cred,
+@@ -2149,6 +2335,8 @@ static inline int dentry_has_perm(const struct cred *cred,
  	/* check below is racy, but revalidate will recheck with lock held */
  	if (data_race(unlikely(isec->initialized != LABEL_INITIALIZED)))
  		__inode_security_revalidate(inode, dentry, true);
@@ -469,7 +469,7 @@ index 64814fc7c..bf0a2e634 100644
  	return inode_has_perm(cred, inode, av, &ad);
  }
  
-@@ -2150,6 +2338,8 @@ static inline int path_has_perm(const struct cred *cred,
+@@ -2168,6 +2356,8 @@ static inline int path_has_perm(const struct cred *cred,
  	/* check below is racy, but revalidate will recheck with lock held */
  	if (data_race(unlikely(isec->initialized != LABEL_INITIALIZED)))
  		__inode_security_revalidate(inode, path->dentry, true);
@@ -478,7 +478,7 @@ index 64814fc7c..bf0a2e634 100644
  	return inode_has_perm(cred, inode, av, &ad);
  }
  
-@@ -2326,6 +2516,9 @@ static int may_create(struct inode *dir,
+@@ -2344,6 +2534,9 @@ static int may_create(struct inode *dir,
  					   &newsid);
  	if (rc)
  		return rc;
@@ -488,7 +488,7 @@ index 64814fc7c..bf0a2e634 100644
  
  	rc = cred_tsid_has_perm(cred, newsid, tclass, FILE__CREATE, &ad);
  	if (rc)
-@@ -4122,6 +4315,7 @@ static void selinux_inode_post_setxattr(struct dentry *dentry, const char *name,
+@@ -4118,6 +4311,7 @@ static void selinux_inode_post_setxattr(struct dentry *dentry, const char *name,
  	spin_lock(&isec->lock);
  	isec->sclass = inode_mode_to_security_class(inode->i_mode);
  	isec->sid = newsid;
@@ -496,7 +496,7 @@ index 64814fc7c..bf0a2e634 100644
  	isec->initialized = LABEL_INITIALIZED;
  	spin_unlock(&isec->lock);
  }
-@@ -4321,6 +4515,7 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
+@@ -4315,6 +4509,7 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
  	spin_lock(&isec->lock);
  	isec->sclass = inode_mode_to_security_class(inode->i_mode);
  	isec->sid = newsid;
@@ -504,7 +504,7 @@ index 64814fc7c..bf0a2e634 100644
  	isec->initialized = LABEL_INITIALIZED;
  	spin_unlock(&isec->lock);
  	return 0;
-@@ -4384,10 +4579,64 @@ static int selinux_inode_copy_up_xattr(struct dentry *dentry, const char *name)
+@@ -4374,10 +4569,64 @@ static int selinux_inode_copy_up_xattr(struct dentry *dentry, const char *name)
  
  /* kernfs node operations */
  
@@ -569,7 +569,7 @@ index 64814fc7c..bf0a2e634 100644
  	u32 parent_sid, newsid, clen;
  	int rc;
  	char *context;
-@@ -4428,7 +4677,6 @@ static int selinux_kernfs_init_security(struct kernfs_node *kn_dir,
+@@ -4416,7 +4665,6 @@ static int selinux_kernfs_init_security(struct kernfs_node *kn_dir,
  	if (crsec->create_sid) {
  		newsid = crsec->create_sid;
  	} else {
@@ -577,7 +577,7 @@ index 64814fc7c..bf0a2e634 100644
  		const char *kn_name;
  		struct qstr q;
  
-@@ -4444,6 +4692,21 @@ static int selinux_kernfs_init_security(struct kernfs_node *kn_dir,
+@@ -4432,6 +4680,21 @@ static int selinux_kernfs_init_security(struct kernfs_node *kn_dir,
  			return rc;
  	}
  
@@ -596,14 +596,14 @@ index 64814fc7c..bf0a2e634 100644
 +			return 0;
 +	}
 +
- 	rcu_read_lock();
  	rc = security_sid_to_context_force(current_selinux_state, newsid,
- 					   &context2, &clen);
+ 					   &context, &clen);
+ 	if (rc)
 diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
-index dcc783069..06653b8e1 100644
+index e32f339fa..5fa843ced 100644
 --- a/security/selinux/include/objsec.h
 +++ b/security/selinux/include/objsec.h
-@@ -78,7 +78,16 @@ struct inode_security_struct {
+@@ -76,7 +76,16 @@ struct inode_security_struct {
  	u32 sid; /* SID of this object */
  	u16 sclass; /* security class of this object */
  	unsigned char initialized; /* initialization flag */
@@ -621,19 +621,19 @@ index dcc783069..06653b8e1 100644
  
  struct file_security_struct {
 diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
-index 304516732..baa0e346a 100644
+index e9209382b..aefbe1ddb 100644
 --- a/security/selinux/include/security.h
 +++ b/security/selinux/include/security.h
-@@ -387,6 +387,8 @@ bool security_sid_defined(struct selinux_state *state, u32 sid);
+@@ -394,6 +394,8 @@ bool security_sid_defined(struct selinux_state *state, u32 sid);
  int security_sid_with_records(u32 sid, const u64 *ids, const u32 *sids,
  			      int n, u32 *out_sid);
  int security_sid_with_records_of(u32 sid, u32 from, u32 *out_sid);
 +int security_sid_add_record(u32 sid, u64 id, u32 rec, u32 *out_sid);
 +bool security_sid_has_record(u32 sid, u64 id);
  int security_sid_to_context_inval(struct selinux_state *state, u32 sid,
- 				  const char **scontext, u32 *scontext_len);
+ 				  char **scontext, u32 *scontext_len);
  
-@@ -483,6 +485,18 @@ static inline int security_sid_with_records_of(u32 sid, u32 from,
+@@ -500,6 +502,18 @@ static inline int security_sid_with_records_of(u32 sid, u32 from,
  	return 0;
  }
  

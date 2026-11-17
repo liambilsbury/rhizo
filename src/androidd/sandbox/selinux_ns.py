@@ -1,4 +1,4 @@
-"""Android's policy in its SELinux namespace"""
+"""Android's policy in Android's SELinux namespace"""
 import contextlib
 import ctypes
 import errno
@@ -66,20 +66,25 @@ PR_SET_NO_NEW_PRIVS = 38
 PR_CAP_AMBIENT = 47
 PR_CAP_AMBIENT_CLEAR_ALL = 4
 LINUX_CAPABILITY_VERSION_3 = 0x20080522
-_EVENT_NODE = re.compile(rb"/dev/input/event[0-9]{1,6}")
-_HIDRAW_NODE = re.compile(rb"/dev/hidraw[0-9]{1,6}")
+EVDEV_STAGE_DIR = "/dev/input/.rhizo_input_stage"
+HIDRAW_STAGE_DIR = "/dev/.rhizo_input_stage"
+INPUT_STAGE_DIRS = (EVDEV_STAGE_DIR, HIDRAW_STAGE_DIR)
+_STAGED_EVENT = re.compile(re.escape(EVDEV_STAGE_DIR.encode()) + rb"/event[0-9]{1,6}")
+_STAGED_HIDRAW = re.compile(re.escape(HIDRAW_STAGE_DIR.encode()) + rb"/hidraw[0-9]{1,6}")
 HIDRAW_LABEL = b"u:object_r:hidraw_device:s0"
+INPUT_LABEL = b"u:object_r:input_device:s0"
+_SET_LABELS = ((_STAGED_EVENT, INPUT_LABEL), (_STAGED_HIDRAW, HIDRAW_LABEL))
 LABEL_SERVICE_CONTEXT = b"u:r:rhizo_input_label:s0"
 HELPER_CONTEXTS = {"stage": b"u:r:rhizo_ns_stage:s0", "relabel": b"u:r:rhizo_ns_relabel:s0",
                    "label": b"u:r:rhizo_ns_label:s0"}
-_DEV_AND_INODE = re.compile(rb"([0-9]{1,4}):([0-9]{1,7}) ([0-9]{1,20})")
+_DEV_AND_INODE = re.compile(rb"([0-9]{1,4}):([0-9]{1,7}) ([0-9]{1,20}) ([0-9]{1,20})")
 _FC_KINDS = {"-b": stat.S_ISBLK, "-c": stat.S_ISCHR, "-d": stat.S_ISDIR, "--": stat.S_ISREG,
              "-l": stat.S_ISLNK, "-s": stat.S_ISSOCK, "-p": stat.S_ISFIFO}
 _libc = ctypes.CDLL(None, use_errno=True)
 
 
 def host_context():
-    """return this task's SELinux context"""
+    """return /proc/self/attr/current, or kernel"""
     try:
         with open("/proc/self/attr/current") as f:
             return f.read().strip("\0\n")
@@ -92,7 +97,7 @@ def host_context():
 
 
 def host_policy_state(node=HOST_ENFORCE_NODE):
-    """return the state of the host's policy"""
+    """return none, permissive, enforcing or unknown for the host policy"""
     if ":" not in host_context():
         return "none"
     try:
@@ -103,7 +108,7 @@ def host_policy_state(node=HOST_ENFORCE_NODE):
 
 
 def namespace_supported():
-    """return whether the kernel answers LSM_ATTR_UNSHARE for SELinux"""
+    """return whether lsm_get_self_attr(LSM_ATTR_UNSHARE) succeeds"""
     buf = ctypes.create_string_buffer(64)
     size = ctypes.c_uint32(64)
     rc = _libc.syscall(ctypes.c_long(NR_LSM_GET_SELF_ATTR), ctypes.c_long(LSM_ATTR_UNSHARE), buf,
@@ -112,7 +117,7 @@ def namespace_supported():
 
 
 def landlock_version():
-    """return the Landlock ABI query's result and errno"""
+    """return landlock_create_ruleset(LANDLOCK_CREATE_RULESET_VERSION) and errno"""
     abi = _libc.syscall(ctypes.c_long(NR_LANDLOCK_CREATE_RULESET), None, ctypes.c_size_t(0),
                         ctypes.c_uint32(LANDLOCK_CREATE_RULESET_VERSION))
     return abi, ctypes.get_errno() if abi < 0 else 0
@@ -124,7 +129,7 @@ def landlock_abi():
 
 
 def selinux_mode(env=os.environ):
-    """return namespace, host, or refuse:<reason> for this start"""
+    """return namespace, host, or refuse:<reason>"""
     mode = env.get("RHIZO_SELINUX_MODE", "namespace")
     if mode == "host":
         return "host"
@@ -138,18 +143,18 @@ def selinux_mode(env=os.environ):
 
 
 def refusal_text(reason):
-    """return the fix sentence for a refusal reason"""
+    """return the sentence for a refusal reason"""
     if reason == "kernel-has-no-selinux-namespaces":
-        return "boot the Rhizo kernel (uname -r ends in -rhizo) to start Android"
+        return "lsm_get_self_attr(LSM_ATTR_UNSHARE) failed"
     if reason == "kernel-has-no-landlock":
-        return "the Rhizo kernel runs without Landlock ABI 6; remove lsm= from its boot line or add landlock to it"
+        return "Landlock ABI < 6"
     if reason.startswith("unknown-mode-"):
         return f"RHIZO_SELINUX_MODE={reason[len('unknown-mode-'):]} is not namespace or host"
     return reason
 
 
 def write_mode_file(mode, path=MODE_FILE):
-    """record the chosen mode for host-side readers"""
+    """write mode to path"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.{os.getpid()}.tmp"
     try:
@@ -166,12 +171,12 @@ _STATE = {"unshared": False}
 
 
 def state():
-    """return the namespace state of this launcher process"""
+    """return _STATE"""
     return _STATE
 
 
 def unshare_namespace(state_file=ANDROID_ENFORCE_FILE):
-    """give this task a new SELinux namespace with no policy"""
+    """unshare the SELinux namespace with lsm_set_self_attr(LSM_ATTR_UNSHARE)"""
     ctx = ctypes.create_string_buffer(struct.pack("<QQQQ", LSM_ID_SELINUX, 0, 32, 0), 32)
     rc = _libc.syscall(ctypes.c_long(NR_LSM_SET_SELF_ATTR), ctypes.c_long(LSM_ATTR_UNSHARE), ctx,
                        ctypes.c_long(32), ctypes.c_long(0))
@@ -196,7 +201,7 @@ def clear_selinuxfs_mounts(target):
 
 
 def mount_own_selinuxfs(target):
-    """mount this task's SELinux namespace's selinuxfs at target"""
+    """mount the selinuxfs of the current SELinux namespace at target"""
     os.makedirs(target, exist_ok=True)
     clear_selinuxfs_mounts(target)
     if not mount("selinuxfs", target, "selinuxfs", MS_NOSUID | MS_NOEXEC):
@@ -248,7 +253,7 @@ def stage_gsi_labeled(image, dest, work, launcher, python=sys.executable, run=su
 
 
 def load_namespace_policy(policy):
-    """load policy into this task's SELinux namespace"""
+    """load policy into the current SELinux namespace"""
     fds = []
     try:
         fd = _libc.syscall(ctypes.c_long(NR_FSOPEN), b"selinuxfs", ctypes.c_long(FSOPEN_CLOEXEC))
@@ -292,7 +297,7 @@ def enter_policy_namespace(policy, helper):
 
 
 def write_android_enforce(value, path, dir_fd=None):
-    """write value to Android's enforce state file"""
+    """write value to path"""
     name = os.path.basename(path) if dir_fd is not None else path
     tmp = f"{name}.{os.getpid()}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o644, dir_fd=dir_fd)
@@ -307,14 +312,14 @@ _FC_META = re.compile(r"[.\[\](){}*+?|^$\\]")
 
 
 def file_contexts_matcher(fc_paths, under):
-    """return the label lookup for paths under a root"""
+    """return label_of and the unusable patterns for under"""
     entries, unusable = [], []
     for fc in fc_paths:
         try:
             with open(fc, errors="replace") as f:
                 lines = f.read().splitlines()
         except OSError as e:
-            kmsg(f"file_contexts for {under}: cannot read {fc}: {e.strerror}")
+            kmsg(f"failed to read {fc} for {under} ({e.strerror})")
             continue
         for ln in lines:
             parts = ln.split()
@@ -344,7 +349,7 @@ def file_contexts_matcher(fc_paths, under):
 
 
 def label_by_file_contexts(host_root, under, fc_paths, relabel=lambda cur: True, fixed=(), prune=lambda p: False):
-    """label the tree at host_root as Android's under"""
+    """label host_root by the file_contexts entries for under"""
     label_of, unusable = file_contexts_matcher(fc_paths, under)
     fixed = dict(fixed)
     todo = [host_root]
@@ -363,7 +368,7 @@ def label_by_file_contexts(host_root, under, fc_paths, relabel=lambda cur: True,
             continue
         except OSError as e:
             counts["failed"] += 1
-            errors.append(f"{apath}: {e.strerror}")
+            errors.append(f"lstat {apath} failed ({e.strerror})")
             continue
         want = fixed.get(apath) or label_of(apath, mode)
         if want is None:
@@ -378,7 +383,7 @@ def label_by_file_contexts(host_root, under, fc_paths, relabel=lambda cur: True,
         except OSError as e:
             if e.errno not in (errno.ENODATA, errno.EOPNOTSUPP):
                 counts["failed"] += 1
-                errors.append(f"{apath}: read label: {e.strerror}")
+                errors.append(f"getxattr {apath} failed ({e.strerror})")
                 continue
             cur = ""
         if cur == want or not relabel(cur):
@@ -391,10 +396,10 @@ def label_by_file_contexts(host_root, under, fc_paths, relabel=lambda cur: True,
             gone.append(apath)
         except OSError as e:
             counts["failed"] += 1
-            errors.append(f"{apath}: {e.strerror}")
+            errors.append(f"setxattr {apath} failed ({e.strerror})")
     counts["refused"], counts["gone"] = len(refused), len(gone)
-    counts["errors"] = (errors + [f"refused: {under}{p[len(host_root):]}" for p in refused] +
-                        [f"gone: {p}" for p in gone] + [f"unusable: {p}" for p in unusable])[:6]
+    counts["errors"] = (errors + [f"skipped {under}{p[len(host_root):]}" for p in refused] +
+                        [f"{p} is missing" for p in gone] + [f"re.compile({p}) failed" for p in unusable])[:6]
     return counts
 
 
@@ -404,9 +409,12 @@ def dev_pass_skips(newroot):
     sink = newroot + rootfs.UEVENT_SINK_DIR
     iio_dir = newroot + core.SENSORS_GUEST_DIR
 
+    stages = tuple(newroot + d for d in INPUT_STAGE_DIRS)
+
     def skip(path):
-        """skip the uevent sink, the IIO binds and devpts"""
-        return path == sink or path == iio_dir or path.startswith(iio_dir + "/") or fs_type(path) == DEVPTS_SUPER_MAGIC
+        """return whether path is the uevent sink, under the IIO dir, in INPUT_STAGE_DIRS or on devpts"""
+        return (path == sink or path == iio_dir or path.startswith(iio_dir + "/") or path in stages
+                or path.startswith(tuple(d + "/" for d in stages)) or fs_type(path) == DEVPTS_SUPER_MAGIC)
     return skip
 
 
@@ -422,7 +430,7 @@ def dev_file_contexts(newroot):
 
 
 def label_sysctl_shadows(newroot):
-    """give each sysctl shadow Android's proc label"""
+    """label each sysctl shadow with the sysctl_shadow_spec() label"""
     from sandbox import rootfs
     done = []
     for path, label in rootfs.sysctl_shadow_spec():
@@ -439,7 +447,7 @@ def label_net_core(path="/proc/sys/net/core"):
     try:
         names = [""] + os.listdir(path)
     except OSError as e:
-        return done, kept, [f"list: {e.strerror}"]
+        return done, kept, [f"failed to list {path} ({e.strerror})"]
     for nm in names:
         p = path + (f"/{nm}" if nm else "")
         try:
@@ -453,7 +461,7 @@ def label_net_core(path="/proc/sys/net/core"):
                 kept += 1
         except OSError as e:
             if len(failed) < 4:
-                failed.append(f"{nm}: {e.strerror}")
+                failed.append(f"{nm} ({e.strerror})")
     return done, kept, failed
 
 
@@ -476,7 +484,7 @@ def _write_enforce(fd):
 
 
 def fs_type(path):
-    """return the filesystem magic statfs reports for path, or -1"""
+    """return the statfs f_type of path, or -1"""
     buf = ctypes.create_string_buffer(120)
     if libc.statfs(path.encode(), buf) != 0:
         return -1
@@ -484,7 +492,7 @@ def fs_type(path):
 
 
 def fd_fs_type(fd):
-    """return the filesystem magic fstatfs reports for fd"""
+    """return the fstatfs f_type of fd"""
     buf = ctypes.create_string_buffer(120)
     if _libc.fstatfs(ctypes.c_int(fd), buf) != 0:
         raise _errno_error()
@@ -492,7 +500,7 @@ def fd_fs_type(fd):
 
 
 def selinuxfs_mount_fd():
-    """return a detached mount of this namespace's selinuxfs"""
+    """return an fsmount fd of the current namespace selinuxfs"""
     fd = _libc.syscall(ctypes.c_long(NR_FSOPEN), b"selinuxfs", ctypes.c_long(FSOPEN_CLOEXEC))
     if fd < 0:
         raise OSError(ctypes.get_errno(), "fsopen selinuxfs")
@@ -510,7 +518,7 @@ def selinuxfs_mount_fd():
 
 
 def open_host_selinuxfs(path=HOST_SELINUXFS):
-    """return an fd on this namespace's selinuxfs"""
+    """return an fd on the current namespace selinuxfs"""
     try:
         fd = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
     except FileNotFoundError:
@@ -527,13 +535,13 @@ def open_host_selinuxfs(path=HOST_SELINUXFS):
 
 
 def _open_private_enforce(target=PRIVATE_SELINUXFS):
-    """mount selinuxfs privately and open its enforce node"""
+    """mount selinuxfs at target and open target/enforce"""
     if not mount("selinuxfs", target, "selinuxfs", MS_NOSUID | MS_NOEXEC):
         return -1
     try:
         return os.open(f"{target}/enforce", os.O_RDWR | os.O_CLOEXEC)
     except OSError as e:
-        kmsg(f"selinuxns: cannot open {target}/enforce: {e!r}")
+        kmsg(f"failed to open {target}/enforce ({e!r})")
         return -1
 
 
@@ -549,7 +557,7 @@ def _unmount_copy_enforce(node="/sys/fs/selinux/enforce"):
 
 
 def _wait_dev_labelable(newroot, sleep):
-    """wait up to 60s for newroot/dev to take a label"""
+    """wait up to 60s for getxattr on newroot/dev to succeed"""
     t1 = time.time()
     while time.time() - t1 < 60:
         try:
@@ -563,7 +571,7 @@ def _wait_dev_labelable(newroot, sleep):
 
 
 class PassesCut(BaseException):
-    """raised by the passes timer"""
+    """exception for the passes timer"""
 
 
 _PASSES_CUT_ARMED = {"on": False}
@@ -577,7 +585,7 @@ def _cut_passes(signum, frame):
 
 
 def _run_passes(newroot, staged, sleep, passes):
-    """run each relabel pass"""
+    """run the RELABEL_PASSES"""
     t1 = time.time()
     ready = _wait_dev_labelable(newroot, sleep)
     kmsg(f"RHIZO_MARKER selinuxns=dev-labelable state={ready} t={time.time() - t1:.2f}s")
@@ -592,7 +600,7 @@ def _run_passes(newroot, staged, sleep, passes):
 
 
 def _flip(mntns_fd, enforce_fd, writer, t0):
-    """join the sandbox's mount namespace and enforce"""
+    """setns into mntns_fd and write 1 to enforce_fd"""
     if libc.setns(mntns_fd, CLONE_NEWNS) != 0:
         errno_ = ctypes.get_errno()
         kmsg(f"RHIZO_MARKER selinuxns=setns-failed errno={errno_}")
@@ -613,7 +621,7 @@ def _flip(mntns_fd, enforce_fd, writer, t0):
 
 
 def current_context():
-    """return this task's SELinux context"""
+    """return own_context() as text"""
     return own_context().decode(errors="replace")
 
 
@@ -633,7 +641,7 @@ def _relabel_after_load(newroot, staged, mntns_fd, write_primer_script, attr_rea
             break
         sleep(0.01)
     else:
-        kmsg(f"RHIZO_MARKER selinuxns=no-policy-load ctx={ctx!r} after 180s")
+        kmsg(f"RHIZO_MARKER selinuxns=no-policy-load ctx={ctx!r} after=180s")
         return DONE_FAILED
     if on_load is not None:
         why = on_load()
@@ -653,7 +661,7 @@ def _relabel_after_load(newroot, staged, mntns_fd, write_primer_script, attr_rea
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old)
     if not RHIZO_ENFORCING:
-        kmsg("RHIZO_MARKER selinuxns=permissive-kept (RHIZO_PERMISSIVE=1)")
+        kmsg("RHIZO_MARKER selinuxns=permissive-kept RHIZO_PERMISSIVE=1")
         return DONE_PERMISSIVE
     enforce_fd = _open_private_enforce()
     if enforce_fd < 0:
@@ -669,7 +677,7 @@ def _relabel_after_load(newroot, staged, mntns_fd, write_primer_script, attr_rea
 
 
 def _close_inherited_fds(keep):
-    """close every inherited fd except stdio and keep"""
+    """close the inherited fds except stdio and keep"""
     lo = 3
     for fd in sorted(k for k in keep if k >= 3):
         os.closerange(lo, fd)
@@ -678,12 +686,12 @@ def _close_inherited_fds(keep):
 
 
 class DoneFailed(bytes):
-    """the failure done byte with the reason line written after it"""
+    """failure done byte with a reason attribute"""
     reason = ""
 
 
 def failed(reason):
-    """return the failure done byte carrying reason"""
+    """return DONE_FAILED with reason"""
     done = DoneFailed(DONE_FAILED)
     done.reason = reason
     return done
@@ -706,7 +714,7 @@ def read_failure_reason(done_fd, reasons=None):
 
 
 def _write_done(done_fd, byte):
-    """write byte and its reason line to the done pipe"""
+    """write byte and the reason line to done_fd"""
     reason = getattr(byte, "reason", "")
     _DONE_SENT.append(bytes(byte))
     if done_fd >= 0:
@@ -717,9 +725,9 @@ def _write_done(done_fd, byte):
 
 
 def namespace_is_host(host_selinuxfs_dev):
-    """return whether this namespace's selinuxfs is host_selinuxfs_dev"""
+    """return whether the current selinuxfs st_dev is host_selinuxfs_dev"""
     if not isinstance(host_selinuxfs_dev, int) or host_selinuxfs_dev <= 0:
-        raise OSError(errno.EINVAL, f"no host selinuxfs device number: {host_selinuxfs_dev!r}")
+        raise OSError(errno.EINVAL, f"invalid host selinuxfs device number {host_selinuxfs_dev!r}")
     own = selinuxfs_mount_fd()
     try:
         return os.fstat(own).st_dev == host_selinuxfs_dev
@@ -728,7 +736,7 @@ def namespace_is_host(host_selinuxfs_dev):
 
 
 def _refuse_verb(done_fd, reason, detail):
-    """refuse the relabeller verb by name"""
+    """refuse the relabeller verb with reason"""
     kmsg(f"RHIZO_MARKER selinuxns=refused reason={reason} {detail}")
     _write_done(done_fd, failed(reason))
     return 1
@@ -757,13 +765,13 @@ RELABELLER_TIMEOUT = "timeout"
 
 
 def announce_relabeller_ready():
-    """set this task's name to the ready name"""
+    """set the task comm to RELABELLER_READY_COMM"""
     if libc.prctl(PR_SET_NAME, RELABELLER_READY_COMM, 0, 0, 0) != 0:
         kmsg(f"RHIZO_MARKER selinuxns=relabeller-announce-failed errno={ctypes.get_errno()}")
 
 
 def wait_relabeller_ready(pid, proc="/proc", timeout=RELABELLER_READY_WAIT_S):
-    """wait for the relabeller's ready name"""
+    """wait for the relabeller comm to be RELABELLER_READY_COMM"""
     want = RELABELLER_READY_COMM.decode()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -848,7 +856,7 @@ def run_relabeller(newroot, staged, mntns_fd, write_primer_script, done_fd):
 
 
 def _release_label_service(writer, serve):
-    """send the release byte"""
+    """write the release byte to writer"""
     if serve:
         try:
             writer.send(b"1")
@@ -858,7 +866,7 @@ def _release_label_service(writer, serve):
 
 
 def connect_label_service():
-    """connect to the fence's label socket"""
+    """connect to rootfs.label_socket_path(SANDBOX_ID)"""
     from sandbox import rootfs
     path = rootfs.label_socket_path(SANDBOX_ID)
     sock = None
@@ -868,7 +876,7 @@ def connect_label_service():
     except OSError as e:
         if sock is not None:
             sock.close()
-        kmsg(f"no input label socket at {path} ({e.strerror})")
+        kmsg(f"failed to connect to {path} ({e.strerror})")
         return None
     try:
         with open(CAP_LAST_CAP) as f:
@@ -882,34 +890,11 @@ def connect_label_service():
 
 
 def _send_label_error(sock, why):
-    """send an error line to g over the label socket"""
+    """write an error line to the label socket"""
     try:
         sock.send(f"error:{why}".encode()[:LABEL_REQUEST_MAX])
     except OSError:
         pass
-
-
-def answer_label_request(msg, ops=os):
-    """return the reply to a label request"""
-    node, _, rest = msg.partition(b" ")
-    if not _EVENT_NODE.fullmatch(node):
-        return b"refused:path"
-    m = _DEV_AND_INODE.fullmatch(rest)
-    if m is None:
-        return b"refused:request"
-    path = node.decode()
-    want = (os.makedev(int(m.group(1)), int(m.group(2))), int(m.group(3)))
-    try:
-        st = ops.lstat(path)
-        if not stat.S_ISCHR(st.st_mode) or (st.st_rdev, st.st_ino) != want:
-            return b"refused:not-the-node"
-        label = ops.getxattr(path, "security.selinux", follow_symlinks=False)
-        again = ops.lstat(path)
-    except OSError as e:
-        return f"failed:{e.errno}".encode()
-    if (again.st_mode, again.st_rdev, again.st_ino) != (st.st_mode, st.st_rdev, st.st_ino):
-        return b"refused:not-the-node"
-    return b"label " + label.rstrip(b"\0")
 
 
 def _errno_error():
@@ -922,8 +907,17 @@ class NodeFd:
     """O_PATH node operations for namespace mode"""
 
     def open_path(self, path):
-        """open path O_PATH without following a link"""
+        """open path with O_PATH and O_NOFOLLOW"""
         return os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+    def open_path_at(self, dir_fd, name):
+        """open name in dir_fd with O_PATH and O_NOFOLLOW"""
+        return os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+
+    def link_at(self, fd, dir_fd, name):
+        """call linkat(fd, "", dir_fd, name, AT_EMPTY_PATH)"""
+        if _libc.linkat(ctypes.c_int(fd), b"", ctypes.c_int(dir_fd), name.encode(), ctypes.c_int(AT_EMPTY_PATH)) != 0:
+            raise _errno_error()
 
     def fstat(self, fd):
         """return the stat of fd's inode"""
@@ -969,7 +963,7 @@ NODE_FD = NodeFd()
 
 
 class _Refused(Exception):
-    """Refused set request"""
+    """exception for a refused set message"""
 
 
 def _identity(st):
@@ -997,23 +991,24 @@ def set_xattr_through_fd(fd_ops, fd, st, name, value):
 
 
 def answer_set_request(msg, fd_ops=NODE_FD):
-    """set and read back a hidraw node's label"""
+    """set and read back the _SET_LABELS label of a staged evdev or hidraw node"""
     node, _, rest = msg.partition(b" ")
-    if not _HIDRAW_NODE.fullmatch(node):
+    fixed = next((label for pattern, label in _SET_LABELS if pattern.fullmatch(node)), None)
+    if fixed is None:
         return b"refused:path"
     m = _DEV_AND_INODE.fullmatch(rest)
     if m is None:
         return b"refused:request"
-    want = (os.makedev(int(m.group(1)), int(m.group(2))), int(m.group(3)))
+    want = (os.makedev(int(m.group(1)), int(m.group(2))), int(m.group(3)), int(m.group(4)))
     try:
         fd = fd_ops.open_path(node.decode())
     except OSError as e:
         return f"failed:{e.errno}".encode()
     try:
         st = fd_ops.fstat(fd)
-        if not stat.S_ISCHR(st.st_mode) or (st.st_rdev, st.st_ino) != want:
+        if not stat.S_ISCHR(st.st_mode) or (st.st_rdev, st.st_ino, st.st_dev) != want:
             return b"refused:not-the-node"
-        label = set_xattr_through_fd(fd_ops, fd, st, "security.selinux", HIDRAW_LABEL + b"\0")
+        label = set_xattr_through_fd(fd_ops, fd, st, "security.selinux", fixed + b"\0")
     except _Refused as r:
         return f"refused:{r}".encode()
     except OSError as e:
@@ -1023,16 +1018,16 @@ def answer_set_request(msg, fd_ops=NODE_FD):
     return b"label " + label.rstrip(b"\0")
 
 
-def answer_service_request(msg, ops=os, fd_ops=NODE_FD):
-    """return the reply to a set or read request"""
+def answer_service_request(msg, fd_ops=NODE_FD):
+    """return the reply to a set message, or refused:verb"""
     verb, _, rest = msg.partition(b" ")
-    if verb == b"set":
-        return answer_set_request(rest, fd_ops)
-    return answer_label_request(msg, ops)
+    if verb != b"set":
+        return b"refused:verb"
+    return answer_set_request(rest, fd_ops)
 
 
 def _drop_privileges(last_cap):
-    """drop every capability and set no_new_privs"""
+    """drop the capabilities up to last_cap and set no_new_privs"""
     for cap in range(last_cap + 1):
         if libc.prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) != 0:
             return f"capbset-drop:{cap}:{ctypes.get_errno()}"
@@ -1048,7 +1043,7 @@ def _drop_privileges(last_cap):
 
 
 def keep_only_caps(keep, last_cap):
-    """drop every capability outside keep"""
+    """drop the capabilities outside keep"""
     for cap in range(last_cap + 1):
         if cap not in keep and libc.prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) != 0:
             return f"capbset-drop:{cap}:{ctypes.get_errno()}"
@@ -1067,7 +1062,7 @@ def keep_only_caps(keep, last_cap):
 
 
 def drop_to_init_caps():
-    """drop the capabilities init lacks"""
+    """drop DROP_CAPS"""
     for cap in DROP_CAPS:
         if libc.prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) != 0:
             return f"capbset-drop:{cap}:{ctypes.get_errno()}"
@@ -1092,7 +1087,7 @@ def _lsm_ctx(context):
 
 
 def own_context():
-    """return this task's SELinux context"""
+    """return the lsm_get_self_attr SELinux context"""
     buf = ctypes.create_string_buffer(LABEL_REQUEST_MAX)
     size = ctypes.c_uint32(LABEL_REQUEST_MAX)
     n = _libc.syscall(ctypes.c_long(NR_LSM_GET_SELF_ATTR), ctypes.c_long(LSM_ATTR_CURRENT), buf,
@@ -1115,7 +1110,7 @@ def setcon_request(context):
 
 
 def enter_helper_domain(request, context):
-    """set this task's context from request and read it back"""
+    """set the task context from request and compare the readback"""
     if _libc.syscall(ctypes.c_long(NR_LSM_SET_SELF_ATTR), ctypes.c_long(LSM_ATTR_CURRENT), request,
                      ctypes.c_long(ctypes.sizeof(request)), ctypes.c_long(0)) != 0:
         return f"setcon:{ctypes.get_errno()}"
@@ -1134,7 +1129,7 @@ def enter_label_domain():
 
 
 def _serve_labels(sock, mntns_fd, last_cap, release):
-    """serve label requests"""
+    """serve the label socket"""
     if libc.setns(mntns_fd, CLONE_NEWNS) != 0:
         _send_label_error(sock, f"setns:{ctypes.get_errno()}")
         return 1
@@ -1158,7 +1153,7 @@ def _serve_labels(sock, mntns_fd, last_cap, release):
 
 
 def start_label_service(sock, mntns_fd, last_cap, release):
-    """fork the label service and close this copy of sock"""
+    """fork the label service and close sock in the parent"""
     pid = os.fork()
     if pid == 0:
         code = 1
@@ -1214,7 +1209,7 @@ VIEW_KEEPER_COMM = b"rhizo-mntview"
 
 
 def start_view_keeper():
-    """fork a process holding a copy of the pre-pivot mounts"""
+    """fork a process with a copy of the pre-pivot mounts"""
     r, w = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -1259,7 +1254,7 @@ def find_view_keeper(holder, proc="/proc"):
 
 
 def kill_view_keeper(pidfd):
-    """SIGKILL the view keeper through its pidfd"""
+    """SIGKILL the view keeper through pidfd"""
     try:
         signal.pidfd_send_signal(pidfd, signal.SIGKILL)
     except ProcessLookupError:
@@ -1267,7 +1262,7 @@ def kill_view_keeper(pidfd):
 
 
 def holder_environ(holder):
-    """return the staging launcher's environment"""
+    """return /proc/<holder>/environ as a dict"""
     with open(f"/proc/{holder}/environ", "rb") as f:
         raw = f.read()
     return dict(kv.split(b"=", 1) for kv in raw.split(b"\0") if b"=" in kv)
@@ -1289,7 +1284,7 @@ def bind_decoy_enforce(node, scratch):
         try:
             os.setxattr(decoy, "security.selinux", b"u:object_r:rhizo_enforce_shadow:s0\0")
         except OSError as e:
-            kmsg(f"decoy enforce node setxattr: {e}")
+            kmsg(f"setxattr {decoy} failed ({e})")
         return mount(decoy, node, None, MS_BIND)
     finally:
         if libc.umount2(scratch.encode(), 2) != 0:
@@ -1302,7 +1297,7 @@ def bind_decoy_enforce(node, scratch):
 
 
 def start_handoff_relabeller(view_fd, done_w, env, launcher_path, python, host_selinuxfs_dev):
-    """fork a relabeller into the keeper's pre-pivot mounts"""
+    """fork a relabeller into the mount namespace of view_fd"""
     sandbox = os.open("/proc/self/ns/mnt", os.O_RDONLY | os.O_CLOEXEC)
     r, w = os.pipe()
     pid = os.fork()
@@ -1360,7 +1355,7 @@ def begin_handoff_namespace(view_fd, done_w, env, launcher_path, python, host_se
 
 
 def handoff_refusal(verdict):
-    """return the holder's end refusal of a verdict"""
+    """return None for stopped or refused:*, or holder-ended"""
     if verdict == "stopped" or verdict.startswith("refused:"):
         return None
     return "holder-ended"
@@ -1420,13 +1415,13 @@ def check_relabeller_done(done_fd, deadline, kill, now=time.time, init_exiting=l
     try:
         kill()
     except OSError as e:
-        kmsg(f"selinuxns: killing the sandbox after a relabeller refusal raised {e!r}")
+        kmsg(f"failed to kill the sandbox ({e!r})")
     kmsg(f"RHIZO_MARKER selinuxns=refused reason=relabeller-{reason}")
     return reason
 
 
 def open_records_dir(path=SELINUXNS_RECORDS_DIR):
-    """create and open an instance's namespace records directory"""
+    """create and open path"""
     os.makedirs(path, mode=0o755, exist_ok=True)
     return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
 
@@ -1437,12 +1432,12 @@ def keep_refusal(current):
 
 
 def report_record_write_failure(name, value, err):
-    """log a failed record write naming its file"""
+    """log a record-write-failed marker"""
     kmsg(f"RHIZO_MARKER selinuxns=record-write-failed file={name} value={value} err={err!r}")
 
 
 def record_verdict(value, dir_fd, keep=keep_refusal):
-    """write the verdict under the records lock"""
+    """write value to VERDICT_FILE under flock unless keep(current)"""
     try:
         fcntl.flock(dir_fd, fcntl.LOCK_EX)
         try:
@@ -1461,7 +1456,7 @@ def record_verdict(value, dir_fd, keep=keep_refusal):
 
 
 def record_start_id(value, dir_fd):
-    """record the unit invocation owning the start records"""
+    """write the INVOCATION_ID to START_ID_FILE"""
     try:
         write_android_enforce(value, START_ID_FILE, dir_fd=dir_fd)
     except OSError as e:
@@ -1469,7 +1464,7 @@ def record_start_id(value, dir_fd):
 
 
 def record_android_enforce(value, dir_fd):
-    """write Android's enforce state through the records fd"""
+    """write value to ANDROID_ENFORCE_FILE"""
     try:
         write_android_enforce(value, ANDROID_ENFORCE_FILE, dir_fd=dir_fd)
     except OSError as e:
@@ -1479,13 +1474,13 @@ def record_android_enforce(value, dir_fd):
 
 
 def record_start_end(verdict, dir_fd):
-    """record a start's end verdict and enforce state 0"""
+    """write the end verdict to VERDICT_FILE and 0 to ANDROID_ENFORCE_FILE"""
     record_verdict("stopped" if verdict in ("enforced", "permissive") else verdict, dir_fd)
     record_android_enforce("0", dir_fd)
 
 
 def record_stop_request(records_dir=SELINUXNS_RECORDS_DIR):
-    """write the stop request file"""
+    """write STOP_REQUEST_FILE"""
     try:
         dir_fd = open_records_dir(records_dir)
     except OSError as e:
@@ -1500,7 +1495,7 @@ def record_stop_request(records_dir=SELINUXNS_RECORDS_DIR):
 
 
 def stop_requested(dir_fd):
-    """return whether a stop request is recorded"""
+    """return whether STOP_REQUEST_FILE reads 1"""
     if dir_fd < 0:
         return False
     try:
@@ -1514,7 +1509,7 @@ def stop_requested(dir_fd):
 
 
 def clear_stop_request(dir_fd):
-    """remove the recorded stop request"""
+    """remove STOP_REQUEST_FILE"""
     try:
         os.unlink(os.path.basename(STOP_REQUEST_FILE), dir_fd=dir_fd)
     except FileNotFoundError:
@@ -1533,7 +1528,7 @@ def init_exit_refusal(status, stop_requested):
 
 
 def read_verdict(dir_fd):
-    """return this start's recorded namespace verdict"""
+    """return the VERDICT_FILE text"""
     try:
         fd = os.open(os.path.basename(VERDICT_FILE), os.O_RDONLY | os.O_CLOEXEC, dir_fd=dir_fd)
     except FileNotFoundError:
@@ -1550,7 +1545,7 @@ def relabeller_refusal(reason):
 
 
 def verdict_for(relabel, why=""):
-    """return the verdict for a relabel state and the refusal it named"""
+    """return the verdict for a relabel state and why"""
     if relabel in ("enforced", "permissive"):
         return relabel
     if relabel in ("eof", "timeout"):
@@ -1561,7 +1556,7 @@ def verdict_for(relabel, why=""):
 
 
 def read_done_now(done_fd, reasons=None):
-    """read the relabeller's done byte if one is waiting"""
+    """read the done byte from done_fd without blocking"""
     ready, _, _ = select.select([done_fd], [], [], 0)
     if not ready:
         return "pending"
@@ -1573,13 +1568,13 @@ def read_done_now(done_fd, reasons=None):
 
 
 def holder_ended_first(init_fd, holder_fd, timeout=None):
-    """return whether init's holder exits first"""
+    """return whether holder_fd is readable and init_fd is not"""
     ready, _, _ = select.select([init_fd] + ([holder_fd] if holder_fd >= 0 else []), [], [], timeout)
     return holder_fd >= 0 and holder_fd in ready and init_fd not in ready
 
 
 def end_init_with_holder(kill, on_verdict, stop_requested):
-    """kill init and return its refusal"""
+    """kill init and return the refusal, or None"""
     refusal = None if stop_requested() else "refused:holder-ended"
     if refusal:
         on_verdict(refusal)
@@ -1589,7 +1584,7 @@ def end_init_with_holder(kill, on_verdict, stop_requested):
 
 def watch_handed_off_init(init_pid, done_r, deadline, on_verdict, now=time.time, stop_requested=lambda: False,
                           holder_fd=-1):
-    """watch a handed-off init and its holder"""
+    """watch a handed-off init and holder_fd"""
     pidfd = os.pidfd_open(init_pid)
     state, reasons, holder_ended = "pending", [], False
     try:
@@ -1624,7 +1619,7 @@ def watch_handed_off_init(init_pid, done_r, deadline, on_verdict, now=time.time,
 
 
 def wait_first_flip(fd, g, waitpid=os.waitpid, reasons=None):
-    """wait for g's verified flip or exit"""
+    """return flipped, ended or refused from the fd byte and the wait status of g"""
     got = os.read(fd, 1)
     os.close(fd)
     if got == b"1":
@@ -1639,7 +1634,7 @@ def wait_first_flip(fd, g, waitpid=os.waitpid, reasons=None):
 
 
 def join_landlock_domain():
-    """join a Landlock domain scoping signals"""
+    """join a Landlock domain with LANDLOCK_SCOPE_SIGNAL"""
     abi, err = landlock_version()
     if abi < LANDLOCK_MIN_ABI:
         kmsg(f"RHIZO_MARKER selinuxns=refused reason=landlock-abi errno={err} abi={abi}")

@@ -77,7 +77,7 @@ Status ImportedSurface::Import(VADisplay dpy, const DmabufImage& img, bool opaqu
   uint32_t va_fourcc = 0, rt = 0;
   uint32_t drm = opaque ? OpaqueDrmFormat(img.drm_fourcc) : img.drm_fourcc;
   if (!VaFormatFor(drm, &va_fourcc, &rt)) {
-    LogErrorf("import: DRM format 0x%08x is not one the runtime maps", img.drm_fourcc);
+    LogErrorf("no VA fourcc for DRM format 0x%08x", img.drm_fourcc);
     return Status::kUnsupported;
   }
   if (img.fd < 0 || img.num_planes < 1 || img.num_planes > 4 || img.width == 0 || img.height == 0 ||
@@ -124,7 +124,7 @@ Status ImportedSurface::Import(VADisplay dpy, const DmabufImage& img, bool opaqu
   VASurfaceID id = VA_INVALID_SURFACE;
   VAStatus st = vaCreateSurfaces(dpy, rt, img.width, img.height, &id, 1, attrs, 2);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("import of a %ux%u dmabuf (DRM 0x%08x, modifier 0x%llx, %d planes) refused: %s", img.width,
+    LogErrorf("vaCreateSurfaces failed for %ux%u DRM 0x%08x modifier 0x%llx %d planes (%s)", img.width,
               img.height, img.drm_fourcc, static_cast<unsigned long long>(img.modifier), img.num_planes,
               vaErrorStr(st));
     return Status::kVaError;
@@ -168,9 +168,9 @@ struct Case {
   }
   std::string Name() const {
     static const char* names[] = {"BT.601", "BT.709", "BT.2020", "FCC", "SMPTE 240M"};
-    const char* way = yuv_to_rgb ? (ten_bit ? "P010 -> RGBA " : "NV12 -> RGBA ") : "RGBX (alpha 0/128/255) -> NV12 ";
+    const char* way = yuv_to_rgb ? (ten_bit ? "P010 -> RGBA " : "NV12 -> RGBA ") : "RGBX -> NV12 ";
     return std::string(way) +
-           names[static_cast<int>(matrix)] + (full_range ? " full" : " limited");
+           names[static_cast<int>(matrix)] + (full_range ? " VA_SOURCE_RANGE_FULL" : " VA_SOURCE_RANGE_REDUCED");
   }
 };
 
@@ -215,7 +215,7 @@ bool Prove(VADisplay dpy, const Case& c, std::string* why) {
   const uint32_t strip_w = w / strips;
   do {
     if (src == VA_INVALID_SURFACE || dst == VA_INVALID_SURFACE) {
-      *why = "surfaces refused";
+      *why = "vaCreateSurfaces failed";
       break;
     }
     if (vaCreateImage(dpy, &in_fmt, w, h, &in) != VA_STATUS_SUCCESS) break;
@@ -230,7 +230,7 @@ bool Prove(VADisplay dpy, const Case& c, std::string* why) {
       for (uint32_t r = 0; r < h / 2; r++) memset(q + out.offsets[1] + r * out.pitches[1], 200, w);
       vaUnmapBuffer(dpy, out.buf);
       if (vaPutImage(dpy, dst, out.image_id, 0, 0, w, h, 0, 0, w, h) != VA_STATUS_SUCCESS) {
-        *why = "vaPutImage of the destination refused";
+        *why = "vaPutImage of the destination failed";
         break;
       }
     }
@@ -261,14 +261,14 @@ bool Prove(VADisplay dpy, const Case& c, std::string* why) {
     }
     vaUnmapBuffer(dpy, in.buf);
     if (vaPutImage(dpy, src, in.image_id, 0, 0, w, h, 0, 0, w, h) != VA_STATUS_SUCCESS) {
-      *why = "vaPutImage refused";
+      *why = "vaPutImage failed";
       break;
     }
     Vpp vpp;
     VARectangle rect{0, 0, static_cast<uint16_t>(w), static_cast<uint16_t>(h)};
     VppColor color{VppMatrixCode(c.matrix), yuv_src ? c.full_range : true, yuv_src ? true : c.full_range};
     if (vpp.Run(dpy, src, rect, dst, rect, color) != Status::kOk) {
-      *why = "VPP refused";
+      *why = "Vpp::Run failed";
       break;
     }
     if (!have_out) {
@@ -276,7 +276,7 @@ bool Prove(VADisplay dpy, const Case& c, std::string* why) {
       have_out = true;
     }
     if (vaGetImage(dpy, dst, 0, 0, w, h, out.image_id) != VA_STATUS_SUCCESS) {
-      *why = "vaGetImage refused";
+      *why = "vaGetImage failed";
       break;
     }
     if (vaMapBuffer(dpy, out.buf, &map) != VA_STATUS_SUCCESS || !map) break;
@@ -313,7 +313,7 @@ bool Prove(VADisplay dpy, const Case& c, std::string* why) {
         tol = 1;
       }
       for (int i = 0; i < 3; i++) ok = ok && abs(got[i] - want[i]) <= tol;
-      snprintf(line, sizeof(line), "%s(%d,%d,%d) want (%d,%d,%d)", k ? " " : "", got[0], got[1], got[2], want[0],
+      snprintf(line, sizeof(line), "%s(%d,%d,%d) expected (%d,%d,%d)", k ? " " : "", got[0], got[1], got[2], want[0],
                want[1], want[2]);
       *why += line;
     }
@@ -337,10 +337,10 @@ bool Proved(VADisplay dpy, const Case& c) {
   bool ok = Prove(dpy, c, &why);
   (*verdicts)[c.Key()] = ok;
   if (ok) {
-    Logf("VPP self-check: %s: %s ok", c.Name().c_str(), why.c_str());
+    Logf("VPP self-check %s %s ok", c.Name().c_str(), why.c_str());
   } else {
-    LogErrorf("VPP self-check: %s: %s WRONG; this conversion goes through the CPU in this process", c.Name().c_str(),
-              why.empty() ? "nothing readable" : why.c_str());
+    LogErrorf("VPP self-check %s %s failed", c.Name().c_str(),
+              why.empty() ? "no pixels read" : why.c_str());
   }
   return ok;
 }
@@ -367,13 +367,13 @@ Status Vpp::Ensure(VADisplay dpy) {
   dpy_ = dpy;
   VAStatus st = vaCreateConfig(dpy, VAProfileNone, VAEntrypointVideoProc, nullptr, 0, &config_);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("VPP config: %s", vaErrorStr(st));
+    LogErrorf("VPP vaCreateConfig failed (%s)", vaErrorStr(st));
     config_ = VA_INVALID_ID;
     return Status::kVaError;
   }
   st = vaCreateContext(dpy, config_, 0, 0, 0, nullptr, 0, &context_);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("VPP context: %s", vaErrorStr(st));
+    LogErrorf("VPP vaCreateContext failed (%s)", vaErrorStr(st));
     vaDestroyConfig(dpy, config_);
     config_ = VA_INVALID_ID;
     context_ = VA_INVALID_ID;
@@ -399,7 +399,7 @@ Status Vpp::Run(VADisplay dpy, VASurfaceID src, const VARectangle& src_rect, VAS
   VABufferID buf = VA_INVALID_ID;
   VAStatus st = vaCreateBuffer(dpy, context_, VAProcPipelineParameterBufferType, sizeof(p), 1, &p, &buf);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("VPP parameter buffer: %s", vaErrorStr(st));
+    LogErrorf("VPP vaCreateBuffer failed (%s)", vaErrorStr(st));
     return Status::kVaError;
   }
   st = vaBeginPicture(dpy, context_, dst);
@@ -411,7 +411,7 @@ Status Vpp::Run(VADisplay dpy, VASurfaceID src, const VARectangle& src_rect, VAS
   vaDestroyBuffer(dpy, buf);
   if (st == VA_STATUS_SUCCESS) st = vaSyncSurface(dpy, dst);
   if (st != VA_STATUS_SUCCESS) {
-    LogErrorf("VPP run: %s", vaErrorStr(st));
+    LogErrorf("Vpp::Run failed (%s)", vaErrorStr(st));
     return Status::kVaError;
   }
   return Status::kOk;

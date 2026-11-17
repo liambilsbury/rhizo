@@ -8,7 +8,7 @@ namespace rhizo::c2store {
 void ConfigureRuntime(int, char**) {}
 
 std::vector<ComponentEntry> BuildRegistry() {
-  klogf("registry: built without the VA runtime, so no component is offered");
+  klogf("built without the VA runtime, 0 components");
   return {};
 }
 

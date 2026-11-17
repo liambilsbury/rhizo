@@ -1,14 +1,14 @@
 #!/bin/bash
-# run a command inside the rhizo build container
+# podman or docker run wrapper for the rhizo-build image
 set -euo pipefail
 ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$ENV_DIR/../../.." && pwd)"
 ENGINE="${RHIZO_ENGINE:-$(command -v podman || command -v docker || true)}"
-[[ -n "$ENGINE" ]] || { echo "run.sh: no podman or docker -- run make setup" >&2; exit 1; }
+[[ -n "$ENGINE" ]] || { echo "no podman or docker in PATH" >&2; exit 1; }
 TAG="$(cat "$ENV_DIR/Containerfile" "$ENV_DIR/packages.txt" | sha256sum | cut -c1-12)"
 IMAGE="localhost/rhizo-build:$TAG"
 
-# build the image this definition names
+# build $IMAGE from Containerfile
 build_image() {
   "$ENGINE" build -t "$IMAGE" -f "$ENV_DIR/Containerfile" "$ENV_DIR"
 }
@@ -16,7 +16,7 @@ build_image() {
 case "${1:-}" in
   --image) echo "$IMAGE"; exit 0 ;;
   --build-image) build_image; exit $? ;;
-  "") echo "usage: $0 --image | --build-image | <command>..." >&2; exit 2 ;;
+  "") echo "$0 --image | --build-image | <command>..." >&2; exit 2 ;;
 esac
 "$ENGINE" image inspect "$IMAGE" >/dev/null 2>&1 || build_image
 

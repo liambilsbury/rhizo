@@ -23,7 +23,7 @@ inline void EncLog(const char* fmt, ...) {
   vsnprintf(msg, sizeof(msg), fmt, ap);
   va_end(ap);
   if (&Logf != nullptr) {
-    Logf("enc: %s", msg);
+    Logf("%s", msg);
     return;
   }
 #ifdef __ANDROID__

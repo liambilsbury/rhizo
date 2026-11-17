@@ -72,7 +72,7 @@ class TargetPolicy:
 
 
 def _literal_ip(host):
-    """parse host for an IP address"""
+    """return host if host is an IP address, else None"""
     try:
         ipaddress.ip_address(host)
         return host
@@ -112,7 +112,7 @@ class _Resolution:
         self._thread.start()
 
     def _run(self):
-        """resolve the host name and signal completion"""
+        """call getaddrinfo for host and write a byte to _notify_w"""
         try:
             infos = socket.getaddrinfo(self.host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
             self.ip = infos[0][4][0]
@@ -163,7 +163,7 @@ class _Conn:
         self.last_activity = 0.0
 
     def peers(self):
-        """return the sockets this connection waits on"""
+        """return the client, upstream and resolution sockets"""
         s = [self.client]
         if self.upstream is not None:
             s.append(self.upstream)
@@ -173,7 +173,7 @@ class _Conn:
 
 
 def _origin_form(method, version, path, headers, host, port):
-    """rebuild the request head in origin form with a Host header"""
+    """rebuild the HTTP head in origin form with a Host header"""
     lines = ["%s %s %s" % (method, path, version)]
     has_host = any(h.split(":", 1)[0].strip().lower() == "host" for h in headers if h.strip())
     lines.extend(h for h in headers if h.strip())
@@ -207,7 +207,7 @@ class ProxyService(Service):
         return s
 
     def sockets(self):
-        """return the listener and every connection's sockets"""
+        """return the listener and the sockets of each connection"""
         out = [self.listener]
         for conn in self.conns.values():
             out.extend(conn.peers())
@@ -284,7 +284,7 @@ class ProxyService(Service):
             self._relay_from(conn, sock)
 
     def close(self):
-        """tear down every connection and close the listener"""
+        """call _teardown for each connection and close the listener"""
         for conn in list(self.conns.values()):
             self._teardown(conn)
         try:
@@ -318,7 +318,7 @@ class ProxyService(Service):
             self.by_sock[csock] = conn
 
     def _read_head(self, conn):
-        """read the request head from a client"""
+        """read the HTTP head from conn.client"""
         try:
             chunk = conn.client.recv(RECV_CHUNK)
         except OSError as e:
@@ -340,7 +340,7 @@ class ProxyService(Service):
         self._start_request(conn, conn.head_buf[:idx], conn.head_buf[idx + 4:])
 
     def _start_request(self, conn, head_bytes, rest_bytes):
-        """parse the request head and start the connect"""
+        """parse the HTTP head and start the connect"""
         text = head_bytes.decode("latin-1")
         lines = text.split("\r\n")
         parts = lines[0].split(" ")
@@ -483,7 +483,7 @@ class ProxyService(Service):
         self._flush(conn)
 
     def _buffer_early_client_data(self, conn):
-        """buffer data the client sent before the upstream connected"""
+        """append client data read before the upstream connect to pending_upstream_out"""
         try:
             chunk = conn.client.recv(RECV_CHUNK)
         except OSError as e:
@@ -500,7 +500,7 @@ class ProxyService(Service):
             self._fail_conn(conn, "buffer_exceeded")
 
     def _relay_from(self, conn, sock):
-        """pump data from whichever side is readable"""
+        """call _pump for the readable side"""
         if sock is conn.client:
             self._pump(conn, conn.client, "buf_c2u", is_client_side=True)
         elif conn.upstream is not None and sock is conn.upstream:
@@ -531,14 +531,14 @@ class ProxyService(Service):
         self._flush(conn)
 
     def _flush(self, conn):
-        """send buffered data in both directions"""
+        """write buf_c2u to the upstream and buf_u2c to the client"""
         if conn.upstream is not None and conn.buf_c2u:
             conn.buf_c2u = self._send_some(conn, conn.upstream, conn.buf_c2u)
         if conn.buf_u2c and conn.state != STATE_DEAD:
             conn.buf_u2c = self._send_some(conn, conn.client, conn.buf_u2c)
 
     def _send_some(self, conn, sock, data):
-        """send as much data as the socket accepts"""
+        """call sock.send(data) and return the unsent bytes"""
         try:
             n = sock.send(data)
         except OSError as e:
@@ -561,14 +561,14 @@ class ProxyService(Service):
         self._teardown(conn)
 
     def _close_conn(self, conn, reason=None):
-        """log the close of a connection and tear it down"""
+        """log NB_PROXY_CLOSE and call _teardown"""
         if reason:
             log("NB_PROXY_FAIL target=%s reason=%s", conn.target or self._peer_str(conn), reason)
         log("NB_PROXY_CLOSE target=%s rx=%d tx=%d", conn.target or self._peer_str(conn), conn.rx, conn.tx)
         self._teardown(conn)
 
     def _teardown(self, conn):
-        """mark a connection dead and close its sockets"""
+        """set conn.state to STATE_DEAD and close the conn sockets"""
         conn.state = STATE_DEAD
         if conn.resolution is not None:
             self.by_sock.pop(conn.resolution.notify_r, None)

@@ -197,7 +197,7 @@ class RhizoSharedSecret : public BnSharedSecret {
          reinterpret_cast<const uint8_t*>(kKeyCheckLabel), strlen(kKeyCheckLabel), check,
          &checkLen);
     sharingCheck->assign(check, check + checkLen);
-    klog("RhizoSharedSecret: computeSharedSecret OK, real hmac_key_ negotiated");
+    klog("computeSharedSecret returned ok");
     return ScopedAStatus::ok();
   }
 };
@@ -338,7 +338,7 @@ class RhizoGatekeeper : public BnGatekeeper {
     return ScopedAStatus::ok();
   }
 
-  // verify a password against its handle
+  // verify a password against the enrolled password handle
   ScopedAStatus verify(int32_t, int64_t challenge, const std::vector<uint8_t>& enrolledPasswordHandle,
                        const std::vector<uint8_t>& providedPassword,
                        GatekeeperVerifyResponse* out) override {
@@ -403,8 +403,8 @@ class RhizoGatekeeper : public BnGatekeeper {
       if (st.computed) {
         memcpy(key, st.hmacKey, sizeof(key));
       } else {
-        klog("verify(): ISharedSecret negotiation not yet complete -- "
-             "using the local placeholder HAT mac key");
+        klog("HAT mac key is kLocalMacKey "
+             "before computeSharedSecret");
         memcpy(key, kLocalMacKey, sizeof(key));
       }
     }
@@ -425,13 +425,12 @@ class RhizoGatekeeper : public BnGatekeeper {
 
 // register the gatekeeper and shared secret services
 int main() {
-  klog("main() entered");
   auto device = ndk::SharedRefBase::make<RhizoGatekeeper>();
   const std::string instance = std::string(RhizoGatekeeper::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(device->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService IGatekeeper/default failed with status %d", status);
     klog(buf);
     return 1;
   }
@@ -440,13 +439,12 @@ int main() {
   status = AServiceManager_addService(sharedSecret->asBinder().get(), ssInstance.c_str());
   if (status != STATUS_OK) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "ISharedSecret addService FAILED status=%d", status);
+    snprintf(buf, sizeof(buf), "AServiceManager_addService ISharedSecret/gatekeeper failed with status %d", status);
     klog(buf);
     return 1;
   }
-  klog("registered (IGatekeeper/default + ISharedSecret/gatekeeper), joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(0);
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

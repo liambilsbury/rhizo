@@ -13,7 +13,7 @@
 
 namespace rhizo::c2va::enc {
 
-// return the lowest level that holds the stream, or 0
+// return the lowest level whose limits fit the stream, or 0
 inline uint32_t MinLevelIdc(bool hevc, uint32_t profile_idc, uint32_t width, uint32_t height, uint32_t min_width,
                             uint32_t min_height, double frame_rate, uint32_t bitrate) {
   const CodedSize c = CodedSizeFor(hevc, width, height, min_width, min_height);
@@ -21,7 +21,7 @@ inline uint32_t MinLevelIdc(bool hevc, uint32_t profile_idc, uint32_t width, uin
   return h264enc::ChooseLevel(profile_idc, 10, c.width / 16, c.height / 16, frame_rate, bitrate);
 }
 
-// pick an offered level from the requested and needed levels
+// return a level from offered for asked and needed
 inline uint32_t PickLevelIdc(const std::vector<uint32_t>& offered, uint32_t asked, uint32_t needed) {
   if (offered.empty()) return asked;
   bool asked_offered = false;

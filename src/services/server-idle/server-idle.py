@@ -49,7 +49,7 @@ RCVBUF_BYTES = 4 << 20
 
 
 def _instanced(base, sandbox_id, sep="-"):
-    """build the instance name from base and id"""
+    """return base for sandbox_id 0, else base, sep and sandbox_id"""
     return base if sandbox_id == 0 else "%s%s%s" % (base, sep, sandbox_id)
 
 
@@ -60,7 +60,7 @@ ADB_GUEST_ADDR = "192.168.%d.50" % (100 + SANDBOX_ID)
 
 
 def log(msg):
-    """print a message"""
+    """print msg to stdout"""
     print(msg, flush=True)
 
 
@@ -111,12 +111,12 @@ def nl_messages(data):
 
 
 def is_adb_session(payload):
-    """check a conntrack message for the adb session"""
+    """return whether the reply tuple of payload is the adb tcp session"""
     return reply_tuple(payload) == (IPPROTO_TCP, ADB_GUEST_ADDR, ADB_PORT)
 
 
 def is_closed(payload):
-    """check a conntrack message for time_wait or close"""
+    """return whether the tcp state of payload is TIME_WAIT or CLOSE"""
     tcp = nl_attrs(nl_attrs(nl_attrs(payload[4:]).get(CTA_PROTOINFO, b"")).get(CTA_PROTOINFO_TCP, b""))
     state = tcp.get(CTA_PROTOINFO_TCP_STATE, b"")
     return len(state) == 1 and state[0] in (TCP_CONNTRACK_TIME_WAIT, TCP_CONNTRACK_CLOSE)
@@ -134,7 +134,7 @@ def event_name(kind, flags, payload):
 
 
 def conntrack_events(sock):
-    """yield each adb event and its session key"""
+    """yield each adb event and the session key"""
     while True:
         try:
             data = sock.recv(65536)
@@ -161,7 +161,7 @@ def conntrack_sessions(sock):
                 return keys
             if kind == NLMSG_ERROR:
                 err = -struct.unpack_from("=i", payload)[0]
-                raise OSError(err, "conntrack table dump failed: %s" % os.strerror(err))
+                raise OSError(err, "conntrack table dump failed with %s" % os.strerror(err))
             if kind == CT_NEW and is_adb_session(payload) and not is_closed(payload):
                 keys.add(session_key(payload))
 
@@ -173,7 +173,7 @@ def read_table():
 
 
 def drain(sock):
-    """discard every event the socket holds"""
+    """recv and discard the queued events of sock"""
     while True:
         try:
             sock.recv(65536, socket.MSG_DONTWAIT)
@@ -191,7 +191,7 @@ def reread_table(events):
 
 
 class Sessions:
-    """Adb sessions this run counts"""
+    """adb sessions counted since start"""
 
     def __init__(self, before):
         """store the table's entries at start as uncounted"""
@@ -203,7 +203,7 @@ class Sessions:
         self.counted.add(key)
 
     def closed(self, key):
-        """drop a session and return whether it counted"""
+        """discard key and return whether key was counted"""
         self.before.discard(key)
         if key in self.counted:
             self.counted.discard(key)
@@ -227,8 +227,7 @@ def handle(event, key, sessions, idle_stop_s, read_sessions):
     """apply an event to the sessions and timer"""
     if event == "OVERRUN":
         sessions.resync(read_sessions())
-        log("the conntrack event socket overran (ENOBUFS) and lost events -- "
-            "re-read the table: %d session(s) opened since the start" % len(sessions.counted))
+        log("recv returned ENOBUFS, counted %d sessions after a table dump" % len(sessions.counted))
         if sessions.counted:
             cancel_timer()
         else:
@@ -242,8 +241,7 @@ def handle(event, key, sessions, idle_stop_s, read_sessions):
 
 def start_line(before):
     """return the journal line for the start"""
-    return ("started this run's own session count at 0 -- the %d adb entries already in the conntrack "
-            "table, phantom or real, are never counted" % before)
+    return "count=0 conntrack_adb_entries=%d" % before
 
 
 def count_line(count, event):
@@ -257,15 +255,15 @@ def cancel_timer():
         ["systemctl", "is-active", "%s.timer" % TIMER_UNIT],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
     if state != "active":
-        log("no %s.timer armed (state=%s) -- nothing to cancel" % (TIMER_UNIT, state))
+        log("%s.timer is not active (state=%s)" % (TIMER_UNIT, state))
         return
     r = subprocess.run(["systemctl", "stop", "%s.timer" % TIMER_UNIT],
                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
     if r.returncode != 0:
-        log("systemctl stop %s.timer failed (rc=%d): %s" %
+        log("systemctl stop %s.timer failed with exit status %d (%s)" %
             (TIMER_UNIT, r.returncode, r.stderr.strip()))
         return
-    log("canceled the armed idle-stop timer")
+    log("stopped the idle-stop timer")
 
 
 def arm_timer(idle_stop_s):
@@ -274,7 +272,7 @@ def arm_timer(idle_stop_s):
         ["systemctl", "is-active", "%s.timer" % TIMER_UNIT],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
     if state == "active":
-        log("a %s.timer is already armed -- leaving its own deadline alone" % TIMER_UNIT)
+        log("%s.timer is still active" % TIMER_UNIT)
         return
     subprocess.run(
         ["systemd-run", "--collect", "--on-active=%ds" % idle_stop_s,
@@ -285,7 +283,7 @@ def arm_timer(idle_stop_s):
 
 def _handle_term(signum, frame):
     """cancel the timer and exit"""
-    log("received signal %d -- canceling any armed idle-stop timer before exit" % signum)
+    log("received signal %d" % signum)
     cancel_timer()
     sys.exit(0)
 
@@ -299,7 +297,7 @@ def main():
         log=lambda m: print(m, file=sys.stderr), instance_id=SANDBOX_ID)
     idle_stop_s = policy.scope("server.idle_stop_s")
     if idle_stop_s == 0:
-        log("server.idle_stop_s=0 -- idle-stop is off, exiting")
+        log("server.idle_stop_s=0")
         return 0
     sock = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_NETFILTER)
     sock.setsockopt(socket.SOL_SOCKET, SO_RCVBUFFORCE, RCVBUF_BYTES)
@@ -308,7 +306,7 @@ def main():
         sock.bind((0, NF_NETLINK_CONNTRACK_NEW | NF_NETLINK_CONNTRACK_UPDATE | NF_NETLINK_CONNTRACK_DESTROY))
         second = read_table()
     except OSError as e:
-        log("cannot read the conntrack table at start: %s -- idle-stop is not watching" % e)
+        log("failed to read the conntrack table (%s)" % e)
         return 1
     sessions = start_sessions(first, second)
     log(start_line(len(sessions.before)))
@@ -318,7 +316,7 @@ def main():
     for event, key in conntrack_events(sock):
         handle(event, key, sessions, idle_stop_s, lambda: reread_table(sock))
         log(count_line(len(sessions.counted), event))
-    log("the conntrack netlink socket closed -- nothing left to watch")
+    log("conntrack netlink recv returned 0 bytes")
     return 1
 
 

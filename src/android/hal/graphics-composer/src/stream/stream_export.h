@@ -6,7 +6,7 @@
 
 namespace rhizo {
 
-// frame sent to rhizo-streamd
+// frame for StreamExportBackend::Present
 struct StreamFrame {
   int dmabufFd = -1;
   int32_t width = 0;

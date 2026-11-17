@@ -103,7 +103,7 @@ void FillFlat(ScalingLists* s) {
   memset(s->list8x8, 16, sizeof(s->list8x8));
 }
 
-// read the scaling matrix with table 7-2's fall-back rules
+// read the scaling matrix with the Table 7-2 fall-back rules
 void ReadScalingMatrix(Reader& r, int num_lists, bool pps, const ScalingLists* seq_lists, ScalingLists* out) {
   for (int i = 0; i < 12; i++) {
     bool present = false;

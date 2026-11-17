@@ -396,11 +396,6 @@ Files: kernel/*
 Copyright: 2026 Liam Bilsbury
 License: GPL-2.0-only
 
-Files: kernel/patches/0003-*
-Copyright: 2026 Denis V. Lunev
-License: GPL-2.0-only
-Comment: Mainline commit 1aac65f3e651.
-
 Files: kernel/patches/0021-*
 Copyright: 2026 Liam Bilsbury
  2008 Google Inc.

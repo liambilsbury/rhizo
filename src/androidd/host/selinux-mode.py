@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""print the SELinux mode this host would start Android in"""
+"""SELinux mode query for androidd.env and the host"""
 import argparse, contextlib, os, sys
 _here = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_here) if os.path.basename(_here) == "host" else _here)
@@ -8,7 +8,7 @@ RUNTIME_ENV = "/var/lib/rhizo/androidd-runtime.env"
 
 
 def read_env_file(path):
-    """return KEY=VALUE pairs from an env file, ignoring comments"""
+    """return the KEY=VALUE pairs of an env file"""
     env = {}
     try:
         with open(path) as f:
@@ -16,7 +16,7 @@ def read_env_file(path):
     except FileNotFoundError:
         return env
     except OSError as e:
-        sys.exit(f"rhizo-selinux-mode: cannot read {path}: {e}")
+        sys.exit(f"failed to read {path} ({e})")
     for line in lines:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
@@ -26,7 +26,7 @@ def read_env_file(path):
 
 
 def record_mode(ns, mode, path):
-    """write mode to the mode file"""
+    """write mode to path, or delete path for a refuse: mode"""
     if not mode.startswith("refuse:"):
         ns.write_mode_file(mode, path=path)
         return
@@ -34,7 +34,7 @@ def record_mode(ns, mode, path):
         os.unlink(path)
     except FileNotFoundError:
         pass
-    print(f"rhizo-selinux-mode: no mode recorded in {path}: {ns.refusal_text(mode[len('refuse:'):])} ({mode})",
+    print(f"deleted {path} for {ns.refusal_text(mode[len('refuse:'):])} ({mode})",
           file=sys.stderr)
 
 
@@ -82,7 +82,7 @@ def main():
         return
     if a.is_startable:
         if mode == "host" and not os.path.exists(ns.HOST_ENFORCE_NODE):
-            print(f"host mode cannot start Android: no {ns.HOST_ENFORCE_NODE} on this boot", file=sys.stderr)
+            print(f"no {ns.HOST_ENFORCE_NODE} for host mode", file=sys.stderr)
             sys.exit(1)
         sys.exit(1 if mode.startswith("refuse:") else 0)
     if a.want:
@@ -96,5 +96,5 @@ if __name__ == "__main__":
     except SystemExit as e:
         sys.exit(255 if e.code == 2 else e.code)
     except BaseException as e:
-        print(f"rhizo-selinux-mode: {e!r}", file=sys.stderr)
+        print(f"{e!r}", file=sys.stderr)
         sys.exit(255)

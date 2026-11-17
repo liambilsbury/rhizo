@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2_AOSP_SYS_SYSTEM_PROPERTIES_H
 #define RHIZO_C2_AOSP_SYS_SYSTEM_PROPERTIES_H
 
-// declare the bionic property serial calls
+// declarations of the bionic property serial calls
 
 #include_next <sys/system_properties.h>
 

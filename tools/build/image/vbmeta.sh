@@ -1,12 +1,12 @@
 #!/bin/bash
-# build vbmeta.img and its digest
+# var/share/vbmeta.img var/share/vbmeta.digest
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ROOT="$(cd "." && pwd)"
 
 AVBTOOL="$ROOT/aosp-android16-qpr2/external/avb/avbtool.py"
 if [[ ! -f "$AVBTOOL" ]]; then
-  echo "[build-vbmeta] no $AVBTOOL -- run tools/fetch/build-inputs.sh --only aosp" >&2
+  echo "no $AVBTOOL" >&2
   exit 1
 fi
 
@@ -24,4 +24,4 @@ python3 "$AVBTOOL" make_vbmeta_image \
 DIGEST="$(python3 "$AVBTOOL" calculate_vbmeta_digest --image "$OUT" --hash_algorithm sha256 | tr -d '[:space:]')"
 printf '%s' "$DIGEST" > "$DIGEST_FILE"
 
-echo "[build-vbmeta] $OUT ($(stat -c%s "$OUT") bytes), sha256=$DIGEST"
+echo "wrote $OUT bytes=$(stat -c%s "$OUT") sha256=$DIGEST"

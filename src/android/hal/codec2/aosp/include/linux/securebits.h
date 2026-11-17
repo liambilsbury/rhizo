@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2_AOSP_LINUX_SECUREBITS_H
 #define RHIZO_C2_AOSP_LINUX_SECUREBITS_H
 
-// add the Linux 6.14 exec-restriction secure bits
+// linux/securebits.h with the Linux 6.14 exec-restriction secure bits
 
 #include_next <linux/securebits.h>
 

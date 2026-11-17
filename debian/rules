@@ -129,7 +129,7 @@ REQUIRED_FILES := src/androidd/boot.py src/androidd/sandbox/core.py src/androidd
                   src/services/appsync/run-rhizo.mount.d/resync-rearm.conf \
                   src/services/appsync/run-rhizo-data.mount.d/resync-rearm.conf \
                   src/services/broker/brokerd.py src/services/broker/broker-client.py \
-                  src/services/deskbridge/dbus_min.py src/services/broker/inbox_stage.py \
+                  src/services/deskbridge/dbus_min.py src/services/broker/inbox_stage.py src/services/common/control_open.py \
                   src/androidd/host/fill-display-pool.sh src/androidd/host/release-idle-display.sh \
                   src/services/units/display-pool/display-pool.path src/services/units/display-pool/display-pool.service \
                   src/services/units/display-pool/display-pool-release.service \
@@ -226,16 +226,16 @@ override_dh_auto_build:
 	for f in $(REQUIRED_FILES); do [ -s "$$f" ] || missing="$$missing $$f"; done; \
 	for l in $(REQUIRED_LINKS); do [ -L "$$l" ] && [ "$$(readlink "$$l")" = "$(GPU_DRIVER_VA_LINK)" ] || missing="$$missing $$l"; done; \
 	if [ -n "$$missing" ]; then \
-	  echo "rhizo: cannot build, these staged artifacts are missing or empty:" >&2; \
+	  echo "staged files missing or empty" >&2; \
 	  for m in $$missing; do echo "  $$m" >&2; done; \
-	  echo "run make all first" >&2; exit 1; \
+	  exit 1; \
 	fi
 	@only() { d=$$1; shift; extra=""; \
 	  for f in $$(cd $$d && find . \( -type f -o -type l \) | sed 's|^\./||' | sort); do \
 	    case " $$* " in *" $$f "*) ;; *) extra="$$extra $$f" ;; esac; \
 	  done; \
 	  if [ -n "$$extra" ]; then \
-	    echo "rhizo: $$d holds files this package does not ship:$$extra" >&2; exit 1; \
+	    echo "$$d contains unshipped files$$extra" >&2; exit 1; \
 	  fi; }; \
 	only $(GPU_DRIVER_DIR) $(GPU_DRIVER_64_FILES) $(GPU_DRIVER_64_LINKS) \
 	$(if $(filter 1,$(SHIP_32BIT_DRIVER)),&& only var/share/gpu_driver_32 $(GPU_DRIVER_FILES)) \
@@ -299,7 +299,7 @@ endif
 	                var/share/vbmeta.img var/share/plat_pub_versioned.cil $(PAYLOAD)/
 	install -m 0755 src/services/probe-client/probe-client.py $(PAYLOAD)/
 	install -m 0755 $(PROBE_CLIENT_BIN) $(PAYLOAD)/rhizo-probe-client
-	install -m 0644 src/services/deskbridge/dbus_min.py src/services/broker/inbox_stage.py $(PAYLOAD)/
+	install -m 0644 src/services/deskbridge/dbus_min.py src/services/broker/inbox_stage.py src/services/common/control_open.py $(PAYLOAD)/
 	install -m 0755 src/androidd/host/fill-display-pool.sh $(PAYLOAD)/rhizo-fill-display-pool.sh
 	install -m 0755 src/androidd/host/release-idle-display.sh $(PAYLOAD)/rhizo-release-idle-display.sh
 	install -m 0755 src/androidd/host/wifi-mirror-push.sh $(PAYLOAD)/rhizo-wifi-mirror-push

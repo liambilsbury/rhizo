@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2VA_FUNCTIONAL_CLIPS_H
 #define RHIZO_C2VA_FUNCTIONAL_CLIPS_H
 
-// declare the functional clips of clips_data.cpp
+// declarations of the functional clips in clips_data.cpp
 
 #include <stddef.h>
 #include <stdint.h>

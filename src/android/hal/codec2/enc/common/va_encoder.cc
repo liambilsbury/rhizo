@@ -78,7 +78,7 @@ Status VaEncoderBase::Probe() {
   driver_.rt_formats = a[0].value == VA_ATTRIB_NOT_SUPPORTED ? 0 : a[0].value;
   driver_.rate_controls = a[1].value == VA_ATTRIB_NOT_SUPPORTED ? 0 : a[1].value;
   driver_.packed_headers = a[2].value == VA_ATTRIB_NOT_SUPPORTED ? 0 : a[2].value;
-  EncLog("encoder probe: vendor \"%s\" rt 0x%x rc 0x%x packed 0x%x", vendor ? vendor : "?", driver_.rt_formats,
+  EncLog("encoder probe vendor=\"%s\" rt=0x%x rc=0x%x packed=0x%x", vendor ? vendor : "?", driver_.rt_formats,
          driver_.rate_controls, driver_.packed_headers);
   return Status::kOk;
 }
@@ -151,8 +151,8 @@ Status VaEncoderBase::Start(uint32_t rt_format, CodedSize coded, uint32_t align_
     const char* trace = getenv("RHIZO_ENC_RC_TRACE");
     rc_trace_ = trace && trace[0] == '1';
   }
-  EncLog("encoder started: %ux%u coded %ux%u rc 0x%x bitrate %u qp %d packed 0x%x%s", config_.width, config_.height,
-         coded.width, coded.height, va_rc_, bitrate_, qp_, packed_used_, driver_.virgl ? " (virgl)" : "");
+  EncLog("encoder started %ux%u coded=%ux%u rc=0x%x bitrate=%u qp=%d packed=0x%x%s", config_.width, config_.height,
+         coded.width, coded.height, va_rc_, bitrate_, qp_, packed_used_, driver_.virgl ? " virgl=1" : "");
   return Status::kOk;
 }
 
@@ -233,7 +233,7 @@ Status VaEncoderBase::Encode(VASurfaceID input, uint64_t tag, int64_t pts, bool 
 
   Status s = SubmitAndRetire(pic);
   if (s == Status::kOk || !retire_empty_) return s;
-  EncLog("picture of tag %llu came back empty: encoding it again as an IDR", static_cast<unsigned long long>(tag));
+  EncLog("tag %llu retry idr=1", static_cast<unsigned long long>(tag));
   if (frame_rc_) rc_.Unpick();
   EncPicture again = pic;
   again.idr = true;
@@ -247,12 +247,12 @@ Status VaEncoderBase::Encode(VASurfaceID input, uint64_t tag, int64_t pts, bool 
   if (frame_rc_) rc_.Unpick();
   force_idr_ = true;
   if (++lost_in_row_ >= 2) {
-    EncLog("picture of tag %llu came back empty again, the second input in a row: the encoder fails",
+    EncLog("IDR coded buffer of tag %llu is empty on the second input in a row",
            static_cast<unsigned long long>(tag));
     failed_ = true;
     return Status::kVaError;
   }
-  EncLog("picture of tag %llu came back empty again: dropped, the next picture is an IDR",
+  EncLog("tag %llu dropped force_idr=1",
          static_cast<unsigned long long>(tag));
   host_->Output(nullptr, 0, tag, pts, false, false);
   return Status::kOk;
@@ -299,7 +299,7 @@ Status VaEncoderBase::SubmitAndRetire(EncPicture pic) {
   }
   DestroyBuffers(&bufs);
   if (st != VA_STATUS_SUCCESS) {
-    EncLog("encode of tag %llu failed: %s", static_cast<unsigned long long>(tag), vaErrorStr(st));
+    EncLog("failed to encode tag %llu (%s)", static_cast<unsigned long long>(tag), vaErrorStr(st));
     if (frame_rc_) rc_.Unpick();
     failed_ = true;
     Quiesce();
@@ -347,12 +347,12 @@ bool VaEncoderBase::Valid(const EncPicture& pic, int slot) const {
   auto own = [this](VASurfaceID s) { return s != VA_INVALID_SURFACE && (s == recon_[0] || s == recon_[1]); };
   const char* why = nullptr;
   if (pic.input == VA_INVALID_SURFACE) why = "no input surface";
-  else if (pic.input == recon_[0] || pic.input == recon_[1]) why = "the input is a reconstructed surface";
-  else if (!own(pic.recon)) why = "the reconstruction is not one of the encoder's surfaces";
-  else if (!pic.idr && (!own(pic.ref) || pic.ref == pic.recon)) why = "the reference is not the previous reconstruction";
-  else if (pic.idr && pic.ref != VA_INVALID_SURFACE) why = "an IDR names a reference";
+  else if (pic.input == recon_[0] || pic.input == recon_[1]) why = "pic.input in recon_";
+  else if (!own(pic.recon)) why = "pic.recon not in recon_";
+  else if (!pic.idr && (!own(pic.ref) || pic.ref == pic.recon)) why = "pic.ref not in recon_ or pic.ref == pic.recon";
+  else if (pic.idr && pic.ref != VA_INVALID_SURFACE) why = "pic.idr with pic.ref != VA_INVALID_SURFACE";
   else if (slot < 0 || slot >= kPipelineDepth || coded_[slot] == VA_INVALID_ID) why = "no coded buffer";
-  if (why) EncLog("picture of tag %llu not submitted: %s", static_cast<unsigned long long>(pic.tag), why);
+  if (why) EncLog("failed to submit the picture of tag %llu (%s)", static_cast<unsigned long long>(pic.tag), why);
   return why == nullptr;
 }
 
@@ -389,7 +389,7 @@ Status VaEncoderBase::Retire() {
   void* p = nullptr;
   VAStatus st = vaMapBuffer(dpy_, coded_[f.slot], &p);
   if (st != VA_STATUS_SUCCESS) {
-    EncLog("coded buffer of tag %llu: %s", static_cast<unsigned long long>(f.pic.tag), vaErrorStr(st));
+    EncLog("vaMapBuffer failed for tag %llu (%s)", static_cast<unsigned long long>(f.pic.tag), vaErrorStr(st));
     failed_ = true;
     return FromVa(st);
   }
@@ -419,7 +419,7 @@ Status VaEncoderBase::Retire() {
   }
   vaUnmapBuffer(dpy_, coded_[f.slot]);
   if (bad || coded.empty()) {
-    EncLog("coded buffer of tag %llu is %s: %d segments %s", static_cast<unsigned long long>(f.pic.tag),
+    EncLog("coded buffer of tag %llu is %s with %d segments %s", static_cast<unsigned long long>(f.pic.tag),
            bad ? "bad" : "empty", segments, segs);
     if (bad || inflight_.size()) failed_ = true;
     else retire_empty_ = true;
@@ -441,14 +441,14 @@ Status VaEncoderBase::Emit(const EncPicture& pic, const std::vector<uint8_t>& co
     if (c == NalClass::kSlice) has_slice = true;
   }
   if (!has_slice) {
-    EncLog("coded output of tag %llu holds no slice (%zu bytes)", static_cast<unsigned long long>(pic.tag),
+    EncLog("coded output of tag %llu has no slice (%zu bytes)", static_cast<unsigned long long>(pic.tag),
            coded.size());
     return Status::kVaError;
   }
   if (pic.idr && !decided_) {
     decided_ = true;
     driver_param_sets_ = !params.empty();
-    EncLog("parameter sets: %s", driver_param_sets_ ? "the driver's" : "the core's (the driver wrote none)");
+    EncLog("writing %s parameter sets", driver_param_sets_ ? "the driver's" : "the core's");
   }
   if (pic.idr) {
     std::vector<uint8_t> cfg;
@@ -472,12 +472,12 @@ Status VaEncoderBase::Emit(const EncPicture& pic, const std::vector<uint8_t>& co
       Status s = FixSlice(pic, n.data, n.size, &fixed, &qp);
       if (used_qp < 0) used_qp = qp;
       if (s != Status::kOk) {
-        EncLog("slice of tag %llu could not be checked against the core's parameter sets",
+        EncLog("failed to check the slice of tag %llu against the core's parameter sets",
                static_cast<unsigned long long>(pic.tag));
         return s;
       }
       if (fixed.size() != n.size || memcmp(fixed.data(), n.data, n.size) != 0) {
-        if (rewritten_++ == 0) EncLog("rewriting slice headers the driver wrote against no parameter set");
+        if (rewritten_++ == 0) EncLog("rewriting driver slice headers to the core's parameter sets");
       }
       AppendRawNal(fixed.data(), fixed.size(), &au);
       continue;
@@ -487,12 +487,12 @@ Status VaEncoderBase::Emit(const EncPicture& pic, const std::vector<uint8_t>& co
   host_->Output(au.data(), au.size(), pic.tag, pic.pts, pic.idr, false);
   if (frame_rc_) {
     if (rc_trace_)
-      EncLog("rc: tag %llu %s asked QP %d, coded at %d, %zu bytes", static_cast<unsigned long long>(pic.tag),
+      EncLog("rc tag=%llu type=%s qp=%d used_qp=%d bytes=%zu", static_cast<unsigned long long>(pic.tag),
              pic.idr ? "I" : "P", pic.qp, used_qp, au.size());
     rc_.Done(pic.idr, pic.qp, used_qp, au.size());
     if (!rc_.p_qp_followed() && !rc_lock_logged_) {
       rc_lock_logged_ = true;
-      EncLog("P pictures come back at the last I picture's QP: rate control steers at I pictures only");
+      EncLog("rc p_locked=1");
     }
   }
   return Status::kOk;

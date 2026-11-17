@@ -1,5 +1,5 @@
 #!/bin/bash
-# build rhizo-graphics-allocator and stage it
+# var/share/gfx_hal/rhizo-graphics-allocator RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 ABI_ARGS=(); [[ -n "${RHIZO_HAL_ABI:-}" ]] && ABI_ARGS=(--abi "$RHIZO_HAL_ABI")

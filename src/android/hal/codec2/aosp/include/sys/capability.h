@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2_AOSP_SYS_CAPABILITY_H
 #define RHIZO_C2_AOSP_SYS_CAPABILITY_H
 
-// declare the POSIX.1e capability calls
+// declarations of the POSIX.1e capability calls
 
 #include <linux/capability.h>
 

@@ -15,7 +15,7 @@ class StaNetwork : public BnSupplicantStaNetwork {
   StaNetwork(std::weak_ptr<StaIface> iface, int32_t id, std::string ifname)
       : iface_(std::move(iface)), id_(id), ifname_(std::move(ifname)) {}
 
-  // drop this network from service
+  // set valid_ false and clear the callbacks
   void Invalidate() {
     valid_ = false;
     callbacks_.Clear();

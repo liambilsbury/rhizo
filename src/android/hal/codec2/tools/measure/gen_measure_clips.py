@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""make the VP9 and AV1 measurement clips and their clips.tsv manifest"""
+"""VP9 and AV1 measurement clip and clips.tsv manifest generator"""
 import argparse
 import hashlib
 import os
@@ -94,17 +94,17 @@ def encoder_args(codec, kbps):
 
 
 def run(argv):
-    """run a command and return its stdout"""
+    """run a command and return the command's stdout"""
     r = subprocess.run(argv, capture_output=True)
     if r.returncode != 0:
-        sys.exit(f"gen_measure_clips: {' '.join(argv)[:400]} failed: {r.stderr.decode(errors='replace')[-800:]}")
+        sys.exit(f"{' '.join(argv)[:400]} failed ({r.stderr.decode(errors='replace')[-800:]})")
     return r.stdout
 
 
 def ivf_frames(data):
-    """split an IVF file into its header and frames"""
+    """split an IVF file into the IVF header and frames"""
     if data[:4] != b"DKIF":
-        sys.exit("gen_measure_clips: not an IVF file")
+        sys.exit("no DKIF signature")
     hlen = struct.unpack_from("<H", data, 6)[0]
     frames, off = [], hlen
     while off + 12 <= len(data):
@@ -137,7 +137,7 @@ def make(codec, w, h, kbps, path, preset):
         header, frames = ivf_frames(open(full, "rb").read())
         os.unlink(full)
         if len(frames) != WARM + FRAMES:
-            sys.exit(f"gen_measure_clips: {path}: the encode has {len(frames)} frames, want {WARM + FRAMES}")
+            sys.exit(f"the encode of {path} has {len(frames)} frames, expected {WARM + FRAMES}")
         got = kbps_of(frames[WARM:])
         tries.append((rate, round(got)))
         if best is None or abs(got - kbps) < abs(best[0] - kbps):
@@ -154,19 +154,19 @@ def make(codec, w, h, kbps, path, preset):
         rate = max(1, nxt)
     got, header, kept = best
     if abs(got / kbps - 1) > 0.06:
-        sys.exit(f"gen_measure_clips: {path}: no encoder target gives {kbps} kbit/s (target, slice: {tries})")
-    print(f"gen_measure_clips: {os.path.basename(path)}: encoder targets and slice kbit/s {tries}", file=sys.stderr)
+        sys.exit(f"no encoder target gives {path} {kbps} kbit/s, encoder targets and slice kbit/s {tries}")
+    print(f"{os.path.basename(path)} encoder targets and slice kbit/s {tries}", file=sys.stderr)
     data = ivf(header, kept)
     with open(path, "wb") as f:
         f.write(data)
     types = [t.split(",")[0] for t in run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                                            "frame=pict_type", "-of", "csv=p=0", path]).decode().split()]
     if len(types) != FRAMES or types[0] != "I" or "I" in types[1:]:
-        sys.exit(f"gen_measure_clips: {path} decodes as {types}, want a key frame then {FRAMES - 1} others")
+        sys.exit(f"{path} decodes as {types}, expected a key frame then {FRAMES - 1} others")
     err = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-v", "error", "-i", path, "-f", "null", "-"],
                          capture_output=True).stderr.decode(errors="replace").strip()
     if err:
-        sys.exit(f"gen_measure_clips: {path} does not decode cleanly: {err[-400:]}")
+        sys.exit(f"ffmpeg decode of {path} failed ({err[-400:]})")
     return data
 
 
@@ -187,8 +187,8 @@ def generate(out, preset=PRESET, only=None, sizes=None):
         data = make(codec, w, h, kbps, os.path.join(out, name(codec, w, h)), preset)
         rows.append(f"{name(codec, w, h)}\t{codec}\t{w}\t{h}\t{FRAMES}\t{len(data)}\t"
                     f"{hashlib.sha256(data).hexdigest()}")
-        print(f"gen_measure_clips: {name(codec, w, h)}: {len(data)} bytes ({len(data) * 8 * 30 // FRAMES // 1000} "
-              f"kbit/s, target {kbps})", file=sys.stderr)
+        print(f"{name(codec, w, h)} bytes={len(data)} kbps={len(data) * 8 * 30 // FRAMES // 1000} "
+              f"target_kbps={kbps}", file=sys.stderr)
     text = "\n".join(rows) + "\n"
     with open(os.path.join(out, "clips.tsv"), "w") as f:
         f.write(text)
@@ -200,8 +200,8 @@ def main():
     ap.add_argument("--out", default=OUT)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--preset", default=PRESET, choices=sorted(PRESETS))
-    ap.add_argument("--only", action="append", choices=["vp9", "av1"], help="make only this codec's clips")
-    ap.add_argument("--size", action="append", help="make only this size's clips (WxH)")
+    ap.add_argument("--only", action="append", choices=["vp9", "av1"], help="codec")
+    ap.add_argument("--size", action="append", help="WxH")
     a = ap.parse_args()
     if a.check:
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,10 +209,10 @@ def main():
         have = open(os.path.join(a.out, "clips.tsv")).read() if os.path.exists(os.path.join(a.out, "clips.tsv")) else ""
         same = [l for l in text.splitlines() if not l.startswith("#")] == \
                [l for l in have.splitlines() if not l.startswith("#")]
-        print("gen_measure_clips: %s %s" % (a.out, "matches" if same else "differs (encoder versions move bytes)"))
+        print("%s %s" % (a.out, "matches" if same else "differs"))
         return 0 if same else 1
     generate(a.out, a.preset, a.only, a.size)
-    print(f"gen_measure_clips: wrote {a.out}", file=sys.stderr)
+    print(f"wrote {a.out}", file=sys.stderr)
     return 0
 
 

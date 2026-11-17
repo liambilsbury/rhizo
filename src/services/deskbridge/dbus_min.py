@@ -16,11 +16,11 @@ class Variant:
         self.value = value
 
     def __eq__(self, other):
-        """return whether another object is a variant with the same signature and value"""
+        """return whether other is a Variant with an equal sig and value"""
         return isinstance(other, Variant) and self.sig == other.sig and self.value == other.value
 
     def __repr__(self):
-        """return the variant as text"""
+        """return Variant(sig, value) as text"""
         return "Variant(%r, %r)" % (self.sig, self.value)
 
 
@@ -29,7 +29,7 @@ class DBusError(Exception):
 
     def __init__(self, name, text):
         """store the error name and text"""
-        super().__init__("%s: %s" % (name, text))
+        super().__init__("%s (%s)" % (name, text))
         self.name = name
         self.text = text
 
@@ -73,7 +73,7 @@ _BASIC_ALIGN = {
 
 
 def parse_one(sig, i):
-    """parse a type from a signature"""
+    """return (node, next index) for the type at sig[i]"""
     c = sig[i]
     if c in _BASIC_ALIGN:
         return c, i + 1
@@ -118,7 +118,7 @@ def _align_of(node):
 
 class _Writer:
     def __init__(self):
-        """start an empty message buffer"""
+        """set buf to an empty bytearray"""
         self.buf = bytearray()
 
     def align(self, n):
@@ -199,7 +199,7 @@ def pack_value(w, node, value):
 
 class _Reader:
     def __init__(self, data, pos):
-        """start a reader over data at a position"""
+        """store data and pos"""
         self.data = data
         self.pos = pos
 
@@ -208,10 +208,10 @@ class _Reader:
         self.pos += (-self.pos) % n
 
     def take(self, n):
-        """return the next n bytes and advance"""
+        """return the next n bytes and advance pos"""
         end = self.pos + n
         if end > len(self.data):
-            raise ValueError("message truncated: wanted %d bytes at %d, have %d" % (n, self.pos, len(self.data)))
+            raise ValueError("%d bytes at offset %d exceed message length %d" % (n, self.pos, len(self.data)))
         b = self.data[self.pos:end]
         self.pos = end
         return b
@@ -292,7 +292,7 @@ class Message:
     """D-Bus message"""
 
     def __init__(self, mtype, flags, serial):
-        """start a message with its type, flags and serial"""
+        """store mtype, flags and serial"""
         self.mtype = mtype
         self.flags = flags
         self.serial = serial
@@ -341,11 +341,11 @@ def build_message(mtype, flags, serial, signature, args, path=None, interface=No
 
 
 def try_parse_message(buf):
-    """parse a message from the buffer start"""
+    """return (Message, length) from the start of buf, or None"""
     if len(buf) < 16:
         return None
     if buf[0] != ord("l"):
-        raise ValueError("unsupported byte order marker %r (only little-endian is spoken)" % buf[0])
+        raise ValueError("unsupported byte order marker %r" % buf[0])
     mtype = buf[1]
     flags = buf[2]
     body_length = struct.unpack_from("<I", buf, 4)[0]
@@ -402,7 +402,7 @@ def _unescape(s):
 
 
 def parse_unix_address(address):
-    """parse path or abstract from a bus address"""
+    """return (path, abstract) of the first unix: transport in address"""
     for entry in address.split(";"):
         if not entry.startswith("unix:"):
             continue
@@ -416,7 +416,7 @@ def parse_unix_address(address):
             return kv["path"], None
         if "abstract" in kv:
             return None, kv["abstract"]
-        raise ValueError("unix transport has neither path= nor abstract=: %r" % entry)
+        raise ValueError("unix transport %r has neither path= nor abstract=" % entry)
     raise ValueError("no unix: transport in bus address %r" % address)
 
 
@@ -430,7 +430,7 @@ def _read_sasl_line(sock, timeout=5.0):
             raise TimeoutError("no SASL line from the bus within %.1fs" % timeout)
         b = sock.recv(1)
         if not b:
-            raise ConnectionError("bus closed during SASL handshake")
+            raise ConnectionError("recv returned EOF during SASL handshake")
         buf += b
     return buf[:-2].decode("ascii")
 
@@ -470,7 +470,7 @@ class Connection:
         if reply.startswith("REJECTED"):
             raise DBusError("org.freedesktop.DBus.Error.AuthFailed", reply)
         if not reply.startswith("OK "):
-            raise DBusError("org.freedesktop.DBus.Error.AuthFailed", "unexpected SASL reply: %s" % reply)
+            raise DBusError("org.freedesktop.DBus.Error.AuthFailed", "SASL reply %s does not start with OK" % reply)
         self.sock.sendall(b"BEGIN\r\n")
 
     def fileno(self):
@@ -482,7 +482,7 @@ class Connection:
         self.sock.close()
 
     def _drain(self):
-        """return every complete message in the input buffer"""
+        """return the complete messages in the input buffer"""
         msgs = []
         while True:
             parsed = try_parse_message(self._inbuf)
@@ -499,7 +499,7 @@ class Connection:
             return
         data = self.sock.recv(65536)
         if not data:
-            raise ConnectionError("bus connection closed")
+            raise ConnectionError("recv returned EOF on the bus connection")
         self._inbuf += data
         self._pending.extend(self._drain())
 
@@ -510,13 +510,13 @@ class Connection:
         return msgs
 
     def _send(self, mtype, flags, signature, args, **kw):
-        """send a message with the next serial and return the serial"""
+        """call sock.sendall with a message of the next serial and return the serial"""
         self._serial += 1
         self.sock.sendall(build_message(mtype, flags, self._serial, signature, args, **kw))
         return self._serial
 
     def call_async(self, dest, path, iface, member, signature, args):
-        """send a method call and return its serial"""
+        """call _send with a METHOD_CALL and return the serial"""
         return self._send(METHOD_CALL, 0, signature, args, path=path,
                           interface=iface, member=member, destination=dest)
 
@@ -537,32 +537,32 @@ class Connection:
             self._pump(remaining)
 
     def hello(self):
-        """say hello to the bus and return the unique name"""
+        """call Hello and return the unique name"""
         body = self.call(_BUS_DEST, _BUS_PATH, _BUS_IFACE, "Hello", "", [])
         self.unique_name = body[0]
         return self.unique_name
 
     def request_name(self, name, flags=0):
-        """request a well-known bus name and return the reply code"""
+        """call RequestName and return the reply code"""
         body = self.call(_BUS_DEST, _BUS_PATH, _BUS_IFACE, "RequestName", "su", [name, flags])
         return body[0]
 
     def add_match(self, rule):
-        """add a match rule to the bus"""
+        """call AddMatch with rule"""
         self.call(_BUS_DEST, _BUS_PATH, _BUS_IFACE, "AddMatch", "s", [rule])
 
     def send_reply(self, msg, signature, args):
-        """send a method return for a message"""
+        """call _send with a METHOD_RETURN for msg"""
         self._send(METHOD_RETURN, FLAG_NO_REPLY_EXPECTED, signature, args,
                     reply_serial=msg.serial, destination=msg.sender)
 
     def send_error(self, msg, error_name, text):
-        """send an error reply for a message"""
+        """call _send with an ERROR for msg"""
         self._send(ERROR, FLAG_NO_REPLY_EXPECTED, "s", [text],
                     error_name=error_name, reply_serial=msg.serial, destination=msg.sender)
 
     def emit_signal(self, path, iface, member, signature, args, destination=None):
-        """emit a signal"""
+        """call _send with a SIGNAL"""
         self._send(SIGNAL, FLAG_NO_REPLY_EXPECTED, signature, args, path=path,
                     interface=iface, member=member, destination=destination)
 
@@ -584,7 +584,7 @@ class Connection:
         self._objects[path] = interfaces_xml
 
     def handle_standard(self, msg):
-        """reply to Introspect and Ping calls"""
+        """call send_reply for a Ping or Introspect METHOD_CALL and return whether msg matched"""
         if msg.mtype != METHOD_CALL:
             return False
         if msg.member == "Ping" and msg.interface in (None, "org.freedesktop.DBus.Peer"):

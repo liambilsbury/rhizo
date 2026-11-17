@@ -8,7 +8,7 @@
 
 namespace rhizo {
 
-// dmabuf frame to present
+// dmabuf frame
 struct WaylandFrame {
   int32_t slot = -1;
   int dmabufFd = -1;
@@ -168,7 +168,7 @@ class WaylandBackend {
   bool PresentFrameWhenSignaled(int64_t displayId, const WaylandFrame& frame);
   // read the compositor's maximum window size for the display
   bool DisplayBounds(int64_t displayId, int32_t* width, int32_t* height) const;
-  // read the size the compositor asked for during an edge drag
+  // read the compositor's configure size during an edge drag
   bool DraggedSize(int64_t displayId, int32_t* width, int32_t* height) const;
 
   void SetVsyncEnabled(bool enabled);

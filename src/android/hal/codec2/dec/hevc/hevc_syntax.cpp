@@ -16,7 +16,7 @@ constexpr uint8_t kDefaultInter[64] = {
     20, 20, 20, 20, 20, 20, 24, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25, 25, 25, 25, 25, 28,
     28, 28, 28, 28, 28, 33, 33, 33, 33, 33, 41, 41, 41, 41, 54, 54, 54, 71, 71, 91};
 
-// fill a default scaling list (Tables 7-5, 7-6)
+// fill a Table 7-5 or 7-6 default scaling list
 void DefaultList(int size_id, int matrix_id, uint8_t* list) {
   if (size_id == 0) {
     memset(list, 16, 16);
@@ -214,7 +214,7 @@ void ReadSubLayerHrd(SyntaxReader& r, uint32_t cpb_cnt, bool sub_pic) {
   }
 }
 
-// read past hrd_parameters()
+// read and discard hrd_parameters()
 Parse ReadHrd(SyntaxReader& r, bool common, int max_sub_layers_minus1) {
   bool nal = false, vcl = false, sub_pic = false;
   if (common) {
@@ -307,7 +307,7 @@ Parse ReadVui(SyntaxReader& r, Sps* sps) {
   return r.overrun() ? Parse::kBad : Parse::kOk;
 }
 
-// read the SPS extensions, rejecting range and SCC tools
+// read the SPS extensions and return kUnsupported for a range or SCC tool
 Parse ReadSpsExtensions(SyntaxReader& r) {
   if (!r.Flag("sps_extension_present_flag")) return Parse::kOk;
   bool range = r.Flag("sps_range_extension_flag");

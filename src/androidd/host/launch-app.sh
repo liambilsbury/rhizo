@@ -1,5 +1,5 @@
 #!/bin/sh
-# start the package's activity on a new composer display
+# package activity launch on a composer display
 set -eu
 
 SANDBOX_ID="${RHIZO_SANDBOX_ID:-0}"
@@ -52,7 +52,7 @@ if [ -z "$INIT" ]; then
   [ -n "$INIT" ] || [ -e "$INIT_PID_FILE" ] || [ "$SANDBOX_ID" != 0 ] || INIT=$(stack_init_pid)
   [ -n "$INIT" ] && printf '%s' "$INIT" > "$INIT_CACHE" 2>/dev/null
 fi
-[ -n "$INIT" ] || { echo "rhizo-launch: no init second_stage running" >&2; exit 1; }
+[ -n "$INIT" ] || { echo "no init second_stage process" >&2; exit 1; }
 
 echo "$(date +%s.%N) event=stage pid=$$ name=unfreeze" >> "$LAUNCH_LOG"
 _here=$(dirname "$(readlink -f "$0")")
@@ -62,7 +62,7 @@ for _unfreeze_lib in "$_here/rhizo-cgroup-unfreeze.sh" /root/rhizo-cgroup-unfree
 done
 if command -v rhizo_unfreeze_gate >/dev/null 2>&1; then
   rhizo_unfreeze_gate "$INIT" || {
-    echo "rhizo-launch: the stack is frozen and would not unfreeze" >&2; exit 1; }
+    echo "rhizo_unfreeze_gate $INIT failed" >&2; exit 1; }
 fi
 
 LOG="$RUN_DIR/rhizo-launch.log"
@@ -89,13 +89,13 @@ selinux_mode() {
   fi
   case "$_m" in
     host|namespace) printf '%s\n' "$_m" ;;
-    *) echo "rhizo-launch: the SELinux mode reads '$_m', not host or namespace" >&2; return 1 ;;
+    *) echo "SELinux mode is '$_m', expected host or namespace" >&2; return 1 ;;
   esac
 }
-# run a command in android's shell
+# run a command as u:r:shell:s0 in Android
 ash_inline() {
   _timeout="${2:-30}"
-  _mode=$(selinux_mode) || { echo "rhizo-launch: cannot read the SELinux mode" >&2; return 1; }
+  _mode=$(selinux_mode) || { echo "selinux_mode failed" >&2; return 1; }
   dead_marker="${TMPDIR:-/tmp}/rhizo-ash-dead.${INIT}"
   if [ "$_mode" != namespace ] && [ ! -e "$dead_marker" ]; then
     out=$(nsenter -a -t "$INIT" -- /system/bin/toybox runcon u:r:shell:s0 \
@@ -202,7 +202,7 @@ if [ -n "$bus" ] && [ "$BUSES" -gt 0 ]; then
     awk -v b="$bus" -v p="$PKG" '$1!=b && $2!=p {print}' "$MAP" 2>/dev/null > "$tmp" || true
     echo "$bus $PKG" >> "$tmp"
     chown "$DESKTOP_USER:rhizo" "$tmp" && chmod 0644 "$tmp" \
-      || echo "$(date +%s.%N) audio pkg=$PKG: could not give the map file to $DESKTOP_USER:rhizo before the swap" >> "$LOG"
+      || echo "$(date +%s.%N) audio pkg=$PKG failed to chown or chmod $tmp for $DESKTOP_USER:rhizo" >> "$LOG"
     mv "$tmp" "$MAP"
     map_b64=$(base64 -w0 < "$MAP")
   else
@@ -233,16 +233,16 @@ echo "$(date +%s.%N) event=stage pid=$$ name=dispatch" >> "$LAUNCH_LOG"
 view_uri_b64=$(printf '%s' "$VIEW_URI" | base64 | tr -d '\n')
 view_mime_b64=$(printf '%s' "$VIEW_MIME" | base64 | tr -d '\n')
 on_top_deadline=$(( $(date +%s) + GUEST_CALL_TIMEOUT_S - ON_TOP_CHANNEL_MARGIN_S ))
-# print the desktop's xdg-activation token argument
+# print XDG_ACTIVATION_TOKEN when XDG_ACTIVATION_TOKEN is one word of at most 255 characters
 activation_token_arg() {
   [ -n "${XDG_ACTIVATION_TOKEN:-}" ] || return 0
   case "$XDG_ACTIVATION_TOKEN" in
     *[!A-Za-z0-9_.:/+=@-]*)
-      echo "$(date +%s.%N) activation pkg=$PKG: XDG_ACTIVATION_TOKEN is not one word of [A-Za-z0-9_.:/+=@-], not sent" >> "$LOG"
+      echo "$(date +%s.%N) activation pkg=$PKG XDG_ACTIVATION_TOKEN is not one word of [A-Za-z0-9_.:/+=@-]" >> "$LOG"
       return 0 ;;
   esac
   if [ "${#XDG_ACTIVATION_TOKEN}" -gt 255 ]; then
-    echo "$(date +%s.%N) activation pkg=$PKG: XDG_ACTIVATION_TOKEN is ${#XDG_ACTIVATION_TOKEN} characters, limit is 255, not sent" >> "$LOG"
+    echo "$(date +%s.%N) activation pkg=$PKG XDG_ACTIVATION_TOKEN length ${#XDG_ACTIVATION_TOKEN} exceeds 255" >> "$LOG"
     return 0
   fi
   printf '%s' "$XDG_ACTIVATION_TOKEN"
@@ -261,7 +261,7 @@ fi
 fail_line=$(printf '%s\n' "$out" | grep '^stage=fail ' | tail -1)
 if [ -n "$fail_line" ]; then
   reason=$(printf '%s\n' "$fail_line" | sed -n 's/.*reason=\([^ ]*\).*/\1/p')
-  echo "rhizo-launch: $(date +%s) FAIL pkg=$PKG activity=$ACT: ${reason:-guest script failed}" >> "$LOG"
+  echo "$(date +%s) FAIL pkg=$PKG activity=$ACT reason=${reason:-none}" >> "$LOG"
   case "$reason" in
     not-on-top) exit 3 ;;
     launch-error) exit 4 ;;
@@ -271,14 +271,14 @@ if [ -n "$fail_line" ]; then
 fi
 done_line=$(printf '%s\n' "$out" | grep '^stage=done ')
 if [ -z "$done_line" ]; then
-  echo "rhizo-launch: $(date +%s) FAIL pkg=$PKG activity=$ACT: guest script produced no completion trailer (channel timeout, crash, or truncated output)" >> "$LOG"
+  echo "$(date +%s) FAIL pkg=$PKG activity=$ACT no stage=done line from rhizo-launch-app.sh" >> "$LOG"
   exit 1
 fi
 logid=$(printf '%s\n' "$done_line" | sed -n 's/.*logid=\([0-9]*\).*/\1/p')
 cdisplay=$(printf '%s\n' "$done_line" | sed -n 's/.*cid=\([0-9]*\).*/\1/p')
 committed=$(printf '%s\n' "$done_line" | sed -n 's/.*committed=\([A-Za-z]*\).*/\1/p')
 if [ -z "$logid" ]; then
-  echo "rhizo-launch: $(date +%s) FAIL pkg=$PKG activity=$ACT: done trailer carried no logid" >> "$LOG"
+  echo "$(date +%s) FAIL pkg=$PKG activity=$ACT stage=done line has no logid" >> "$LOG"
   exit 1
 fi
 
@@ -300,13 +300,13 @@ printf '%s\n' "$out" | while IFS= read -r _line; do
           _abus=$(printf '%s\n' "$_line" | sed -n 's/.* bus=\([^ ]*\).*/\1/p')
           _astate=$(printf '%s\n' "$_line" | sed -n 's/.* state=//p')
           if [ "$_astate" = write-failed ]; then
-            echo "$(date +%s.%N) audio pkg=$PKG: probe-channel map write FAILED" >> "$LOG"
+            echo "$(date +%s.%N) audio pkg=$PKG failed to write /data/rhizo_audio_map/audio_map" >> "$LOG"
           else
             echo "$(date +%s.%N) audio pkg=$PKG bus=$_abus -> $_astate" >> "$LOG"
           fi
           ;;
         *)
-          echo "$(date +%s.%N) audio pkg=$PKG: no bus assigned, sharing primary output" >> "$LOG"
+          echo "$(date +%s.%N) audio pkg=$PKG bus=none" >> "$LOG"
           ;;
       esac
       ;;

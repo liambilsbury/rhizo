@@ -60,43 +60,43 @@ static u64 boottime_ns(void)
 
 static int g_quiet;
 
-// print a prefixed message to stderr unless quiet
+// print "[rhizo-delayd] " and fmt to stderr unless g_quiet is set
 static void logmsg(const char *fmt, ...)
 {
 	va_list ap;
 	if (g_quiet)
 		return;
 	va_start(ap, fmt);
-	fputs("rhizo-delayd: ", stderr);
+	fputs("[rhizo-delayd] ", stderr);
 	vfprintf(stderr, fmt, ap);
 	fputc('\n', stderr);
 	va_end(ap);
 	fflush(stderr);
 }
 
-// exit with an out-of-memory message when an allocation failed
+// print out of memory and call _exit(70) when q is NULL
 static void *oom_check(void *q)
 {
 	if (!q) {
-		fputs("rhizo-delayd: out of memory\n", stderr);
+		fputs("[rhizo-delayd] out of memory\n", stderr);
 		_exit(70);
 	}
 	return q;
 }
 
-// reallocate memory, exiting when it fails
+// call realloc and exit when realloc returns NULL
 static void *xrealloc(void *p, size_t n)
 {
 	return oom_check(realloc(p, n ? n : 1));
 }
 
-// allocate zeroed memory, exiting when it fails
+// call calloc and exit when calloc returns NULL
 static void *xcalloc(size_t n, size_t m)
 {
 	return oom_check(calloc(n ? n : 1, m ? m : 1));
 }
 
-// read a file into a buffer and return its length, or -1
+// read a file into a buffer and return the byte count, or -1
 static int read_text(const char *path, char *buf, size_t cap)
 {
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -150,7 +150,7 @@ static u32 rd32(const u8 *p) { u32 v; memcpy(&v, p, 4); return v; }
 // read a 64-bit value from unaligned bytes
 static u64 rd64(const u8 *p) { u64 v; memcpy(&v, p, 8); return v; }
 
-// replace whitespace and control characters in a name with underscores
+// replace bytes <= ' ' and 0x7f in s with '_'
 static void sanitize_name(char *s)
 {
 	for (; *s; s++)
@@ -363,7 +363,7 @@ struct layout {
 	struct evfmt evfmt[N_EV];
 };
 
-// find a named field of an event format
+// copy off, size and sgn of field name in ev into r
 static int bind_field(const struct evfmt *ev, const char *name, struct fref *r)
 {
 	for (int i = 0; i < ev->nf; i++)
@@ -484,7 +484,7 @@ static int layout_build(struct layout *L, const char *header_page, const char *h
 {
 	memset(L, 0, sizeof *L);
 	if (parse_header_page(header_page, &L->pg)) {
-		logmsg("header_page not understood");
+		logmsg("failed to parse header_page");
 		return -1;
 	}
 	if (parse_header_event(header_event, &L->pg)) {
@@ -494,7 +494,7 @@ static int layout_build(struct layout *L, const char *header_page, const char *h
 	struct evfmt *ev = L->evfmt;
 	for (int i = 0; i < N_EV; i++) {
 		if (parse_event_format(fmt_text[i], &ev[i])) {
-			logmsg("format of %s not understood", EV_NAMES[i]);
+			logmsg("failed to parse the format of %s", EV_NAMES[i]);
 			return -1;
 		}
 		L->id[i] = ev[i].id;
@@ -619,7 +619,7 @@ struct ev {
 	u16 cpu;
 };
 
-// read a field value from a record, or -1 if it is out of range
+// read a field value from a record and return -1 when the field is out of range
 static int fval(const u8 *rec, unsigned len, const struct fref *f, s64 *out)
 {
 	if (f->off < 0 || f->off + f->size > (int)len)
@@ -727,7 +727,7 @@ struct namemap {
 
 static struct namemap_ent *nm_find(struct namemap *m, int key, int create);
 
-// double the capacity of a name map and reinsert its entries
+// double the capacity of a name map and reinsert the entries
 static void nm_grow(struct namemap *m)
 {
 	struct namemap old = *m;
@@ -742,7 +742,7 @@ static void nm_grow(struct namemap *m)
 	free(old.e);
 }
 
-// find the entry of a key in a name map, optionally creating it
+// find the entry of a key in a name map and create the entry when create is set
 static struct namemap_ent *nm_find(struct namemap *m, int key, int create)
 {
 	if (!m->cap || (create && (m->n + 1) * 2 > m->cap)) {
@@ -767,7 +767,7 @@ static struct namemap_ent *nm_find(struct namemap *m, int key, int create)
 	}
 }
 
-// check the entry for key against val
+// return whether the entry for key equals val, and store val otherwise
 static int nm_same(struct namemap *m, int key, const char *val)
 {
 	struct namemap_ent *x = nm_find(m, key, 1);
@@ -777,14 +777,14 @@ static int nm_same(struct namemap *m, int key, const char *val)
 	return 0;
 }
 
-// return whether a name map holds a name for a key
+// return whether the entry for key in a name map is non-empty
 static int nm_has(struct namemap *m, int key)
 {
 	struct namemap_ent *x = nm_find(m, key, 0);
 	return x && x->val[0];
 }
 
-// clear the name of a key in a name map
+// clear the value of key in a name map
 static void nm_forget(struct namemap *m, int key)
 {
 	struct namemap_ent *x = nm_find(m, key, 0);
@@ -859,7 +859,7 @@ static void conn_flushpkt(struct conn *c)
 	c->pktlen = 0;
 }
 
-// append a line to the connection's packet, flushing when full
+// append a line to the connection's packet and flush the packet past PKT_MAX
 static void conn_raw(struct conn *c, const char *line, size_t len)
 {
 	if (c->pktlen + len > PKT_MAX)
@@ -868,7 +868,7 @@ static void conn_raw(struct conn *c, const char *line, size_t len)
 	c->pktlen += len;
 }
 
-// format a line and append it to the connection's packet
+// format a line and append the line to the connection's packet
 static void conn_line(struct conn *c, const char *fmt, ...)
 {
 	char tmp[512];
@@ -881,7 +881,7 @@ static void conn_line(struct conn *c, const char *fmt, ...)
 	conn_raw(c, tmp, (size_t)n);
 }
 
-// send the queued packets on the socket
+// call send for the queued packets
 static void conn_send(struct conn *c)
 {
 	conn_flushpkt(c);
@@ -971,7 +971,7 @@ struct engine {
 	u64 events, lost_pages, lost_drops, late, malformed, unresolved, records, dropped_conns;
 };
 
-// initialize an engine with its process operations and CPU count
+// initialize an engine with process operations and a CPU count
 static void eng_init(struct engine *e, const struct procops *ops, int self_pid, int ncpu)
 {
 	memset(e, 0, sizeof *e);
@@ -1027,7 +1027,7 @@ static void load_pname(struct engine *e, int tid, struct aproc *p)
 	}
 }
 
-// set the thread name from its comm
+// set the thread name from /proc/<tid>/comm
 static void load_comm(struct engine *e, struct task *t)
 {
 	char b[NAME_MAX_ANDROID + 1];
@@ -1070,7 +1070,7 @@ static int resolve_ids(struct engine *e, struct task *t)
 	return 0;
 }
 
-// reload the command and process names of a task
+// reload the comm and process name of a task
 static void refresh_names(struct engine *e, struct task *t)
 {
 	load_comm(e, t);
@@ -1078,7 +1078,7 @@ static void refresh_names(struct engine *e, struct task *t)
 		load_pname(e, t->tid, t->proc);
 }
 
-// attach a task to a sandbox and put it to sleep
+// attach a task to a sandbox and set the task state to ST_SLEEP
 static void attach_sandbox(struct engine *e, struct task *t, struct sbx *sb)
 {
 	t->sb = sb;
@@ -1133,7 +1133,7 @@ static struct task *task_new(struct engine *e, int tid)
 	return t;
 }
 
-// find a task by id, creating it when missing
+// find a task by id and create the task when missing
 static struct task *get_task(struct engine *e, int tid)
 {
 	struct task *t = task_find(e, tid);
@@ -1154,7 +1154,7 @@ static void list_add(struct engine *e, int cpu, struct task *t)
 	e->rl[cpu] = t;
 }
 
-// remove a task from its run list
+// remove a task from the run list of t->cpu
 static void list_del(struct engine *e, struct task *t)
 {
 	if (t->lprev)
@@ -1166,7 +1166,7 @@ static void list_del(struct engine *e, struct task *t)
 	t->lnext = t->lprev = NULL;
 }
 
-// send the process line to the connection
+// queue the p line of a process on the connection
 static void ensure_p(struct conn *c, struct aproc *p)
 {
 	char line[200];
@@ -1175,7 +1175,7 @@ static void ensure_p(struct conn *c, struct aproc *p)
 		conn_raw(c, line, strlen(line));
 }
 
-// send the t line of a task
+// queue the t line of a task
 static void ensure_t(struct conn *c, struct task *t)
 {
 	char line[200];
@@ -1186,13 +1186,13 @@ static void ensure_t(struct conn *c, struct task *t)
 		conn_raw(c, line, strlen(line));
 }
 
-// return whether a process has counts not yet sent
+// return whether work_periods or host_delayed differ from sent_wp or sent_hd
 static int proc_dirty(const struct aproc *p)
 {
 	return p->work_periods != p->sent_wp || p->host_delayed != p->sent_hd;
 }
 
-// send the process counts to the connection
+// queue the c line of a process
 static void emit_c(struct engine *e, struct aproc *p)
 {
 	struct conn *c = p->sb->conn;
@@ -1207,7 +1207,7 @@ static void emit_c(struct engine *e, struct aproc *p)
 		  (unsigned long long)p->host_delayed);
 }
 
-// send the final counts of an exiting process and forget it
+// queue the final c and x lines of an exiting process and free the process
 static void proc_exit(struct engine *e, struct aproc *p)
 {
 	struct conn *c = p->sb->conn;
@@ -1226,7 +1226,7 @@ static void proc_exit(struct engine *e, struct aproc *p)
 	free(p);
 }
 
-// send the d line for a record
+// queue the d line for a record
 static void emit_record(struct engine *e, struct task *t, u64 start, u64 end, u64 held)
 {
 	t->wp_held += held / 1000;
@@ -1312,7 +1312,7 @@ static void apply(struct engine *e, struct task *t, u64 a, u64 b, int held)
 	}
 }
 
-// compare the sandboxes of two tasks
+// return whether occ_tid is nonzero and in a different sandbox from t
 static int is_held(struct engine *e, const struct task *t, int occ_tid)
 {
 	if (occ_tid == 0)
@@ -1334,7 +1334,7 @@ static void settle(struct engine *e, struct task *t, u64 now)
 	t->last_ts = now;
 }
 
-// settle all of the tasks on the run lists at a time
+// settle the tasks of rl and run at now
 static void scan_active(struct engine *e, u64 now)
 {
 	for (int c = 0; c < e->ncpu; c++) {
@@ -1345,7 +1345,7 @@ static void scan_active(struct engine *e, u64 now)
 	}
 }
 
-// update the held state of tasks on a CPU when its occupant changes
+// settle the run list of cpu when occ[cpu] changes to next
 static void occ_change(struct engine *e, int cpu, int next, u64 ts)
 {
 	if (e->occ[cpu] != next)
@@ -1355,7 +1355,7 @@ static void occ_change(struct engine *e, int cpu, int next, u64 ts)
 	e->occ[cpu] = next;
 }
 
-// remove a task from its cpu
+// remove a task from t->cpu
 static void leave_cpu(struct engine *e, struct task *t, u64 ts)
 {
 	settle(e, t, ts);
@@ -1460,7 +1460,7 @@ static void on_migrate(struct engine *e, const struct ev *v)
 	move_runnable(e, t, dest);
 }
 
-// forget a task and release what it holds
+// close the episode and work period of a task and free the task
 static void drop_task(struct engine *e, struct task *t, u64 ts)
 {
 	if (t->sb) {
@@ -1557,7 +1557,7 @@ static void eng_event(struct engine *e, const struct ev *in)
 	}
 }
 
-// send the due c lines
+// queue the due c lines
 static void eng_tick(struct engine *e, u64 now)
 {
 	if (now > e->now)
@@ -1758,10 +1758,10 @@ static u64 merge_run(struct engine *e, struct evq *q, int ncpu, u64 wm)
 	}
 }
 
-// return now minus the watermark, or 0 when now is smaller
+// return now - WATERMARK_NS, or 0 when now <= WATERMARK_NS
 static u64 watermark(u64 now) { return now > WATERMARK_NS ? now - WATERMARK_NS : 0; }
 
-// read a file of a process under /proc into a buffer
+// read /proc/<id>/<leaf> into buf
 static int proc_read(int id, const char *leaf, char *buf, size_t cap)
 {
 	char path[64];
@@ -1769,7 +1769,7 @@ static int proc_read(int id, const char *leaf, char *buf, size_t cap)
 	return read_text(path, buf, cap);
 }
 
-// list the numeric names in a directory
+// list the numeric entries of a directory
 static int real_list_ids(const char *dir, int **out)
 {
 	DIR *d = opendir(dir);
@@ -1831,7 +1831,7 @@ static int real_pid_ns(void *c, int tid, u64 *ino)
 	return read_pid_ns(tid, "pid", ino);
 }
 
-// get the last integer of a status line
+// parse the last integer on the key line of text
 static int status_last(const char *text, const char *key, int *out)
 {
 	size_t kl = strlen(key);
@@ -1862,7 +1862,7 @@ static int real_pid_ns_children(void *c, int tid, u64 *ino)
 	return read_pid_ns(tid, "pid_for_children", ino);
 }
 
-// read the last namespace thread id of a thread from its status
+// read the last NSpid value from /proc/<tid>/status
 static int real_nspid_last(void *c, int tid, int *id)
 {
 	(void)c;
@@ -1908,7 +1908,7 @@ static int real_comm(void *c, int tid, char *buf, size_t n)
 	return 0;
 }
 
-// read the process name of a thread
+// read /proc/<tid>/cmdline, or /proc/<tid>/comm when cmdline is empty
 static int real_pname(void *c, int tid, char *buf, size_t n)
 {
 	if (proc_read(tid, "cmdline", buf, n) > 0 && buf[0])
@@ -1929,7 +1929,7 @@ struct inst {
 	struct layout L;
 };
 
-// stat the instances directory of root
+// return whether root/instances is a directory
 static int has_instances_dir(const char *root)
 {
 	char p[512];
@@ -1956,13 +1956,13 @@ static int inst_write(const struct inst *in, const char *leaf, const char *val)
 	char p[640];
 	snprintf(p, sizeof p, "%s/%s", in->dir, leaf);
 	if (write_text(p, val)) {
-		logmsg("write %s=%s: %s", p, val, strerror(errno));
+		logmsg("failed to write %s=%s (%s)", p, val, strerror(errno));
 		return -1;
 	}
 	return 0;
 }
 
-// close the instance's descriptors and free its state
+// close the instance descriptors, free the instance arrays and rmdir the instance
 static void inst_teardown(struct inst *in)
 {
 	for (int i = 0; i < in->ncpu; i++)
@@ -1974,7 +1974,7 @@ static void inst_teardown(struct inst *in)
 	in->fd = NULL;
 	in->drop_prev = NULL;
 	if (in->dir[0] && rmdir(in->dir) && errno != ENOENT)
-		logmsg("rmdir %s: %s", in->dir, strerror(errno));
+		logmsg("rmdir %s failed (%s)", in->dir, strerror(errno));
 }
 
 // create the tracefs instance
@@ -1983,9 +1983,9 @@ static int inst_setup(struct inst *in, const char *root, const char *name, int b
 	memset(in, 0, sizeof *in);
 	snprintf(in->dir, sizeof in->dir, "%s/instances/%s", root, name);
 	if (rmdir(in->dir) && errno != ENOENT)
-		logmsg("leftover instance %s not removable: %s", in->dir, strerror(errno));
+		logmsg("rmdir %s failed (%s)", in->dir, strerror(errno));
 	if (mkdir(in->dir, 0755)) {
-		logmsg("mkdir %s: %s", in->dir, strerror(errno));
+		logmsg("mkdir %s failed (%s)", in->dir, strerror(errno));
 		in->dir[0] = 0;
 		return -1;
 	}
@@ -2002,13 +2002,13 @@ static int inst_setup(struct inst *in, const char *root, const char *name, int b
 	snprintf(p, sizeof p, "%s/events/header_event", in->dir);
 	int r2 = read_text(p, he, sizeof he);
 	if (r1 < 0 || r2 < 0) {
-		logmsg("cannot read header_page/header_event under %s", in->dir);
+		logmsg("failed to read header_page or header_event under %s", in->dir);
 		goto fail;
 	}
 	for (int i = 0; i < N_EV; i++) {
 		snprintf(p, sizeof p, "%s/events/sched/%s/format", in->dir, EV_NAMES[i]);
 		if (read_text(p, ft[i], sizeof ft[i]) < 0) {
-			logmsg("cannot read %s: %s", p, strerror(errno));
+			logmsg("failed to read %s (%s)", p, strerror(errno));
 			goto fail;
 		}
 		fp[i] = ft[i];
@@ -2016,7 +2016,7 @@ static int inst_setup(struct inst *in, const char *root, const char *name, int b
 	if (layout_build(&in->L, hp, he, fp))
 		goto fail;
 	if (in->L.fmt_default)
-		logmsg("sched_switch print fmt not understood; using prev_state mask 0xff and preempt flag 0x100");
+		logmsg("failed to parse the sched_switch print fmt, run_mask=0xff preempt_flag=0x100");
 	for (int i = 0; i < N_EV; i++) {
 		char leaf[96];
 		snprintf(leaf, sizeof leaf, "events/sched/%s/enable", EV_NAMES[i]);
@@ -2026,7 +2026,7 @@ static int inst_setup(struct inst *in, const char *root, const char *name, int b
 	snprintf(p, sizeof p, "%s/per_cpu", in->dir);
 	DIR *d = opendir(p);
 	if (!d) {
-		logmsg("opendir %s: %s", p, strerror(errno));
+		logmsg("opendir %s failed (%s)", p, strerror(errno));
 		goto fail;
 	}
 	struct dirent *de;
@@ -2044,7 +2044,7 @@ static int inst_setup(struct inst *in, const char *root, const char *name, int b
 		snprintf(p, sizeof p, "%s/per_cpu/cpu%d/trace_pipe_raw", in->dir, i);
 		in->fd[i] = open(p, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 		if (in->fd[i] < 0)
-			logmsg("open %s: %s", p, strerror(errno));
+			logmsg("open %s failed (%s)", p, strerror(errno));
 	}
 	if (inst_write(in, "tracing_on", "1"))
 		goto fail;
@@ -2076,7 +2076,7 @@ struct cbctx {
 	u64 bad;
 };
 
-// decode a raw event and queue it
+// decode a raw event and push the event onto the queue
 static void queue_cb(void *ctx, const struct rawev *r)
 {
 	struct cbctx *c = ctx;
@@ -2096,7 +2096,7 @@ static void queue_cb(void *ctx, const struct rawev *r)
 		c->bad++;
 }
 
-// read a cpu's trace pipe into its queue
+// read the trace_pipe_raw of a cpu into q
 static int read_cpu(const struct inst *in, int cpu, struct evq *q, u8 *page, struct decode_stats *ds, u64 *bad)
 {
 	struct cbctx cb = { &in->L, q, 0 };
@@ -2121,7 +2121,7 @@ static int read_cpu(const struct inst *in, int cpu, struct evq *q, u8 *page, str
 static const char *g_selinuxfs = "/sys/fs/selinux";
 static const char *g_attr_current = "/proc/self/attr/current";
 
-// read the recorded SELinux mode
+// parse RHIZO_SELINUX_MODE_FILE or /run/rhizo-selinux-mode
 static int selinux_namespace_mode(void)
 {
 	const char *path = getenv("RHIZO_SELINUX_MODE_FILE");
@@ -2146,7 +2146,7 @@ static int selinux_namespace_mode(void)
 	return -1;
 }
 
-// exec this program in DELAYD_CTX
+// execv /proc/self/exe in DELAYD_CTX
 static void enter_domain(char **argv, int cleanup)
 {
 	struct stat st;
@@ -2193,16 +2193,16 @@ static void enter_domain(char **argv, int cleanup)
 	char exe[512];
 	ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
 	if (n < 0) {
-		logmsg("readlink /proc/self/exe: %s", strerror(errno));
+		logmsg("readlink /proc/self/exe failed (%s)", strerror(errno));
 		exit(1);
 	}
 	exe[n] = 0;
 	execv(exe, argv);
-	logmsg("exec %s: %s", exe, strerror(errno));
+	logmsg("execv %s failed (%s)", exe, strerror(errno));
 	exit(1);
 }
 
-// send READY=1 to systemd
+// sendto READY=1 on NOTIFY_SOCKET
 static void sd_notify_ready(void)
 {
 	const char *path = getenv("NOTIFY_SOCKET");
@@ -2221,11 +2221,11 @@ static void sd_notify_ready(void)
 	if (s < 0)
 		return;
 	if (sendto(s, "READY=1", 7, 0, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + l)) < 0)
-		logmsg("could not tell systemd it is ready: %s", strerror(errno));
+		logmsg("sendto NOTIFY_SOCKET failed (%s)", strerror(errno));
 	close(s);
 }
 
-// write the status text to a file
+// write text to path.tmp and rename path.tmp to path
 static int write_status_atomic(const char *path, const char *text)
 {
 	char tmp[600];
@@ -2244,7 +2244,7 @@ static int write_status_atomic(const char *path, const char *text)
 }
 
 static volatile sig_atomic_t g_stop;
-// set the stop flag
+// set g_stop
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
 
 struct cfg {
@@ -2262,7 +2262,7 @@ static int listen_socket(const char *path)
 	memset(&a, 0, sizeof a);
 	a.sun_family = AF_UNIX;
 	if (strlen(path) >= sizeof a.sun_path) {
-		logmsg("socket path too long");
+		logmsg("socket path is longer than sun_path");
 		return -1;
 	}
 	strcpy(a.sun_path, path);
@@ -2271,14 +2271,14 @@ static int listen_socket(const char *path)
 		return -1;
 	unlink(path);
 	if (bind(s, (struct sockaddr *)&a, sizeof a) || chmod(path, 0666) || listen(s, 8)) {
-		logmsg("socket %s: %s", path, strerror(errno));
+		logmsg("bind, chmod or listen failed for %s (%s)", path, strerror(errno));
 		close(s);
 		return -1;
 	}
 	return s;
 }
 
-// accept pending connections and add them to the engine
+// call accept4 and connect each peer sandbox to the engine
 static void accept_new(struct engine *e, int lfd)
 {
 	for (;;) {
@@ -2298,7 +2298,7 @@ static void accept_new(struct engine *e, int lfd)
 	}
 }
 
-// send queued packets to each peer
+// call conn_send for each connection and free the dead connections
 static int service_conns(struct engine *e)
 {
 	int n = 0;
@@ -2332,7 +2332,7 @@ static int run_remove_instance(const struct cfg *cfg)
 	char dir[512];
 	snprintf(dir, sizeof dir, "%s/instances/%s", root, cfg->instance);
 	if (rmdir(dir) && errno != ENOENT) {
-		logmsg("rmdir %s: %s", dir, strerror(errno));
+		logmsg("rmdir %s failed (%s)", dir, strerror(errno));
 		return 1;
 	}
 	return 0;
@@ -2343,7 +2343,7 @@ static int run_daemon(const struct cfg *cfg)
 {
 	const char *root = tracefs_root(cfg->tracefs);
 	if (!root) {
-		logmsg("no writable tracefs instances directory");
+		logmsg("no tracefs instances directory");
 		return 1;
 	}
 	struct sigaction sa;
@@ -2420,13 +2420,12 @@ static int run_daemon(const struct cfg *cfg)
 			next_status = now + STATUS_NS;
 			char buf[16384];
 			if (status_build(&e, &ds, nconn, buf, sizeof buf) > 0 && write_status_atomic(cfg->status_path, buf))
-				logmsg("status %s: %s", cfg->status_path, strerror(errno));
+				logmsg("failed to write %s (%s)", cfg->status_path, strerror(errno));
 		}
 	}
 	close(lfd);
 	unlink(cfg->socket_path);
 	inst_teardown(&in);
-	logmsg("stopped");
 	return 0;
 }
 
@@ -2461,7 +2460,7 @@ static void fmt_state(char *out, size_t n, u64 st, const struct layout *L)
 		snprintf(out + o, n - o, "+");
 }
 
-// decode a raw event and add its text line to the dump
+// decode a raw event and add the text line to the dump
 static void dump_cb(void *ctx, const struct rawev *r)
 {
 	struct dumpctx *d = ctx;
@@ -2551,7 +2550,7 @@ static int run_dump(const struct cfg *cfg)
 {
 	const char *root = tracefs_root(cfg->tracefs);
 	if (!root) {
-		logmsg("no writable tracefs instances directory");
+		logmsg("no tracefs instances directory");
 		return 1;
 	}
 	struct sigaction sa;
@@ -2594,7 +2593,7 @@ static int run_dump(const struct cfg *cfg)
 		}
 	}
 	fflush(stdout);
-	logmsg("dumped %llu events, %llu malformed", (unsigned long long)ds.events, (unsigned long long)ds.malformed);
+	logmsg("dumped events=%llu malformed=%llu", (unsigned long long)ds.events, (unsigned long long)ds.malformed);
 	free(d.v);
 	free(page);
 	inst_teardown(&in);
@@ -2610,7 +2609,7 @@ static const char *T_case = "";
 			T_pass++; \
 		} else { \
 			T_fail++; \
-			fprintf(stderr, "FAIL [%s] line %d: ", T_case, __LINE__); \
+			fprintf(stderr, "FAIL [%s] line=%d ", T_case, __LINE__); \
 			fprintf(stderr, __VA_ARGS__); \
 			fputc('\n', stderr); \
 		} \
@@ -2750,7 +2749,7 @@ static int fixture_layout(struct layout *L, const struct tfix *F)
 	return layout_build(L, F->hp, HEADER_EVENT, fp);
 }
 
-// zero a record and set its event id
+// zero a record and set the event id
 static void rec_init(u8 *rec, const struct tev *e)
 {
 	memset(rec, 0, 128);
@@ -2925,7 +2924,7 @@ static void pb_tailpad(struct pb *p)
 	p->off = (size_t)p->F->data_size;
 }
 
-// finish the test page and return its commit size
+// write the commit word of the test page and return the page size
 static size_t pb_finish(struct pb *p, u32 flags, u64 missed)
 {
 	u64 commit = p->off;
@@ -2975,59 +2974,59 @@ static struct ev cap_ev(const struct layout *L, const struct rawcap *c, int i, i
 	return e;
 }
 
-// test decode_page and raw_to_ev
+// test layout_build, decode_page, raw_to_ev, dump_cb and fmt_state
 static void test_decoder(void)
 {
 	struct layout A, B;
-	T_case = "layout A parse";
-	CHECK(fixture_layout(&A, &FIX_A) == 0, "layout A did not build");
+	T_case = "layout_build(FIX_A)";
+	CHECK(fixture_layout(&A, &FIX_A) == 0, "fixture_layout(FIX_A) == 0");
 	CHECK(A.pg.page_size == 4096 && A.pg.data_off == 16 && A.pg.commit_size == 8 && A.pg.ts_off == 0 &&
-	      A.pg.commit_off == 8, "page header A %d/%d/%d", A.pg.page_size, A.pg.data_off, A.pg.commit_size);
+	      A.pg.commit_off == 8, "FIX_A page_size == 4096 && data_off == 16 && commit_size == 8 page_size=%d data_off=%d commit_size=%d", A.pg.page_size, A.pg.data_off, A.pg.commit_size);
 	CHECK(A.pg.type_padding == 29 && A.pg.type_extend == 30 && A.pg.type_stamp == 31 && A.pg.data_max == 28,
-	      "header_event types");
+	      "type_padding == 29 && type_extend == 30 && type_stamp == 31 && data_max == 28");
 	CHECK(A.sw_prev.off == 24 && A.sw_next.off == 56 && A.sw_state.off == 32 && A.sw_state.size == 8 &&
-	      A.sw_state.sgn == 1, "sched_switch offsets %d %d %d", A.sw_prev.off, A.sw_next.off, A.sw_state.off);
+	      A.sw_state.sgn == 1, "prev_pid off == 24 && next_pid off == 56 && prev_state off == 32 prev=%d next=%d state=%d", A.sw_prev.off, A.sw_next.off, A.sw_state.off);
 	CHECK(A.wk_pid[0].off == 24 && A.wk_cpu[0].off == 32 && A.mg_orig.off == 32 && A.mg_dest.off == 36 &&
-	      A.fk_child.off == 44 && A.ex_pid.off == 24, "other offsets");
-	CHECK(A.id[K_SWITCH] == 316 && A.id[K_EXIT] == 322, "ids");
-	CHECK(A.run_mask == 0xff && A.preempt_flag == 0x100 && !A.fmt_default, "A masks %llx %llx fallback=%d",
+	      A.fk_child.off == 44 && A.ex_pid.off == 24, "wake, migrate, fork and exit field offsets == FIX_A");
+	CHECK(A.id[K_SWITCH] == 316 && A.id[K_EXIT] == 322, "id[K_SWITCH] == 316 && id[K_EXIT] == 322");
+	CHECK(A.run_mask == 0xff && A.preempt_flag == 0x100 && !A.fmt_default, "run_mask == 0xff && preempt_flag == 0x100 && !fmt_default run_mask=%llx preempt_flag=%llx fmt_default=%d",
 	      (unsigned long long)A.run_mask, (unsigned long long)A.preempt_flag, A.fmt_default);
 
-	T_case = "layout B parse (nothing hard-coded)";
-	CHECK(fixture_layout(&B, &FIX_B) == 0, "layout B did not build");
-	CHECK(B.pg.page_size == 4096 && B.pg.data_off == 12 && B.pg.commit_size == 4, "page header B");
+	T_case = "layout_build(FIX_B)";
+	CHECK(fixture_layout(&B, &FIX_B) == 0, "fixture_layout(FIX_B) == 0");
+	CHECK(B.pg.page_size == 4096 && B.pg.data_off == 12 && B.pg.commit_size == 4, "FIX_B page_size == 4096 && data_off == 12 && commit_size == 4");
 	CHECK(B.sw_state.off == 32 && B.sw_state.size == 4 && B.sw_state.sgn == 0 && B.sw_next.off == 52,
-	      "B switch offsets");
-	CHECK(B.wk_cpu[0].off == 24 && B.wk_pid[0].off == 28 && B.mg_dest.off == 32 && B.mg_orig.off == 36, "B wake/migrate");
-	CHECK(B.run_mask == 0x1ff && B.preempt_flag == 0x200 && !B.fmt_default, "B masks %llx %llx",
+	      "FIX_B prev_state off == 32 && size == 4 && sgn == 0 && next_pid off == 52");
+	CHECK(B.wk_cpu[0].off == 24 && B.wk_pid[0].off == 28 && B.mg_dest.off == 32 && B.mg_orig.off == 36, "FIX_B target_cpu off == 24 && pid off == 28 && dest_cpu off == 32 && orig_cpu off == 36");
+	CHECK(B.run_mask == 0x1ff && B.preempt_flag == 0x200 && !B.fmt_default, "run_mask == 0x1ff && preempt_flag == 0x200 && !fmt_default run_mask=%llx preempt_flag=%llx",
 	      (unsigned long long)B.run_mask, (unsigned long long)B.preempt_flag);
 
-	T_case = "print fmt default";
+	T_case = "bind_state_masks default";
 	{
 		struct tfix bad = FIX_A;
 		bad.ev[K_SWITCH].print = "\"prev_state=%d\", REC->prev_state";
 		struct layout F;
 		CHECK(fixture_layout(&F, &bad) == 0 && F.fmt_default && F.run_mask == 0xff && F.preempt_flag == 0x100,
-		      "an unreadable print fmt falls back to 6.8's masks");
+		      "print fmt with no masks gives fmt_default && run_mask == 0xff && preempt_flag == 0x100");
 		bad.ev[K_SWITCH].print = "\"x\", REC->prev_state & (0x1 << ), REC->prev_state & (0x2 +)";
-		CHECK(fixture_layout(&F, &bad) == 0 && F.fmt_default, "a print fmt with broken arithmetic falls back");
+		CHECK(fixture_layout(&F, &bad) == 0 && F.fmt_default, "print fmt with a parse error gives fmt_default == 1");
 	}
 
-	T_case = "malformed formats are refused";
+	T_case = "layout_build malformed formats";
 	{
 		struct layout F;
 		const char *fp[N_EV];
 		for (int i = 0; i < N_EV; i++)
 			fp[i] = FMT_TEXT[i];
 		fixture_layout(&F, &FIX_A);
-		CHECK(layout_build(&F, "garbage", HEADER_EVENT, fp) != 0, "header_page garbage accepted");
+		CHECK(layout_build(&F, "garbage", HEADER_EVENT, fp) != 0, "layout_build(header_page garbage) != 0");
 		CHECK(layout_build(&F, FIX_A.hp, "type_len : 6 bits\ntime_delta : 26 bits\n", fp) != 0,
-		      "a header that is not the 5/27 compressed one accepted");
+		      "layout_build(6/26-bit header_event) != 0");
 		fp[K_FORK] = "name: sched_process_fork\nID: 5\nformat:\n\tfield:int common_pid;\toffset:4;\tsize:4;\tsigned:1;\n";
-		CHECK(layout_build(&F, FIX_A.hp, HEADER_EVENT, fp) != 0, "an event missing its fields accepted");
+		CHECK(layout_build(&F, FIX_A.hp, HEADER_EVENT, fp) != 0, "layout_build(sched_process_fork with no fields) != 0");
 	}
 
-	T_case = "decode: delta, discard, big, extend, absolute, tail padding";
+	T_case = "decode_page delta, discard, big, extend, absolute and tail padding";
 	{
 		struct pb p;
 		u8 rec[128];
@@ -3054,29 +3053,29 @@ static void test_decoder(void)
 		pb_tailpad(&p);
 		size_t sz = pb_finish(&p, 0, 0);
 		decode_page(&A.pg, 3, p.page, sz, cap_cb, &cap, &st);
-		CHECK(cap.n == 6, "decoded %d events, want 6", cap.n);
-		CHECK(st.events == 6 && st.padding == 2 && st.malformed == 0 && st.pages == 1, "stats ev=%llu pad=%llu bad=%llu",
+		CHECK(cap.n == 6, "cap.n == 6 n=%d", cap.n);
+		CHECK(st.events == 6 && st.padding == 2 && st.malformed == 0 && st.pages == 1, "events == 6 && padding == 2 && malformed == 0 && pages == 1 events=%llu padding=%llu malformed=%llu",
 		      (unsigned long long)st.events, (unsigned long long)st.padding, (unsigned long long)st.malformed);
 		static const u64 want_ts[6] = { 1001000, 1001500 + 0, 1003000, 1003100, 1003100 + 300000000ULL, 9000000100ULL };
 		for (int i = 0; i < cap.n && i < 6; i++)
-			CHECK(cap.e[i].ts == (i == 1 ? 1001500 : want_ts[i]) && cap.e[i].cpu == 3, "event %d ts=%llu cpu=%d", i,
+			CHECK(cap.e[i].ts == (i == 1 ? 1001500 : want_ts[i]) && cap.e[i].cpu == 3, "event %d ts == want_ts && cpu == 3 ts=%llu cpu=%d", i,
 			      (unsigned long long)cap.e[i].ts, cap.e[i].cpu);
 		int ok;
 		struct ev e = cap_ev(&A, &cap, 0, &ok);
-		CHECK(ok == 1 && e.kind == K_SWITCH && e.a == 100 && e.b == 200 && e.c == 0, "switch: a=%d b=%d c=%d", e.a, e.b, e.c);
+		CHECK(ok == 1 && e.kind == K_SWITCH && e.a == 100 && e.b == 200 && e.c == 0, "K_SWITCH a == 100 && b == 200 && c == 0 a=%d b=%d c=%d", e.a, e.b, e.c);
 		e = cap_ev(&A, &cap, 1, &ok);
-		CHECK(ok == 1 && e.kind == K_WAKING && e.a == 300 && e.b == 2, "waking");
+		CHECK(ok == 1 && e.kind == K_WAKING && e.a == 300 && e.b == 2, "K_WAKING a == 300 && b == 2");
 		e = cap_ev(&A, &cap, 2, &ok);
-		CHECK(ok == 1 && e.kind == K_WAKEUP && e.a == 300 && e.b == 4, "wakeup after the discarded event");
+		CHECK(ok == 1 && e.kind == K_WAKEUP && e.a == 300 && e.b == 4, "K_WAKEUP after padding a == 300 && b == 4");
 		e = cap_ev(&A, &cap, 3, &ok);
-		CHECK(ok == 1 && e.kind == K_MIGRATE && e.a == 300 && e.b == 2 && e.c == 5, "migrate from a type_len 0 event: a=%d b=%d c=%d", e.a, e.b, e.c);
+		CHECK(ok == 1 && e.kind == K_MIGRATE && e.a == 300 && e.b == 2 && e.c == 5, "K_MIGRATE from type_len 0 a == 300 && b == 2 && c == 5 a=%d b=%d c=%d", e.a, e.b, e.c);
 		e = cap_ev(&A, &cap, 4, &ok);
-		CHECK(ok == 1 && e.kind == K_EXIT && e.a == 300, "exit across a time extend");
+		CHECK(ok == 1 && e.kind == K_EXIT && e.a == 300, "K_EXIT after time_extend a == 300");
 		e = cap_ev(&A, &cap, 5, &ok);
-		CHECK(ok == 1 && e.kind == K_FORK && e.a == 1 && e.b == 2, "fork after an absolute time stamp");
+		CHECK(ok == 1 && e.kind == K_FORK && e.a == 1 && e.b == 2, "K_FORK after time_stamp a == 1 && b == 2");
 	}
 
-	T_case = "decode: missed-events flag";
+	T_case = "decode_page RB_MISSED_EVENTS";
 	{
 		struct pb p;
 		u8 rec[128];
@@ -3089,15 +3088,15 @@ static void test_decoder(void)
 		pb_ev(&p, 5100, rec, n);
 		size_t sz = pb_finish(&p, RB_MISSED_EVENTS | RB_MISSED_STORED, 7);
 		decode_page(&A.pg, 1, p.page, sz, cap_cb, &cap, &st);
-		CHECK(cap.n == 2 && cap.e[0].id == -1 && cap.e[0].ts == 5000, "the marker comes first, at the page time");
-		CHECK(cap.n == 2 && cap.e[1].ts == 5100, "the page's own events still decode");
-		CHECK(st.missed_pages == 1 && st.missed_events == 7, "missed pages=%llu events=%llu",
+		CHECK(cap.n == 2 && cap.e[0].id == -1 && cap.e[0].ts == 5000, "cap.n == 2 && e[0].id == -1 && e[0].ts == 5000");
+		CHECK(cap.n == 2 && cap.e[1].ts == 5100, "cap.n == 2 && e[1].ts == 5100");
+		CHECK(st.missed_pages == 1 && st.missed_events == 7, "missed_pages == 1 && missed_events == 7 missed_pages=%llu missed_events=%llu",
 		      (unsigned long long)st.missed_pages, (unsigned long long)st.missed_events);
-		CHECK(st.events == 1 && st.malformed == 0, "length with flags: ev=%llu bad=%llu",
+		CHECK(st.events == 1 && st.malformed == 0, "commit with flags gives events == 1 && malformed == 0 events=%llu malformed=%llu",
 		      (unsigned long long)st.events, (unsigned long long)st.malformed);
 	}
 
-	T_case = "decode: end of data, short commit, truncation";
+	T_case = "decode_page end of data, short commit and truncation";
 	{
 		struct pb p;
 		u8 rec[128];
@@ -3113,7 +3112,7 @@ static void test_decoder(void)
 		pb_ev(&p, 120, rec, n);
 		size_t sz = pb_finish(&p, 0, 0);
 		decode_page(&A.pg, 0, p.page, sz, cap_cb, &cap, &st);
-		CHECK(cap.n == 1, "decoded %d events past a null padding event, want 1", cap.n);
+		CHECK(cap.n == 1, "cap.n == 1 after padding with delta 0 n=%d", cap.n);
 		memset(&st, 0, sizeof st);
 		memset(&cap, 0, sizeof cap);
 		pb_init(&p, &FIX_A, 100);
@@ -3124,22 +3123,22 @@ static void test_decoder(void)
 		u64 c = committed;
 		memcpy(p.page + 8, &c, 8);
 		decode_page(&A.pg, 0, p.page, sz, cap_cb, &cap, &st);
-		CHECK(cap.n == 1, "decoded %d events, the commit allows 1", cap.n);
+		CHECK(cap.n == 1, "cap.n == 1 with a commit of one event n=%d", cap.n);
 		memset(&st, 0, sizeof st);
 		memset(&cap, 0, sizeof cap);
 		c = 40;
 		memcpy(p.page + 8, &c, 8);
 		decode_page(&A.pg, 0, p.page, sz, cap_cb, &cap, &st);
-		CHECK(cap.n == 0 && st.malformed == 1, "truncated event: n=%d bad=%llu", cap.n, (unsigned long long)st.malformed);
+		CHECK(cap.n == 0 && st.malformed == 1, "truncated event gives cap.n == 0 && malformed == 1 n=%d malformed=%llu", cap.n, (unsigned long long)st.malformed);
 		memset(&st, 0, sizeof st);
 		struct rawev r = { 1, 0, 316, rec, 20 };
 		struct ev e;
-		CHECK(raw_to_ev(&A, &r, &e) == -1, "a 20-byte sched_switch accepted");
+		CHECK(raw_to_ev(&A, &r, &e) == -1, "raw_to_ev(20-byte sched_switch) == -1");
 		r.id = 9999;
-		CHECK(raw_to_ev(&A, &r, &e) == 0, "a foreign event id taken");
+		CHECK(raw_to_ev(&A, &r, &e) == 0, "raw_to_ev(id 9999) == 0");
 	}
 
-	T_case = "decode: layout B (32-bit commit, moved fields)";
+	T_case = "decode_page FIX_B 32-bit commit and moved fields";
 	{
 		struct pb p;
 		u8 rec[128];
@@ -3160,21 +3159,21 @@ static void test_decoder(void)
 		pb_ev(&p, 840, rec, n);
 		size_t sz = pb_finish(&p, 0, 0);
 		decode_page(&B.pg, 2, p.page, sz, cap_cb, &cap, &st);
-		CHECK(cap.n == 5 && st.malformed == 0, "decoded %d", cap.n);
+		CHECK(cap.n == 5 && st.malformed == 0, "cap.n == 5 && malformed == 0 n=%d", cap.n);
 		int ok;
 		struct ev e = cap_ev(&B, &cap, 0, &ok);
-		CHECK(ok == 1 && e.kind == K_SWITCH && e.a == 11 && e.b == 22 && e.c == 1, "B: 0x200 is the preempt flag, runnable (c=%d)", e.c);
+		CHECK(ok == 1 && e.kind == K_SWITCH && e.a == 11 && e.b == 22 && e.c == 1, "FIX_B prev_state 0x200 gives c == 1 c=%d", e.c);
 		e = cap_ev(&B, &cap, 1, &ok);
-		CHECK(ok == 1 && e.c == 0, "B: 0x100 is a sleeping state here, not runnable (c=%d)", e.c);
+		CHECK(ok == 1 && e.c == 0, "FIX_B prev_state 0x100 gives c == 0 c=%d", e.c);
 		e = cap_ev(&B, &cap, 2, &ok);
-		CHECK(ok == 1 && e.c == 1, "B: state 0 runnable");
+		CHECK(ok == 1 && e.c == 1, "FIX_B prev_state 0 gives c == 1");
 		e = cap_ev(&B, &cap, 3, &ok);
-		CHECK(ok == 1 && e.kind == K_WAKEUP_NEW && e.a == 42 && e.b == 6, "B wakeup_new pid/cpu moved fields: a=%d b=%d", e.a, e.b);
+		CHECK(ok == 1 && e.kind == K_WAKEUP_NEW && e.a == 42 && e.b == 6, "FIX_B K_WAKEUP_NEW a == 42 && b == 6 a=%d b=%d", e.a, e.b);
 		e = cap_ev(&B, &cap, 4, &ok);
-		CHECK(ok == 1 && e.kind == K_MIGRATE && e.a == 42 && e.b == 3 && e.c == 6, "B migrate swapped fields: b=%d c=%d", e.b, e.c);
+		CHECK(ok == 1 && e.kind == K_MIGRATE && e.a == 42 && e.b == 3 && e.c == 6, "FIX_B K_MIGRATE a == 42 && b == 3 && c == 6 b=%d c=%d", e.b, e.c);
 	}
 
-	T_case = "prev_state runnable decisions (layout A)";
+	T_case = "raw_to_ev prev_state for FIX_A";
 	{
 		static const struct { s64 st; int runnable; } cases[] = {
 			{ 0, 1 }, { 0x100, 1 }, { 0x1, 0 }, { 0x2, 0 }, { 0x4, 0 }, { 0x40, 0 }, { 0x80, 0 }, { 0x101, 0 }, { 0x102, 0 },
@@ -3184,12 +3183,12 @@ static void test_decoder(void)
 			unsigned n = rec_switch(rec, &FIX_A, 1, 2, cases[i].st, "a", "b");
 			struct rawev r = { 1, 0, 316, rec, n };
 			struct ev e;
-			CHECK(raw_to_ev(&A, &r, &e) == 1 && e.c == cases[i].runnable, "prev_state 0x%llx -> runnable=%d, want %d",
+			CHECK(raw_to_ev(&A, &r, &e) == 1 && e.c == cases[i].runnable, "prev_state 0x%llx c == runnable c=%d runnable=%d",
 			      (unsigned long long)cases[i].st, e.c, cases[i].runnable);
 		}
 	}
 
-	T_case = "decoder survives garbage pages";
+	T_case = "decode_page random pages";
 	{
 		u8 page[4096];
 		u64 x = 88172645463325252ULL;
@@ -3212,10 +3211,10 @@ static void test_decoder(void)
 				cap_ev(&A, &cap, k, &ok);
 			}
 		}
-		CHECK(st.pages == 4000, "pages decoded: %llu", (unsigned long long)st.pages);
+		CHECK(st.pages == 4000, "pages == 4000 pages=%llu", (unsigned long long)st.pages);
 	}
 
-	T_case = "dump text";
+	T_case = "dump_cb text";
 	{
 		struct pb p;
 		u8 rec[128];
@@ -3229,21 +3228,21 @@ static void test_decoder(void)
 		size_t sz = pb_finish(&p, 0, 0);
 		struct dumpctx d = { &A, NULL, 0, 0, 0 };
 		decode_page(&A.pg, 3, p.page, sz, dump_cb, &d, &st);
-		CHECK(d.n == 2, "dump lines %zu", d.n);
+		CHECK(d.n == 2, "d.n == 2 n=%zu", d.n);
 		if (d.n == 2) {
 			CHECK(!strcmp(d.v[0].text, "[003]     0.001001: sched_switch: prev_comm=swapper/3 prev_pid=100 prev_prio=120 "
-					  "prev_state=S ==> next_comm=worker next_pid=200 next_prio=120"), "dump switch: %s", d.v[0].text);
+					  "prev_state=S ==> next_comm=worker next_pid=200 next_prio=120"), "dump_cb(sched_switch) text=%s", d.v[0].text);
 			CHECK(!strcmp(d.v[1].text, "[003]     0.001002: sched_waking: comm=wk pid=300 prio=120 target_cpu=002"),
-			      "dump waking: %s", d.v[1].text);
+			      "dump_cb(sched_waking) text=%s", d.v[1].text);
 		}
 		free(d.v);
 		char s[32];
 		fmt_state(s, sizeof s, 0, &A);
-		CHECK(!strcmp(s, "R"), "state 0 -> %s", s);
+		CHECK(!strcmp(s, "R"), "fmt_state(0) == R state=%s", s);
 		fmt_state(s, sizeof s, 0x100, &A);
-		CHECK(!strcmp(s, "R+"), "state 0x100 -> %s", s);
+		CHECK(!strcmp(s, "R+"), "fmt_state(0x100) == R+ state=%s", s);
 		fmt_state(s, sizeof s, 3, &A);
-		CHECK(!strcmp(s, "S|D"), "state 3 -> %s", s);
+		CHECK(!strcmp(s, "S|D"), "fmt_state(3) == S|D state=%s", s);
 	}
 }
 
@@ -3434,7 +3433,7 @@ static void world(int connect)
 
 static char OB[1 << 17];
 static int OB_PKTS;
-// return the text of the packets sent on a connection
+// return the text of the packets queued on a connection
 static const char *collect(struct conn *c)
 {
 	size_t o = 0;
@@ -3446,8 +3445,8 @@ static const char *collect(struct conn *c)
 	while (c->qlen) {
 		u16 l;
 		memcpy(&l, c->q + c->qhead, 2);
-		CHECK(l > 0 && l <= 4096, "packet of %u bytes", l);
-		CHECK(c->q[c->qhead + 2 + l - 1] == '\n', "a packet that does not end on a line");
+		CHECK(l > 0 && l <= 4096, "packet length in 1..4096 length=%u", l);
+		CHECK(c->q[c->qhead + 2 + l - 1] == '\n', "packet ends with \\n");
 		if (o + l < sizeof OB) {
 			memcpy(OB + o, c->q + c->qhead + 2, l);
 			o += l;
@@ -3466,7 +3465,7 @@ static const char *collect(struct conn *c)
 #define EXPECT(conn, want) \
 	do { \
 		const char *got_ = collect(conn); \
-		CHECK(!strcmp(got_, want), "protocol output\n--- got ---\n%s--- want ---\n%s---", got_, want); \
+		CHECK(!strcmp(got_, want), "collect(conn) == want\n--- got ---\n%s--- expected ---\n%s---", got_, want); \
 	} while (0)
 
 // feed a sched_switch event to the test engine
@@ -3532,7 +3531,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 2000000 5000000 3000000 1\nc 2000 1 1\n");
 
-	T_case = "waiting behind a thread of its own sandbox is not blame";
+	T_case = "a wait behind T2 of SA queues no d line";
 	world(1);
 	SW(0, 0, 0, T2, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3541,7 +3540,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP "c 2000 2 0\n");
 
-	T_case = "waiting behind idle is not blame";
+	T_case = "a wait behind idle queues no d line";
 	world(1);
 	WK(K_WAKING, 1 * MS, T1, 2);
 	SW(2, 6 * MS, 0, T1, 0);
@@ -3549,7 +3548,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP "c 2000 1 0\n");
 
-	T_case = "adversary: 990 us held, 10 us run, 50 times, one coalesced record";
+	T_case = "990 us held and 10 us run 50 times queues one d line";
 	world(1);
 	SW(0, 0, 0, T1, 0);
 	for (u64 i = 0; i < 50; i++) {
@@ -3563,7 +3562,7 @@ static void test_scenarios(void)
 	EXPECT(CA, P_APP T_UI "d 2000 2000 10000 50000000 49500000 1\nc 2000 1 1\n");
 	{
 		double span = 50000000.0 - 10000.0, held = 49500000.0;
-		CHECK(held / span > 0.989 && held / span < 0.991, "held is %.3f of the span", held / span);
+		CHECK(held / span > 0.989 && held / span < 0.991, "held / span in (0.989, 0.991) ratio=%.3f", held / span);
 	}
 
 	T_case = "a gap of exactly 1 ms closes the episode";
@@ -3577,7 +3576,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 3000000 2000000 1\nd 2000 2000 4000000 6000000 2000000 1\nc 2000 1 1\n");
 
-	T_case = "a gap of 999 us does not";
+	T_case = "a gap of 999 us does not close the episode";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3588,7 +3587,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 6000000 4001000 1\nc 2000 1 1\n");
 
-	T_case = "sleep closes an episode that the gap rule would have joined";
+	T_case = "a sleep inside GAP_NS closes the episode";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3600,7 +3599,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 2000000 1000000 1\nd 2000 2000 2300000 3300000 1000000 2\nc 2000 2 0\n");
 
-	T_case = "MAX_SPAN splits a long hold at exact boundaries";
+	T_case = "MAX_SPAN_NS splits a 250 ms episode at 100 ms boundaries";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3609,7 +3608,7 @@ static void test_scenarios(void)
 	TICK(300 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 101000000 100000000 1\nd 2000 2000 101000000 201000000 100000000 1\n"
 		   "d 2000 2000 201000000 251000000 50000000 1\nc 2000 1 1\n");
-	T_case = "MAX_SPAN with other events in between: the span is emitted when time passes, not at the end";
+	T_case = "MAX_SPAN_NS with other events queues each span at the span end";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3619,14 +3618,14 @@ static void test_scenarios(void)
 	SW(0, 252 * MS, T1, 0, 0);
 	TICK(300 * MS);
 	EXPECT(CA, "d 2000 2000 101000000 201000000 100000000 1\nd 2000 2000 201000000 251000000 50000000 1\nc 2000 1 1\n");
-	T_case = "MAX_SPAN with only a tick: it emits what has reached the span";
+	T_case = "MAX_SPAN_NS with eng_tick alone queues the first 100 ms span";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
 	TICK(150 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 101000000 100000000 1\n");
 
-	T_case = "the gap restarts at every held instant";
+	T_case = "each held instant resets ep_gap";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3639,7 +3638,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 4300000 2100000 1\nc 2000 1 1\n");
 
-	T_case = "waiting behind idle after a hold closes the episode";
+	T_case = "a wait behind idle after held time closes the episode";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3651,7 +3650,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 2000000 1000000 1\nd 2000 2000 3600000 4600000 1000000 1\nc 2000 1 1\n");
 
-	T_case = "FLOOR drops 0.4 ms, keeps 0.5 ms";
+	T_case = "FLOOR_NS drops a 0.4 ms episode";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3659,7 +3658,7 @@ static void test_scenarios(void)
 	SW(0, 1500 * US, T1, 0, 0);
 	TICK(10 * MS);
 	EXPECT(CA, P_APP "c 2000 1 0\n");
-	T_case = "FLOOR keeps exactly 0.5 ms";
+	T_case = "FLOOR_NS queues a 0.5 ms episode";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3667,7 +3666,7 @@ static void test_scenarios(void)
 	SW(0, 1600 * US, T1, 0, 0);
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 1500000 500000 1\nc 2000 1 0\n");
-	T_case = "FLOOR drops 499999 ns";
+	T_case = "FLOOR_NS drops a 499999 ns episode";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3676,7 +3675,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP "c 2000 1 0\n");
 
-	T_case = "a work period with exactly 2 ms emitted is host-delayed";
+	T_case = "a work period with 2 ms in d lines counts in host_delayed";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3686,7 +3685,7 @@ static void test_scenarios(void)
 	SW(0, 5 * MS, T1, 0, 0);
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 2000000 1000000 1\nd 2000 2000 3000000 4000000 1000000 1\nc 2000 1 1\n");
-	T_case = "a work period with 1999999 ns is not";
+	T_case = "a work period with 1999999 ns in d lines does not count in host_delayed";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3697,7 +3696,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 2000000 1000000 1\nd 2000 2000 3000000 3999999 999999 1\nc 2000 1 0\n");
 
-	T_case = "host_delayed sums whole microseconds, as Android recounts from held_us";
+	T_case = "host_delayed sums held / 1000 per d line";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3720,7 +3719,7 @@ static void test_scenarios(void)
 	SW(1, 7 * MS, T1, 0, 0);
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 2000000 4000000 2000000 1\nc 2000 1 1\n");
-	T_case = "sched_migrate_task onto a host cpu starts the hold there";
+	T_case = "sched_migrate_task onto a host cpu opens the episode at the migrate time";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 2 * MS, T1, 1);
@@ -3739,7 +3738,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP "c 2000 1 0\n");
 
-	T_case = "fork inherits the namespace, exit drops the entry";
+	T_case = "sched_process_fork copies the parent sandbox and sched_process_exit drops the task";
 	world(1);
 	{
 		struct fp *kid = fp_add(1500, 1000, NS_A, 2000, 2500, "forked", "com.test.app", "u:r:untrusted_app:s0", 0);
@@ -3768,7 +3767,7 @@ static void test_scenarios(void)
 	TICK(24 * MS);
 	EXPECT(CA, "t 2000 2001 RenderThread\nd 2000 2001 19000000 22000000 3000000 1\n");
 
-	T_case = "a thread of another sandbox holds like a host task";
+	T_case = "a thread of another sandbox counts as a host task";
 	world(1);
 	CB = conn_new(-1);
 	eng_connect(&E, SB, CB);
@@ -3780,7 +3779,7 @@ static void test_scenarios(void)
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 4000000 3000000 1\nc 2000 1 1\n");
 	EXPECT(CB, "p 3000 other.app\nc 3000 1 0\n");
 
-	T_case = "counts, c throttling, the final c before x";
+	T_case = "c lines at C_INTERVAL_NS and a final c line before x";
 	world(1);
 	WK(K_WAKING, 1 * MS, T1, 2);
 	SW(2, 2 * MS, 0, T1, 0);
@@ -3807,7 +3806,7 @@ static void test_scenarios(void)
 	EX(320 * MS, TSF);
 	EXPECT(CA, "p 2100 surfaceflinger\nc 2100 1 0\nc 2100 2 0\nx 2100\n");
 
-	T_case = "a renamed thread and process are announced again, c stays throttled";
+	T_case = "a renamed thread and process queue p and t lines again with c at C_INTERVAL_NS";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3828,7 +3827,7 @@ static void test_scenarios(void)
 	TICK(300 * MS);
 	EXPECT(CA, "c 2000 2 2\n");
 
-	T_case = "connect sends p + c for processes with counts, replaces the old connection";
+	T_case = "eng_connect queues p and c lines for processes with counts and replaces sb->conn";
 	world(0);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3838,12 +3837,12 @@ static void test_scenarios(void)
 	CA = conn_new(-1);
 	eng_connect(&E, SA, CA);
 	EXPECT(CA, P_APP "c 2000 1 1\n");
-	CHECK(SA->conn == CA, "the connection is the newer one");
+	CHECK(SA->conn == CA, "SA->conn == CA");
 	struct conn *c2 = conn_new(-1);
 	eng_connect(&E, SA, c2);
 	EXPECT(c2, P_APP "c 2000 1 1\n");
 
-	T_case = "a lost page: only pre-hole held time is a record";
+	T_case = "a lost page queues held time before the hole only";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3853,9 +3852,9 @@ static void test_scenarios(void)
 	SW(0, 7 * MS, T1, 0, 0);
 	TICK(10 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 2000000 1000000 1\nc 2000 1 0\n");
-	CHECK(E.lost_pages == 1, "lost pages counted: %llu", (unsigned long long)E.lost_pages);
+	CHECK(E.lost_pages == 1, "lost_pages == 1 lost_pages=%llu", (unsigned long long)E.lost_pages);
 
-	T_case = "a lost page: ticks over the hole do not accrue, held time resumes at the next real event";
+	T_case = "a lost page adds no held time before the next sched_switch on the cpu";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3868,7 +3867,7 @@ static void test_scenarios(void)
 	TICK(50 * MS);
 	EXPECT(CA, P_APP T_UI "d 2000 2000 1000000 2000000 1000000 1\nd 2000 2000 40000000 42000000 2000000 1\nc 2000 1 1\n");
 
-	T_case = "a lost page with no pre-hole settle leaves no record";
+	T_case = "a lost page with no settle before the hole queues no d line";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 1 * MS, T1, 0);
@@ -3883,7 +3882,7 @@ static void test_scenarios(void)
 	get_task(&E, HOST3);
 	E.ntasks = TASK_CAP + 100;
 	FK(0, HOST3, 1600);
-	CHECK(E.ntasks <= TASK_CAP + 100, "the purge ran");
+	CHECK(E.ntasks <= TASK_CAP + 100, "E.ntasks <= TASK_CAP + 100");
 
 	T_case = "fork of an already-exited child of a host process that setns()ed into a sandbox";
 	world(1);
@@ -3897,7 +3896,7 @@ static void test_scenarios(void)
 	TICK(10 * MS);
 	EXPECT(CA, P_APP "c 2000 2 0\n");
 
-	T_case = "packets stay within 4096 bytes and end on a line";
+	T_case = "packets are at most 4096 bytes and end with a newline";
 	world(1);
 	SW(0, 0, 0, HOST1, 0);
 	WK(K_WAKING, 0, T1, 0);
@@ -3913,56 +3912,56 @@ static void test_scenarios(void)
 		int d = 0;
 		for (const char *l = got; (l = strstr(l, "\nd 2000 2000 ")) != NULL; l++)
 			d++;
-		CHECK(!strncmp(got, P_APP T_UI "d ", strlen(P_APP T_UI) + 2), "p and t come before the first d");
-		CHECK(d == 301, "301 records, got %d", d);
-		CHECK(OB_PKTS >= 4, "%d packets for ~14 KB", OB_PKTS);
+		CHECK(!strncmp(got, P_APP T_UI "d ", strlen(P_APP T_UI) + 2), "output starts with p, t and d lines");
+		CHECK(d == 301, "d lines == 301 d=%d", d);
+		CHECK(OB_PKTS >= 4, "packets >= 4 packets=%d", OB_PKTS);
 	}
 }
 
 // test sandbox discovery from the fake process table
 static void test_membership(void)
 {
-	T_case = "sandbox discovery";
+	T_case = "eng_rescan";
 	world(1);
 	int n = 0;
 	for (struct sbx *s = E.sbs; s; s = s->next)
 		n += s->alive;
-	CHECK(n == 2 && SA && SB, "two sandboxes (init context at pid 1), got %d", n);
-	CHECK(!sbx_find(&E, NS_C), "a container whose pid 1 is not u:r:init:s0 is not a sandbox");
-	CHECK(!sbx_find(&E, HOSTNS), "the host namespace is not a sandbox");
-	CHECK(SA->nthreads == 5 && SB->nthreads == 2, "threads pre-registered: A=%d B=%d", SA->nthreads, SB->nthreads);
+	CHECK(n == 2 && SA && SB, "live sandboxes == 2 n=%d", n);
+	CHECK(!sbx_find(&E, NS_C), "sbx_find(NS_C) == NULL");
+	CHECK(!sbx_find(&E, HOSTNS), "sbx_find(HOSTNS) == NULL");
+	CHECK(SA->nthreads == 5 && SB->nthreads == 2, "SA->nthreads == 5 && SB->nthreads == 2 A=%d B=%d", SA->nthreads, SB->nthreads);
 
-	T_case = "a sandbox that starts later is found and its cached tasks promoted";
+	T_case = "eng_rescan attaches the cached tasks of a later sandbox";
 	fp_add(1800, 1800, NS_D, 4000, 4000, "late", "late.app", "u:r:untrusted_app:s0", 1);
 	struct task *t = get_task(&E, 1800);
-	CHECK(t->sb == NULL && E.rescan_wanted, "an unclassified namespace is host for now and asks for a rescan");
+	CHECK(t->sb == NULL && E.rescan_wanted, "t->sb == NULL && rescan_wanted");
 	fp_add(700, 700, NS_D, 1, 1, "init", "/system/bin/init", INIT_CTX, 1);
 	eng_rescan(&E);
-	CHECK(sbx_find(&E, NS_D) && task_find(&E, 1800)->sb == sbx_find(&E, NS_D), "the cached task joined its sandbox");
-	CHECK(!E.rescan_wanted, "rescan request cleared");
+	CHECK(sbx_find(&E, NS_D) && task_find(&E, 1800)->sb == sbx_find(&E, NS_D), "task_find(1800)->sb == sbx_find(NS_D)");
+	CHECK(!E.rescan_wanted, "rescan_wanted == 0");
 	fp_find(700)->alive = 0;
 	fp_find(1800)->alive = 0;
 	eng_rescan(&E);
-	CHECK(!sbx_find(&E, NS_D), "a sandbox with no process left is gone");
+	CHECK(!sbx_find(&E, NS_D), "sbx_find(NS_D) == NULL after the last process exits");
 
-	T_case = "peer check";
+	T_case = "peer_sandbox";
 	fp_add(1200, 1200, NS_A, 3500, 3500, "hostdelay", "rhizo-host-delay", HOST_DELAY_CTX, 1);
 	fp_add(1201, 1201, NS_A, 3501, 3501, "app", "app", "u:r:untrusted_app:s0", 1);
 	fp_add(7010, 7010, HOSTNS, 7010, 7010, "imposter", "imposter", HOST_DELAY_CTX, 1);
 	fp_add(1300, 1300, NS_C, 9, 9, "ctr", "ctr", HOST_DELAY_CTX, 1);
 	fp_add(1710, 1710, NS_B, 3510, 3510, "hostdelay", "rhizo-host-delay", HOST_DELAY_CTX, 1);
-	CHECK(peer_sandbox(&E, 1200) == SA, "the right domain in sandbox A is accepted as A");
-	CHECK(peer_sandbox(&E, 1710) == SB, "the right domain in sandbox B is accepted as B");
-	CHECK(peer_sandbox(&E, 1201) == NULL, "another domain in a sandbox is refused");
-	CHECK(peer_sandbox(&E, 7010) == NULL, "the right domain on the host is refused");
-	CHECK(peer_sandbox(&E, 1300) == NULL, "the right domain in a non-sandbox namespace is refused");
-	CHECK(peer_sandbox(&E, 424242) == NULL, "a pid that is gone is refused");
+	CHECK(peer_sandbox(&E, 1200) == SA, "peer_sandbox(HOST_DELAY_CTX in NS_A) == SA");
+	CHECK(peer_sandbox(&E, 1710) == SB, "peer_sandbox(HOST_DELAY_CTX in NS_B) == SB");
+	CHECK(peer_sandbox(&E, 1201) == NULL, "peer_sandbox(untrusted_app in NS_A) == NULL");
+	CHECK(peer_sandbox(&E, 7010) == NULL, "peer_sandbox(HOST_DELAY_CTX in HOSTNS) == NULL");
+	CHECK(peer_sandbox(&E, 1300) == NULL, "peer_sandbox(HOST_DELAY_CTX in NS_C) == NULL");
+	CHECK(peer_sandbox(&E, 424242) == NULL, "peer_sandbox(exited pid) == NULL");
 	fp_add(710, 710, NS_D, 1, 1, "init", "/system/bin/init", INIT_CTX, 1);
 	fp_add(1810, 1810, NS_D, 3600, 3600, "hostdelay", "rhizo-host-delay", HOST_DELAY_CTX, 1);
 	CHECK(!sbx_find(&E, NS_D) && peer_sandbox(&E, 1810) == sbx_find(&E, NS_D) && sbx_find(&E, NS_D),
-	      "a dialer from a sandbox born since the last scan is found by an on-demand scan");
+	      "peer_sandbox(HOST_DELAY_CTX in NS_D) calls eng_rescan and returns sbx_find(NS_D)");
 
-	T_case = "watermark merge";
+	T_case = "merge_run";
 	world(1);
 	struct evq q[2];
 	memset(q, 0, sizeof q);
@@ -3973,23 +3972,23 @@ static void test_membership(void)
 		evq_push(&q[1], &b);
 	}
 	u64 done = merge_run(&E, q, 2, watermark(10 * MS));
-	CHECK(done == 4 && E.late == 0 && q[0].n == 1 && q[1].n == 1, "five ms behind now: processed %llu, late %llu, queued %zu/%zu",
+	CHECK(done == 4 && E.late == 0 && q[0].n == 1 && q[1].n == 1, "merge_run(watermark(10 ms)) == 4 && late == 0 done=%llu late=%llu queued=%zu/%zu",
 	      (unsigned long long)done, (unsigned long long)E.late, q[0].n, q[1].n);
 	done = merge_run(&E, q, 2, 20 * MS);
-	CHECK(done == 2 && E.late == 0 && E.now == 10 * MS, "the rest in order: %llu, late %llu", (unsigned long long)done,
+	CHECK(done == 2 && E.late == 0 && E.now == 10 * MS, "merge_run(20 ms) == 2 && late == 0 && E.now == 10 ms done=%llu late=%llu", (unsigned long long)done,
 	      (unsigned long long)E.late);
-	CHECK(watermark(10 * MS) == 5 * MS && watermark(1 * MS) == 0, "watermark is now - 5 ms");
+	CHECK(watermark(10 * MS) == 5 * MS && watermark(1 * MS) == 0, "watermark(10 ms) == 5 ms && watermark(1 ms) == 0");
 	free(q[0].v);
 	free(q[1].v);
 }
 
-// return whether a text contains a string
+// return whether text contains needle
 static int disclosed(const char *text, const char *needle)
 {
 	return strstr(text, needle) != NULL;
 }
 
-// return whether a text contains a token as a whole word
+// return whether text contains tok between spaces or newlines
 static int token_in(const char *text, const char *tok)
 {
 	size_t l = strlen(tok);
@@ -4005,16 +4004,16 @@ static int token_in(const char *text, const char *tok)
 	return 0;
 }
 
-// search the output for host ids
+// test ALLOUT for host ids and line shapes, and status_build
 static void test_disclosure(void)
 {
-	T_case = "disclosure: no holder comm or host pid in any output";
-	CHECK(strlen(ALLOUT) > 1000, "scenarios produced %zu bytes of output to search", strlen(ALLOUT));
+	T_case = "ALLOUT has no host comm or host pid";
+	CHECK(strlen(ALLOUT) > 1000, "strlen(ALLOUT) > 1000 bytes=%zu", strlen(ALLOUT));
 	CHECK(!disclosed(ALLOUT, "HOSTSECRET") && !disclosed(ALLOUT, "rt-load") && !disclosed(ALLOUT, "kworker"),
-	      "a holder's comm appears in protocol output");
+	      "ALLOUT has no HOSTSECRET, rt-load or kworker");
 	static const char *const host_ids[] = { "7001", "7002", "31337", "500", "600", "1000", "1001", "1002", "1100", "1500", "1700", "9999" };
 	for (size_t i = 0; i < sizeof host_ids / sizeof host_ids[0]; i++)
-		CHECK(!token_in(ALLOUT, host_ids[i]), "host id %s appears as a protocol field", host_ids[i]);
+		CHECK(!token_in(ALLOUT, host_ids[i]), "token_in(ALLOUT, %s) == 0", host_ids[i]);
 	int bad = 0;
 	for (const char *l = ALLOUT; *l;) {
 		const char *e = strchr(l, '\n');
@@ -4030,9 +4029,9 @@ static void test_disclosure(void)
 			bad++;
 		l = e + 1;
 	}
-	CHECK(bad == 0, "%d protocol lines of the wrong shape", bad);
+	CHECK(bad == 0, "protocol lines of the wrong shape == 0 bad=%d", bad);
 
-	T_case = "status.json is host-side counts only";
+	T_case = "status_build counts";
 	char buf[4096];
 	struct decode_stats ds;
 	memset(&ds, 0, sizeof ds);
@@ -4040,10 +4039,10 @@ static void test_disclosure(void)
 	LOSS(1 * MS, 0);
 	int n = status_build(&E, &ds, 1, buf, sizeof buf);
 	CHECK(n > 0 && buf[0] == '{' && strstr(buf, "\"lost_pages\":1") && strstr(buf, "\"connections\":1") &&
-	      strstr(buf, "\"threads\":5") && !disclosed(buf, "HOSTSECRET"), "status: %s", buf);
+	      strstr(buf, "\"threads\":5") && !disclosed(buf, "HOSTSECRET"), "status_build has lost_pages, connections, threads and no HOSTSECRET status=%s", buf);
 }
 
-// write text to a new file and return 0 on success
+// create a file, write text and return 0 on success
 static int selftest_file(const char *path, const char *text)
 {
 	FILE *f = fopen(path, "we");
@@ -4053,20 +4052,20 @@ static int selftest_file(const char *path, const char *text)
 	return fclose(f) || bad ? -1 : 0;
 }
 
-// test enter_domain's marker for each recorded selinux mode
+// test enter_domain markers and exit status for each mode file
 static void test_domain(void)
 {
 	T_case = "domain";
 	char dir[] = "/tmp/rhizo-delayd-selftest-XXXXXX";
 	if (!mkdtemp(dir)) {
-		CHECK(0, "mkdtemp %s: %s", dir, strerror(errno));
+		CHECK(0, "mkdtemp %s failed (%s)", dir, strerror(errno));
 		return;
 	}
 	char mode[64], cur[64], logpath[64], out[512];
 	snprintf(mode, sizeof mode, "%s/mode", dir);
 	snprintf(cur, sizeof cur, "%s/current", dir);
 	snprintf(logpath, sizeof logpath, "%s/log", dir);
-	CHECK(selftest_file(cur, "kernel") == 0, "write %s: %s", cur, strerror(errno));
+	CHECK(selftest_file(cur, "kernel") == 0, "failed to write %s (%s)", cur, strerror(errno));
 	const char *fs = g_selinuxfs, *attr = g_attr_current;
 	g_selinuxfs = dir;
 	g_attr_current = cur;
@@ -4088,9 +4087,9 @@ static void test_domain(void)
 	for (size_t i = 0; i < sizeof C / sizeof C[0]; i++) {
 		unlink(mode);
 		if (C[i].text)
-			CHECK(selftest_file(mode, C[i].text) == 0, "write %s: %s", mode, strerror(errno));
+			CHECK(selftest_file(mode, C[i].text) == 0, "failed to write %s (%s)", mode, strerror(errno));
 		int saved = dup(2), fd = open(logpath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-		CHECK(saved >= 0 && fd >= 0 && dup2(fd, 2) == 2, "redirect stderr to %s: %s", logpath, strerror(errno));
+		CHECK(saved >= 0 && fd >= 0 && dup2(fd, 2) == 2, "failed to redirect stderr to %s (%s)", logpath, strerror(errno));
 		close(fd);
 		g_quiet = 0;
 		int status = 0;
@@ -4100,7 +4099,7 @@ static void test_domain(void)
 				enter_domain(argv, 0);
 				_exit(0);
 			}
-			CHECK(pid > 0 && waitpid(pid, &status, 0) == pid, "fork: %s", strerror(errno));
+			CHECK(pid > 0 && waitpid(pid, &status, 0) == pid, "fork or waitpid failed (%s)", strerror(errno));
 		} else {
 			enter_domain(argv, 0);
 		}
@@ -4110,10 +4109,10 @@ static void test_domain(void)
 		close(saved);
 		if (read_text(logpath, out, sizeof out) < 0)
 			out[0] = 0;
-		CHECK(strstr(out, C[i].want) != NULL, "mode file %s: want '%s', logged '%s'",
+		CHECK(strstr(out, C[i].want) != NULL, "mode file %s log contains '%s' log='%s'",
 		      C[i].text ? C[i].text : "absent", C[i].want, out);
 		if (C[i].refuse)
-			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == SELINUX_MODE_EXIT, "mode file %s: the start went on (status %d)",
+			CHECK(WIFEXITED(status) && WEXITSTATUS(status) == SELINUX_MODE_EXIT, "mode file %s exit status == SELINUX_MODE_EXIT status=%d",
 			      C[i].text ? C[i].text : "absent", status);
 	}
 	unsetenv("RHIZO_SELINUX_MODE_FILE");
@@ -4125,7 +4124,7 @@ static void test_domain(void)
 	rmdir(dir);
 }
 
-// run all of the self-test groups and return the failure count
+// run the test_* functions and return 1 when T_fail is nonzero
 static int selftest(void)
 {
 	g_quiet = 1;
@@ -4135,20 +4134,20 @@ static int selftest(void)
 	test_disclosure();
 	test_domain();
 	if (T_fail) {
-		fprintf(stderr, "rhizo-delayd selftest: %d of %d assertions FAILED\n", T_fail, T_fail + T_pass);
+		fprintf(stderr, "rhizo-delayd selftest failed %d of %d assertions\n", T_fail, T_fail + T_pass);
 		return 1;
 	}
-	printf("rhizo-delayd selftest: %d assertions passed\n", T_pass);
+	printf("rhizo-delayd selftest passed %d assertions\n", T_pass);
 	return 0;
 }
 
 static void usage(void)
 {
-	fputs("usage: rhizo-delayd [--socket PATH] [--status-path PATH] [--tracefs DIR] [--instance NAME]\n"
-	      "                    [--buffer-kb N] | --selftest | --dump-events SECONDS | --remove-instance\n", stderr);
+	fputs("rhizo-delayd [--socket PATH] [--status-path PATH] [--tracefs DIR] [--instance NAME]\n"
+	      "             [--buffer-kb N] | --selftest | --dump-events SECONDS | --remove-instance\n", stderr);
 }
 
-// run rhizo-delayd
+// run the selftest, run_dump, run_remove_instance or run_daemon
 int main(int argc, char **argv)
 {
 	struct cfg cfg = { "/run/rhizo-delay/delayd", "/run/rhizo-delayd/status.json", NULL, "rhizo-delay", 8192, 0, 0, 0 };

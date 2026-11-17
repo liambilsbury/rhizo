@@ -24,7 +24,7 @@ namespace {
 constexpr char kBtdSocket[] = "/dev/socket/rhizo_bluetooth/btd";
 constexpr uint8_t kCommand = 1, kAcl = 2, kSco = 3, kEvent = 4, kIso = 5;
 
-// write a message to the kernel log
+// write msg to the kernel log
 void klog(const char* msg) { rhizo_device::Klog("rhizo-bluetooth", msg); }
 
 // write a formatted message to the kernel log
@@ -35,22 +35,22 @@ void klogf(const char* fmt, Args... args) {
   klog(buf);
 }
 
-// request the controller's user-channel fd from rhizo-btd
+// write "open" to kBtdSocket and return the SCM_RIGHTS fd
 int RequestController(int* conn, std::string* why) {
   *conn = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
   if (*conn < 0) {
-    *why = std::string("socket: ") + strerror(errno);
+    *why = std::string("socket() failed with ") + strerror(errno);
     return -1;
   }
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, kBtdSocket, sizeof(addr.sun_path) - 1);
   if (connect(*conn, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-    *why = std::string("connect ") + kBtdSocket + ": " + strerror(errno);
+    *why = std::string("connect() to ") + kBtdSocket + " failed with " + strerror(errno);
     return -1;
   }
   if (send(*conn, "open", 4, 0) != 4) {
-    *why = std::string("send: ") + strerror(errno);
+    *why = std::string("send() failed with ") + strerror(errno);
     return -1;
   }
   char reply[128] = {};
@@ -62,7 +62,7 @@ int RequestController(int* conn, std::string* why) {
   msg.msg_control = ctrl;
   msg.msg_controllen = sizeof(ctrl);
   if (recvmsg(*conn, &msg, MSG_CMSG_CLOEXEC) <= 0) {
-    *why = std::string("recvmsg: ") + strerror(errno);
+    *why = std::string("recvmsg() failed with ") + strerror(errno);
     return -1;
   }
   if (strncmp(reply, "ok", 2) != 0) {
@@ -76,7 +76,7 @@ int RequestController(int* conn, std::string* why) {
       return fd;
     }
   }
-  *why = "reply carried no fd";
+  *why = "recvmsg returned no SCM_RIGHTS fd";
   return -1;
 }
 
@@ -93,7 +93,7 @@ class RhizoBluetoothHci : public BnBluetoothHci {
       stale = fd_ >= 0 && callback_ && !AIBinder_isAlive(callback_->asBinder().get());
     }
     if (stale) {
-      klog("previous client is gone, closing its controller");
+      klog("AIBinder_isAlive returned false for callback_");
       Shutdown();
     }
     std::lock_guard<std::mutex> lg(mutex_);
@@ -104,7 +104,7 @@ class RhizoBluetoothHci : public BnBluetoothHci {
     std::string why;
     fd_ = RequestController(&conn_, &why);
     if (fd_ < 0) {
-      klogf("no controller: %s", why.c_str());
+      klogf("failed to open the controller (%s)", why.c_str());
       CloseLocked();
       callback->initializationComplete(Status::UNABLE_TO_OPEN_INTERFACE);
       return ScopedAStatus::ok();
@@ -113,7 +113,7 @@ class RhizoBluetoothHci : public BnBluetoothHci {
     AIBinder_linkToDeath(callback->asBinder().get(), death_.get(), this);
     running_ = true;
     reader_ = std::thread([this] { ReadLoop(); });
-    klogf("controller open on fd %d", fd_);
+    klogf("opened the controller on fd %d", fd_);
     callback->initializationComplete(Status::SUCCESS);
     return ScopedAStatus::ok();
   }
@@ -129,25 +129,25 @@ class RhizoBluetoothHci : public BnBluetoothHci {
   ScopedAStatus sendIsoData(const std::vector<uint8_t>& packet) override { return Send(kIso, packet); }
 
  private:
-  // close the controller when its client binder dies
+  // close the controller when the client binder dies
   static void OnClientDied(void* cookie) {
     auto* self = static_cast<RhizoBluetoothHci*>(cookie);
     {
       std::lock_guard<std::mutex> lg(self->mutex_);
       if (self->fd_ < 0 || (self->callback_ && AIBinder_isAlive(self->callback_->asBinder().get()))) return;
     }
-    klog("client died, closing controller");
+    klog("client binder died");
     self->Shutdown();
   }
 
-  // stop the reader and return the controller to rhizo-btd
+  // stop the reader thread and close the controller
   void Shutdown() {
     std::thread reader;
     {
       std::lock_guard<std::mutex> lg(mutex_);
       running_ = false;
       const uint64_t one = 1;
-      if (write(wake_, &one, sizeof(one)) < 0) klogf("wake write FAILED: %s", strerror(errno));
+      if (write(wake_, &one, sizeof(one)) < 0) klogf("failed to write wake_ (%s)", strerror(errno));
       reader = std::move(reader_);
     }
     if (reader.joinable()) reader.join();
@@ -166,25 +166,25 @@ class RhizoBluetoothHci : public BnBluetoothHci {
     out[0] = type;
     memcpy(out.data() + 1, packet.data(), packet.size());
     if (write(fd_, out.data(), out.size()) != static_cast<ssize_t>(out.size())) {
-      klogf("write of type %u, %zu bytes FAILED: %s", type, packet.size(), strerror(errno));
+      klogf("failed to write packet type %u, %zu bytes (%s)", type, packet.size(), strerror(errno));
     }
     return ScopedAStatus::ok();
   }
 
-  // read H4 packets into the Bluetooth stack
+  // read H4 packets into callback_
   void ReadLoop() {
     std::vector<uint8_t> buf(65536);
     while (running_) {
       pollfd fds[2] = {{fd_, POLLIN, 0}, {wake_, POLLIN, 0}};
       if (poll(fds, 2, -1) < 0) {
         if (errno == EINTR) continue;
-        klogf("controller poll FAILED: %s", strerror(errno));
+        klogf("poll failed (%s)", strerror(errno));
         return;
       }
       if (fds[1].revents) return;
       const ssize_t n = read(fd_, buf.data(), buf.size());
       if (n <= 0) {
-        if (running_) klogf("controller read ended: %s", n < 0 ? strerror(errno) : "eof");
+        if (running_) klogf("failed to read the controller (%s)", n < 0 ? strerror(errno) : "eof");
         return;
       }
       std::vector<uint8_t> packet(buf.begin() + 1, buf.begin() + n);
@@ -221,18 +221,16 @@ class RhizoBluetoothHci : public BnBluetoothHci {
 }
 
 int main() {
-  klog("main() entered");
   auto hci = ndk::SharedRefBase::make<RhizoBluetoothHci>();
   const std::string instance = std::string(RhizoBluetoothHci::descriptor) + "/default";
   binder_status_t status = AServiceManager_addService(hci->asBinder().get(), instance.c_str());
   if (status != STATUS_OK) {
-    klogf("addService FAILED status=%d", status);
+    klogf("AServiceManager_addService failed with status %d", status);
     return 1;
   }
-  klog("registered, joining thread pool");
   ABinderProcess_setThreadPoolMaxThreadCount(4);
   ABinderProcess_startThreadPool();
   ABinderProcess_joinThreadPool();
-  klog("joinThreadPool RETURNED (unexpected)");
+  klog("ABinderProcess_joinThreadPool returned");
   return 0;
 }

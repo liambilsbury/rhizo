@@ -1,8 +1,8 @@
 diff --git a/security/selinux/avc.c b/security/selinux/avc.c
-index e93135d94..0344d6f5d 100644
+index b3011ae79..4dc35aca3 100644
 --- a/security/selinux/avc.c
 +++ b/security/selinux/avc.c
-@@ -1252,6 +1252,27 @@ int avc_has_perm(struct selinux_state *state, u32 ssid, u32 tsid, u16 tclass,
+@@ -1260,6 +1260,27 @@ int avc_has_perm(struct selinux_state *state, u32 ssid, u32 tsid, u16 tclass,
  	return rc;
  }
  
@@ -30,7 +30,7 @@ index e93135d94..0344d6f5d 100644
  static u32 task_sid_obj_for_state(const struct task_struct *p,
  				  const struct selinux_state *state)
  {
-@@ -1387,6 +1408,7 @@ int task_obj_has_perm(const struct task_struct *s,
+@@ -1370,6 +1391,7 @@ int task_obj_has_perm(const struct task_struct *s,
   * cred_has_extended_perms - Check and audit extended permissions on a (cred, tsid) pair
   * @cred: subject credentials
   * @tsid: target security identifier
@@ -38,7 +38,7 @@ index e93135d94..0344d6f5d 100644
   * @tclass: target security class
   * @requested: requested permissions, interpreted based on @tclass
   * @driver: driver value
-@@ -1397,17 +1419,21 @@ int task_obj_has_perm(const struct task_struct *s,
+@@ -1380,17 +1402,21 @@ int task_obj_has_perm(const struct task_struct *s,
   * Check extended permissions between a cred @cred and a target
   * security identifier @tsid for @cred's namespace and all ancestors
   * to determine whether the @requested permissions are granted for the
@@ -63,7 +63,7 @@ index e93135d94..0344d6f5d 100644
  	u32 ssid;
  	int rc;
  
-@@ -1417,13 +1443,14 @@ int cred_has_extended_perms(const struct cred *cred, u32 tsid, u16 tclass,
+@@ -1400,13 +1426,14 @@ int cred_has_extended_perms(const struct cred *cred, u32 tsid, u16 tclass,
  		state = crsec->state;
  
  		rc = avc_has_extended_perms(state, ssid, tsid, tclass,
@@ -80,7 +80,7 @@ index e93135d94..0344d6f5d 100644
  
  	return 0;
  }
-@@ -1523,8 +1550,33 @@ int cred_self_has_perm_noaudit(const struct cred *cred, u16 tclass,
+@@ -1505,8 +1532,33 @@ int cred_self_has_perm_noaudit(const struct cred *cred, u16 tclass,
  int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
  		       u32 requested, struct common_audit_data *ad)
  {
@@ -114,7 +114,7 @@ index e93135d94..0344d6f5d 100644
  	u32 ssid;
  	int rc;
  
-@@ -1532,12 +1584,13 @@ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
+@@ -1514,12 +1566,13 @@ int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
  		crsec = selinux_cred(cred);
  		ssid = crsec->sid;
  		state = crsec->state;
@@ -130,7 +130,7 @@ index e93135d94..0344d6f5d 100644
  
  	return 0;
  }
-@@ -1732,6 +1785,37 @@ static u32 cred_sid_for_state(const struct cred *cred,
+@@ -1719,6 +1772,37 @@ static u32 cred_sid_for_state(const struct cred *cred,
  	return sid;
  }
  
@@ -168,7 +168,7 @@ index e93135d94..0344d6f5d 100644
  /**
   * cred_other_has_perm - Check and audit permissions on a (cred, other-cred) pair
   * @cred: subject credentials
-@@ -1751,26 +1835,31 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
+@@ -1738,26 +1822,31 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
  			u16 tclass, u32 requested,
  			struct common_audit_data *ad)
  {
@@ -220,10 +220,10 @@ index e93135d94..0344d6f5d 100644
  
  /**
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 718ab3a56..6c3e0e351 100644
+index 5e03fd90f..3b3601b29 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -1988,6 +1988,18 @@ static inline void isec_set_label_ns(struct inode_security_struct *isec,
+@@ -1997,6 +1997,18 @@ static inline void isec_set_label_ns(struct inode_security_struct *isec,
  	WRITE_ONCE(isec->label_ns, state->id);
  }
  
@@ -242,7 +242,7 @@ index 718ab3a56..6c3e0e351 100644
  /* mark @isec as a genfs label each namespace may read differently */
  static inline void isec_set_genfs_view(struct inode_security_struct *isec,
  				       bool genfs)
-@@ -2068,6 +2080,15 @@ static inline void isec_set_label_ns(struct inode_security_struct *isec,
+@@ -2077,6 +2089,15 @@ static inline void isec_set_label_ns(struct inode_security_struct *isec,
  {
  }
  
@@ -258,7 +258,7 @@ index 718ab3a56..6c3e0e351 100644
  static inline void isec_set_genfs_view(struct inode_security_struct *isec,
  				       bool genfs)
  {
-@@ -2765,8 +2786,8 @@ static inline u32 file_to_av(const struct file *file)
+@@ -2783,8 +2804,8 @@ static inline u32 file_to_av(const struct file *file)
  
  static int selinux_binder_set_context_mgr(const struct cred *mgr)
  {
@@ -269,7 +269,7 @@ index 718ab3a56..6c3e0e351 100644
  }
  
  static int selinux_binder_transaction(const struct cred *from,
-@@ -2777,22 +2798,21 @@ static int selinux_binder_transaction(const struct cred *from,
+@@ -2795,22 +2816,21 @@ static int selinux_binder_transaction(const struct cred *from,
  	int rc;
  
  	if (mysid != fromsid) {
@@ -298,7 +298,7 @@ index 718ab3a56..6c3e0e351 100644
  }
  
  static int selinux_binder_transfer_file(const struct cred *from,
-@@ -3859,6 +3879,7 @@ static int selinux_inode_init_security_anon(struct inode *inode,
+@@ -3854,6 +3874,7 @@ static int selinux_inode_init_security_anon(struct inode *inode,
  
  		isec->sclass = context_isec->sclass;
  		isec->sid = context_isec->sid;
@@ -306,7 +306,7 @@ index 718ab3a56..6c3e0e351 100644
  	} else {
  		struct level_trans_arg arg = { .name = name };
  
-@@ -3876,6 +3897,8 @@ static int selinux_inode_init_security_anon(struct inode *inode,
+@@ -3871,6 +3892,8 @@ static int selinux_inode_init_security_anon(struct inode *inode,
  		isec->sid = sid_with_levels(selinux_cred(current_cred()),
  					    isec->sid, level_transition_sid,
  					    &arg);
@@ -315,7 +315,7 @@ index 718ab3a56..6c3e0e351 100644
  	}
  
  	isec->initialized = LABEL_INITIALIZED;
-@@ -4910,9 +4933,11 @@ static int ioctl_has_perm(const struct cred *cred, struct file *file,
+@@ -4943,9 +4966,11 @@ static int ioctl_has_perm(const struct cred *cred, struct file *file,
  		return 0;
  
  	isec = inode_security(inode);
@@ -330,7 +330,7 @@ index 718ab3a56..6c3e0e351 100644
  out:
  	return rc;
  }
-@@ -8660,6 +8685,10 @@ static int selinux_perf_event_alloc(struct perf_event *event)
+@@ -8732,6 +8757,10 @@ static int selinux_perf_event_alloc(struct perf_event *event)
  
  	perfsec = selinux_perf_event(event->security);
  	perfsec->sid = current_obj_sid();
@@ -341,7 +341,7 @@ index 718ab3a56..6c3e0e351 100644
  
  	return 0;
  }
-@@ -8668,16 +8697,18 @@ static int selinux_perf_event_read(struct perf_event *event)
+@@ -8740,16 +8769,18 @@ static int selinux_perf_event_read(struct perf_event *event)
  {
  	struct perf_event_security_struct *perfsec = event->security;
  
@@ -365,10 +365,10 @@ index 718ab3a56..6c3e0e351 100644
  #endif
  
 diff --git a/security/selinux/include/avc.h b/security/selinux/include/avc.h
-index 887cb10ce..d693d48fb 100644
+index b92eeeae4..90eea9725 100644
 --- a/security/selinux/include/avc.h
 +++ b/security/selinux/include/avc.h
-@@ -153,8 +153,12 @@ int avc_has_extended_perms(struct selinux_state *state, u32 ssid, u32 tsid,
+@@ -155,8 +155,12 @@ int avc_has_extended_perms(struct selinux_state *state, u32 ssid, u32 tsid,
  int cred_task_has_perm(const struct cred *cred, const struct task_struct *p,
  		       u16 tclass, u32 requested, struct common_audit_data *ad);
  
@@ -383,7 +383,7 @@ index 887cb10ce..d693d48fb 100644
  			    struct common_audit_data *ad);
  
  int cred_self_has_perm(const struct cred *cred, u16 tclass, u32 requested,
-@@ -166,6 +170,10 @@ int cred_self_has_perm_noaudit(const struct cred *cred, u16 tclass,
+@@ -168,6 +172,10 @@ int cred_self_has_perm_noaudit(const struct cred *cred, u16 tclass,
  int cred_tsid_has_perm(const struct cred *cred, u32 tsid, u16 tclass,
  		       u32 requested, struct common_audit_data *ad);
  
@@ -394,7 +394,7 @@ index 887cb10ce..d693d48fb 100644
  int cred_tsid_has_perm_noaudit(const struct cred *cred, u32 tsid, u16 tclass,
  			       u32 requested, struct av_decision *avd,
  			       struct common_audit_data *ad,
-@@ -181,6 +189,10 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
+@@ -183,6 +191,10 @@ int cred_other_has_perm(const struct cred *cred, const struct cred *other,
  			u16 tclass, u32 requested,
  			struct common_audit_data *ad);
  
@@ -402,14 +402,14 @@ index 887cb10ce..d693d48fb 100644
 +		       u16 tclass, u32 requested,
 +		       struct common_audit_data *ad);
 +
- int task_obj_has_perm(const struct task_struct *s, const struct task_struct *t,
- 		      u16 tclass, u32 requested, struct common_audit_data *ad);
- 
+ int selinux_state_has_perm(struct selinux_state *state, u32 ssid, u32 tsid,
+ 			   u16 tclass, u32 requested,
+ 			   struct common_audit_data *ad);
 diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
-index 3e89f0ffa..ecf2b8f5e 100644
+index 3fac17ec6..8ccb6b4d7 100644
 --- a/security/selinux/include/objsec.h
 +++ b/security/selinux/include/objsec.h
-@@ -83,6 +83,7 @@ struct inode_security_struct {
+@@ -81,6 +81,7 @@ struct inode_security_struct {
  	u32 view_sid; /* label last checked for view_ns */
  	u64 view_ns; /* namespace whose cred chain last got its views of view_sid */
  	u64 label_ns; /* namespace that set sid */
@@ -417,7 +417,7 @@ index 3e89f0ffa..ecf2b8f5e 100644
  #endif
  	spinlock_t lock;
  #ifdef CONFIG_SECURITY_SELINUX_NS
-@@ -195,6 +196,7 @@ struct bpf_security_struct {
+@@ -201,6 +202,7 @@ struct bpf_security_struct {
  
  struct perf_event_security_struct {
  	u32 sid; /* SID of perf_event obj creator */

@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-// scale, convert and encode I420 frames as JPEG
+// I420 frame scaling, RGBA conversion and JPEG encoding
 
 namespace rhizo::camera {
 namespace {
@@ -12,12 +12,12 @@ constexpr int32_t kMaxDim = 4096;
 constexpr int64_t kHalf = 1 << 15;
 constexpr uint32_t kRound = 1u << 15;
 
-// return true when a source view is within the size limits
+// return true when a source view has data and a size within kMaxDim
 bool ValidView(const I420View& v) {
   return v.data != nullptr && v.width > 0 && v.height > 0 && v.width <= kMaxDim && v.height <= kMaxDim;
 }
 
-// return true when a destination size is within the limits
+// return true when a destination size is within kMaxDim
 bool ValidSize(int32_t w, int32_t h) {
   return w > 0 && h > 0 && w <= kMaxDim && h <= kMaxDim;
 }
@@ -93,7 +93,7 @@ void ScalePlane(const uint8_t* src, int32_t src_stride, const Axis& ax, const Ax
   }
 }
 
-// a crop clamped to its source
+// a crop clamped to the source plane
 struct Window {
   int32_t left;
   int32_t top;
@@ -241,8 +241,8 @@ constexpr HuffCodes kAcLuma = MakeCodes(kAcLumaBits, kAcLumaVals);
 constexpr HuffCodes kAcChroma = MakeCodes(kAcChromaBits, kAcChromaVals);
 static_assert(CountBits(kDcLumaBits) == 12 && CountBits(kDcChromaBits) == 12, "DC BITS count 12 symbols");
 static_assert(CountBits(kAcLumaBits) == 162 && CountBits(kAcChromaBits) == 162, "AC BITS count 162 symbols");
-static_assert(CoversDc(kDcLuma) && CoversDc(kDcChroma), "every DC category has a code");
-static_assert(CoversAc(kAcLuma) && CoversAc(kAcChroma), "every AC symbol has a code");
+static_assert(CoversDc(kDcLuma) && CoversDc(kDcChroma), "DC categories 0..11 have codes");
+static_assert(CoversAc(kAcLuma) && CoversAc(kAcChroma), "EOB, ZRL and the run/size symbols have codes");
 
 // the natural index of each zigzag position
 struct ZigZag {
@@ -267,7 +267,7 @@ constexpr ZigZag kZigZag = MakeZigZag();
 static_assert(kZigZag.natural[2] == 8 && kZigZag.natural[3] == 16 && kZigZag.natural[63] == 63,
               "zigzag starts 0, 1, 8, 16 and ends at 63");
 
-// the 8-point DCT-II matrix and its transpose
+// the 8-point DCT-II matrix and the transposed matrix
 struct DctBasis {
   float m[8][8];
   float t[8][8];
@@ -330,7 +330,7 @@ void Fdct(const DctBasis& b, const float* in, float* out) {
   }
 }
 
-// a zigzag quantisation table and its natural-order reciprocals
+// a zigzag quantisation table with natural-order reciprocals
 struct Quant {
   uint8_t zigzag[64];
   float recip[64];
@@ -441,7 +441,7 @@ inline int Category(int32_t v) {
   return 32 - __builtin_clz(a);
 }
 
-// write a Huffman symbol and its extra bits
+// write a Huffman symbol and the symbol's extra bits
 inline void PutValue(BitWriter& bw, const HuffCodes& h, int symbol, int32_t v, int s) {
   const uint32_t extra = static_cast<uint32_t>(v < 0 ? v - 1 : v) & ((1u << s) - 1);
   bw.Put((static_cast<uint32_t>(h.code[symbol]) << s) | extra, h.size[symbol] + s);
@@ -558,7 +558,7 @@ void ScaleI420(const I420View& src, const Rect& crop, const YuvDest& dst) {
     FillPlane(dst.cr.data, dst.cr.row_stride, dst.cr.pixel_stride, dcw, dch, 128);
     return;
   }
-  // JFIF sites chroma centred between its luma pair
+  // JFIF sites chroma centred between the luma pair
   int32_t cx_lo, cx_hi, cy_lo, cy_hi;
   ChromaSpan(win.left, win.width, pw, &cx_lo, &cx_hi);
   ChromaSpan(win.top, win.height, ph, &cy_lo, &cy_hi);

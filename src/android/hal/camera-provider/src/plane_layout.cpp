@@ -55,7 +55,7 @@ struct Sample {
   int64_t step = 0;
 };
 
-// return true when a grid of samples stays inside mapped bytes
+// return true when the last sample of a w x h grid is within mapped bytes
 bool Fits(const Sample& s, int64_t w, int64_t h, size_t mapped) {
   if (s.offset < 0 || s.stride <= 0 || s.step <= 0 || w <= 0 || h <= 0) return false;
   int64_t last = s.offset + (h - 1) * s.stride + (w - 1) * s.step;
@@ -96,7 +96,7 @@ bool DecodePlaneLayouts(const uint8_t* data, size_t size, std::vector<PlaneLayou
   return true;
 }
 
-// describe a mapped buffer from its plane layouts, or return false
+// describe a mapped buffer from PLANE_LAYOUTS, or return false
 bool DescribePlanes(const std::vector<PlaneLayoutInfo>& planes, uint8_t* base, size_t mapped,
                     int32_t width, int32_t height, LockedBuffer* out) {
   Sample y, cb, cr, raw;

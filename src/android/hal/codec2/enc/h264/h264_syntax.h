@@ -194,7 +194,7 @@ struct LevelLimits {
 };
 const LevelLimits* FindLevel(uint32_t level_idc);
 
-// raise the requested level to the lowest that fits
+// return the lowest level_idc >= requested whose limits fit, or 0
 uint32_t ChooseLevel(uint32_t profile_idc, uint32_t requested, uint32_t width_in_mbs, uint32_t height_in_mbs,
                      double frame_rate, uint32_t bitrate);
 

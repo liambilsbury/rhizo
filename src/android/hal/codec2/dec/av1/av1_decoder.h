@@ -21,7 +21,7 @@ namespace av1 {
 void FillPictureParameters(const SequenceHeader& seq, const FrameHeader& h, const VASurfaceID refs[kNumRefFrames],
                            VASurfaceID current, VASurfaceID display, bool grain, VADecPictureParameterBufferAV1* pp);
 
-// return false for virgl drivers that drop the film-grain target
+// return whether vendor is null or does not contain " for virgl"
 bool DriverAppliesGrain(const char* vendor);
 
 // return operating point 0's spatial layer count

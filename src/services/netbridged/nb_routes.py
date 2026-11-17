@@ -257,7 +257,7 @@ class RouteTable:
 
 
 def collect_replies(data, seq, dump, out):
-    """add a datagram's replies to out, True when complete"""
+    """append the seq replies in data to out and return True at NLMSG_DONE, NLMSG_ERROR or a non-dump reply"""
     for mtype, flags, mseq, payload in iter_nlmsgs(data):
         if mseq != seq:
             continue
@@ -277,7 +277,7 @@ def collect_replies(data, seq, dump, out):
 
 
 class NetlinkQuery:
-    """blocking netlink request and reply per protocol"""
+    """blocking netlink query socket per protocol"""
 
     def __init__(self, timeout=QUERY_TIMEOUT):
         """start with no socket open"""
@@ -295,7 +295,7 @@ class NetlinkQuery:
         return sock
 
     def request(self, proto, msg_type, flags, payload):
-        """send a request and return its replies"""
+        """call send() with an NLM_F_REQUEST message and return the replies for seq"""
         self._seq = (self._seq % 0x7fffffff) + 1
         seq = self._seq
         sock = self._sock(proto)
@@ -372,7 +372,7 @@ class UplinkWatcher:
         self._errors = {}
 
     def start(self):
-        """subscribe to routes, dump them and write the uplinks file"""
+        """subscribe to route events, dump the routes and write the uplinks file"""
         self._subscribe()
         self._resync = True
         self._note("startup")
@@ -417,7 +417,7 @@ class UplinkWatcher:
         return False
 
     def _note(self, reason):
-        """record the first pending reason to act"""
+        """set _pending to reason unless _pending is set"""
         if self._pending is None:
             self._pending = reason
 
@@ -454,7 +454,7 @@ class UplinkWatcher:
                     getattr(getattr(listener, "__self__", None), "name", "?"), e)
 
     def deliver(self, data):
-        """feed a datagram and apply it"""
+        """call feed and process for data"""
         self.feed(data)
         self.process()
 
@@ -477,11 +477,11 @@ class UplinkWatcher:
         self.process()
 
     def uplink(self):
-        """return the route the host sends by, or None"""
+        """return table.uplink()"""
         return self.table.uplink()
 
     def write_uplinks(self):
-        """write the interfaces carrying a default route on a change"""
+        """write the table.carrying() interfaces to self.path unless the text equals _written"""
         lists = []
         for family in (socket.AF_INET, socket.AF_INET6):
             names = {self.ifname(i) for i in self.table.carrying(family)}
@@ -500,16 +500,16 @@ class UplinkWatcher:
         log("NB_UPLINKS v4=%s v6=%s", ",".join(lists[0]) or "-", ",".join(lists[1]) or "-")
 
     def _error(self, call, e):
-        """log an error once until its call succeeds again"""
+        """log NB_UPLINKS_ERROR unless _errors[call] equals (errno, str(e))"""
         key = (getattr(e, "errno", None), str(e))
         if self._errors.get(call) == key:
             return
         self._errors[call] = key
-        log("NB_UPLINKS_ERROR call=%s errno=%s error=%s -- retrying",
+        log("NB_UPLINKS_ERROR call=%s errno=%s error=%s",
             call, key[0] if key[0] is not None else "-", sanitize_for_log(key[1]))
 
     def _arm_retry(self, delay):
-        """schedule a retry no later than delay from now"""
+        """set _retry_at to clock() + delay unless _retry_at is earlier"""
         at = self.clock() + delay
         if self._retry_at is None or at < self._retry_at:
             self._retry_at = at
@@ -519,7 +519,7 @@ class UplinkWatcher:
         return self._retry_at
 
     def tick(self, mono):
-        """subscribe, dump and write again after a failure"""
+        """subscribe, dump and write the uplinks file when _retry_at is due"""
         if self._retry_at is None or mono < self._retry_at:
             return
         self._retry_at = None

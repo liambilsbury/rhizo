@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build rhizo_netbpfload_preload for netbpfload
+# var/share/gfx_hal/rhizo_netbpfload_preload RHIZO_HAL_ABI= RHIZO_HAL_STAGE=
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
@@ -8,8 +8,8 @@ NDK="$ROOT/toolchain/ndk_extract/android-ndk-r27c/toolchains/llvm/prebuilt/linux
 CLANG="$NDK/bin/clang"
 OUT="$ROOT/toolchain/out/netbpfload_preload/rhizo_netbpfload_preload"
 
-[ -f "$SRC" ] || { echo "source missing: $SRC" >&2; exit 1; }
-[ -x "$CLANG" ] || { echo "NDK clang missing: $CLANG" >&2; exit 1; }
+[ -f "$SRC" ] || { echo "no $SRC" >&2; exit 1; }
+[ -x "$CLANG" ] || { echo "no $CLANG" >&2; exit 1; }
 
 TARGET=x86_64-linux-android31 STAGE="$ROOT/var/share/gfx_hal/rhizo_netbpfload_preload"
 if [[ "${RHIZO_HAL_ABI:-}" == arm64-v8a ]]; then
@@ -22,4 +22,4 @@ mkdir -p "$(dirname "$OUT")"
 "$CLANG" --target="$TARGET" -fPIE -pie -O2 -o "$OUT" "$SRC"
 
 install -D -m 0755 "$OUT" "$STAGE"
-echo "built and staged $STAGE ($(stat -c %s "$OUT") bytes)"
+echo "staged $STAGE bytes=$(stat -c %s "$OUT")"

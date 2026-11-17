@@ -27,23 +27,23 @@ inline int32_t LinearStrideBytes(int32_t width, int32_t unitBytes) {
   return bytes <= INT32_MAX ? static_cast<int32_t>(bytes) : -1;
 }
 
-// tell whether a memfd buffer size is in range
+// return whether bytes is in 1..kMaxMemfdBufferBytes
 inline bool MemfdBufferFits(uint64_t bytes) {
   return bytes > 0 && bytes <= kMaxMemfdBufferBytes;
 }
 
-// return the bytes a linear buffer needs
+// return strideBytes times height rounded up to a multiple of 4
 inline uint64_t MemfdBufferBytes(int32_t strideBytes, int32_t height) {
   return static_cast<uint64_t>(strideBytes) * ((static_cast<uint64_t>(height > 0 ? height : 1) + 3) & ~3ull);
 }
 
-// return the bytes a YUV 4:2:0 buffer needs
+// return the byte size of a YUV 4:2:0 buffer
 inline uint64_t MemfdYuv420Bytes(int32_t lumaStride, int32_t chromaStride, int32_t height) {
   uint64_t cbOffset = static_cast<uint64_t>(lumaStride) * height + static_cast<uint64_t>(chromaStride) * (height / 2);
   return cbOffset + MemfdBufferBytes(chromaStride, height / 2);
 }
 
-// make a memfd sealed at its size
+// create a memfd of size bytes with F_SEAL_GROW, F_SEAL_SHRINK and F_SEAL_SEAL
 inline int CreateBufferMemfd(const char* name, uint64_t size) {
   if (size == 0) { errno = EINVAL; return -1; }
   int fd = memfd_create(name, MFD_CLOEXEC | MFD_ALLOW_SEALING);
@@ -58,16 +58,16 @@ inline int CreateBufferMemfd(const char* name, uint64_t size) {
   return fd;
 }
 
-// tell whether fd is a shmem file
+// return whether F_GET_SEALS succeeds on fd
 inline bool IsShmemFile(int fd) { return fcntl(fd, F_GET_SEALS) >= 0; }
 
-// tell whether a seal set carries F_SEAL_SHRINK
+// return whether seals includes F_SEAL_SHRINK
 inline bool SealsHoldSize(int seals) { return seals >= 0 && (seals & F_SEAL_SHRINK) != 0; }
 
-// tell whether fd is a shmem file sealed against shrinking
+// return whether the seals of fd include F_SEAL_SHRINK
 inline bool ShmemSealedAgainstShrink(int fd) { return SealsHoldSize(fcntl(fd, F_GET_SEALS)); }
 
-// tell whether the mapper may import fd
+// return whether fd is not shmem or is shrink-sealed shmem of at least allocSize bytes
 inline bool ShmemImportAllowed(int fd, uint64_t allocSize) {
   if (!IsShmemFile(fd)) return true;
   struct stat st {};

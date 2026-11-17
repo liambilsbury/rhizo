@@ -55,7 +55,7 @@ class DecoderHost {
 
   virtual VADisplay display() = 0;
 
-  // configure the context for a new sequence
+  // configure the context for a sequence
   virtual Status Configure(const StreamInfo& info, VAContextID* context) = 0;
 
   // read the size of the allocated surfaces
@@ -67,11 +67,11 @@ class DecoderHost {
 
   // output a surface in display order
   virtual void Output(VASurfaceID surface, uint64_t tag, const Rect& crop, const ColorInfo& color) = 0;
-  // mark a tag as producing no picture
+  // mark tag with no output picture
   virtual void Skip(uint64_t tag) = 0;
 };
 
-// a codec decoder that outputs or skips each tag once
+// abstract codec decoder
 class DecoderCore {
  public:
   virtual ~DecoderCore() = default;
@@ -128,7 +128,7 @@ class EncoderCore {
  public:
   virtual ~EncoderCore() = default;
 
-  // encode an input surface held until its Output or Drain
+  // encode input, in use until Output or Drain for tag
   virtual Status Encode(VASurfaceID input, uint64_t tag, int64_t pts, bool force_keyframe) = 0;
   virtual Status Drain() = 0;
   // set the bitrate from the next picture

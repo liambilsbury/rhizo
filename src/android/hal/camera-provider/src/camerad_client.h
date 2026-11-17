@@ -1,7 +1,7 @@
 #ifndef RHIZO_CAMERA_CAMERAD_CLIENT_H
 #define RHIZO_CAMERA_CAMERAD_CLIENT_H
 
-// read the host camera list and stream frames from rhizo-camerad
+// rhizo-camerad client for the host camera list and frame streams
 
 #include <stddef.h>
 #include <stdint.h>
@@ -20,7 +20,7 @@
 
 namespace rhizo::camera {
 
-// a host camera size at its highest frame rate
+// a host camera size at the highest frame rate of the size
 struct HostMode {
   uint32_t width = 0;
   uint32_t height = 0;
@@ -28,7 +28,7 @@ struct HostMode {
   uint32_t fpsDen = 1;
 };
 
-// a host camera and its modes
+// a host camera with a mode list
 struct HostCamera {
   std::string key;
   std::string name;
@@ -45,7 +45,7 @@ struct Frame {
   int64_t monotonicNs = 0;
 };
 
-// hand a stream's frames from the reader to a session
+// mailbox of a stream's frames between the reader thread and a session
 class FrameMailbox {
  public:
   enum class Wait { kFrame, kTimeout, kStopped, kInterrupted };
@@ -79,7 +79,7 @@ class FrameMailbox {
   uint64_t generation_ = 0;
 };
 
-// connect to rhizo-camerad and reconnect with backoff
+// rhizo-camerad client that reconnects with backoff
 class CameradClient {
  public:
   using ListCallback = std::function<void(const std::vector<HostCamera>&)>;

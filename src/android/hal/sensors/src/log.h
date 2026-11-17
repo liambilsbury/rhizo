@@ -1,4 +1,4 @@
-// write rhizo-sensors-service messages to logcat and the kernel log
+// logcat and kernel log writer for rhizo-sensors-service
 #ifndef RHIZO_SENSORS_LOG_H
 #define RHIZO_SENSORS_LOG_H
 

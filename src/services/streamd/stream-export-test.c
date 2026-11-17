@@ -38,7 +38,7 @@ static void logmsg(const char *fmt, ...) {
 #define CHECK_VA(expr, what) do { \
     VAStatus _st = (expr); \
     if (_st != VA_STATUS_SUCCESS) { \
-        logmsg("%s failed: %s (%d)", (what), vaErrorStr(_st), _st); \
+        logmsg("%s failed with %s (%d)", (what), vaErrorStr(_st), _st); \
         return 1; \
     } \
 } while (0)
@@ -66,11 +66,11 @@ static int paint_pattern(VADisplay dpy, VASurfaceID surf) {
 
 static void usage(void) {
     fprintf(stderr,
-        "usage: rhizo-stream-export-test --socket PATH [--frames N] [--size WxH]\n"
-        "                                [--render-node PATH]\n");
+        "rhizo-stream-export-test --socket PATH [--frames N] [--size WxH]\n"
+        "    [--render-node PATH]\n");
 }
 
-// send test frames to the export socket
+// write test frames to the export socket with sendmsg
 int main(int argc, char **argv) {
     const char *sock_path = NULL;
     const char *render_node = "/dev/dri/renderD128";
@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
 
     int drm_fd = open(render_node, O_RDWR);
     if (drm_fd < 0) {
-        logmsg("open(%s) failed: %s", render_node, strerror(errno));
+        logmsg("open(%s) failed (%s)", render_node, strerror(errno));
         return 1;
     }
     VADisplay dpy = vaGetDisplayDRM(drm_fd);
@@ -118,20 +118,20 @@ int main(int argc, char **argv) {
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
-        logmsg("socket(AF_UNIX) failed: %s", strerror(errno));
+        logmsg("socket(AF_UNIX) failed (%s)", strerror(errno));
         return 1;
     }
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     if (strlen(sock_path) >= sizeof(addr.sun_path)) {
-        logmsg("--socket path is %zu bytes, over the %zu a unix address holds",
+        logmsg("--socket path length %zu >= sun_path size %zu",
                strlen(sock_path), sizeof(addr.sun_path));
         return 1;
     }
     strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        logmsg("connect(%s) failed: %s", sock_path, strerror(errno));
+        logmsg("connect(%s) failed (%s)", sock_path, strerror(errno));
         return 1;
     }
 
@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
         cmsg->cmsg_len = CMSG_LEN(sizeof(int));
         memcpy(CMSG_DATA(cmsg), &desc.objects[0].fd, sizeof(int));
         if (sendmsg(fd, &msg, MSG_NOSIGNAL) != (ssize_t)sizeof(hdr)) {
-            logmsg("sendmsg for seq=%d failed: %s", i + 1, strerror(errno));
+            logmsg("sendmsg for seq=%d failed (%s)", i + 1, strerror(errno));
             return 1;
         }
 
@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
         ssize_t n = recv(fd, &ack, sizeof(ack), MSG_WAITALL);
         if (n != (ssize_t)sizeof(ack) || ack.magic != RHIZO_STREAM_ACK_MAGIC ||
             ack.seq != hdr.seq) {
-            logmsg("release ack for seq=%d read n=%zd magic=0x%x seq=%llu",
+            logmsg("malformed release ack for seq=%d n=%zd magic=0x%x seq=%llu",
                    i + 1, n, ack.magic, (unsigned long long)ack.seq);
             return 1;
         }

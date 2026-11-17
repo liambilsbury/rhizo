@@ -7,17 +7,16 @@ HOST_ARCH_AMD64 = "x86_64"
 MAX_SANDBOX_ID = 99
 SANDBOX_ID = int(os.environ.get("RHIZO_SANDBOX_ID", "0"))
 if not 0 <= SANDBOX_ID <= MAX_SANDBOX_ID:
-    raise SystemExit(f"RHIZO_SANDBOX_ID={SANDBOX_ID} refused: NET_SUBNET below "
-                      "needs a single id 0-99, two free octet digits and no sign")
+    raise SystemExit(f"RHIZO_SANDBOX_ID={SANDBOX_ID} is not an integer 0-99")
 
 
 def _instanced_for(base, sandbox_id, sep="-"):
-    """return base suffixed with an explicit sandbox id"""
+    """return base for sandbox_id 0, else base, sep and sandbox_id"""
     return base if sandbox_id == 0 else f"{base}{sep}{sandbox_id}"
 
 
 def _instanced(base, sep="-"):
-    """return base suffixed with this launcher's sandbox id"""
+    """return base for SANDBOX_ID 0, else base, sep and SANDBOX_ID"""
     return _instanced_for(base, SANDBOX_ID, sep)
 
 
@@ -87,7 +86,7 @@ InstancePaths = collections.namedtuple("InstancePaths", (
 
 
 def paths_for(sandbox_id):
-    """return the per-instance paths for an arbitrary sandbox id"""
+    """return the InstancePaths for sandbox_id"""
     return InstancePaths(
         run_root=_instanced_for("/run/rhizo", sandbox_id),
         records_dir=_instanced_for("/run/rhizo-selinuxns", sandbox_id),
@@ -106,6 +105,9 @@ CLONE_NEWIPC=0x08000000; CLONE_NEWPID=0x20000000; CLONE_NEWNET=0x40000000
 MS_REC=16384; MS_PRIVATE=1<<18; MS_BIND=4096; MS_RDONLY=1; MS_REMOUNT=32; MS_SHARED=1<<20
 MS_SLAVE=1<<19
 MS_NOSUID=2; MS_NODEV=4; MS_NOEXEC=8
+AT_FDCWD=-100; AT_SYMLINK_NOFOLLOW=0x100; AT_RECURSIVE=0x8000
+MOUNT_ATTR_RDONLY=0x1; MOUNT_ATTR_NOSUID=0x2; MOUNT_ATTR_NODEV=0x4; MOUNT_ATTR_NOEXEC=0x8
+MOUNT_SETATTR_NR={HOST_ARCH_AMD64:442,"aarch64":442}
 
 PR_CAPBSET_DROP=24
 PR_SET_MEMORY_MERGE=67
@@ -122,8 +124,7 @@ def _gsi_is_debuggable():
                 if line.strip() == "ro.debuggable=1":
                     return True
     except OSError as e:
-        print(f"L3: WARNING: cannot read {GSI}/build.prop ({e}) -- assuming "
-              "the GSI is not natively debuggable", file=sys.stderr, flush=True)
+        print(f"L3: failed to read {GSI}/build.prop ({e})", file=sys.stderr, flush=True)
     return False
 GSI_DEBUGGABLE = _gsi_is_debuggable()
 
@@ -136,14 +137,14 @@ def _gsi_fingerprint():
                 if "=" in l and not l.lstrip().startswith("#")
             )
     except OSError as e:
-        print(f"L3: WARNING: cannot read {GSI}/build.prop for gsi_fingerprint ({e})", file=sys.stderr, flush=True)
+        print(f"L3: failed to read {GSI}/build.prop ({e})", file=sys.stderr, flush=True)
         return ""
     return props.get("ro.system.build.fingerprint") or props.get("ro.build.fingerprint") or ""
 GSI_FINGERPRINT = _gsi_fingerprint()
 
 RHIZO_ADB_ROOT = bool(os.environ.get("RHIZO_ADB_ROOT")) and not GSI_DEBUGGABLE
 if os.environ.get("RHIZO_ADB_ROOT") and GSI_DEBUGGABLE:
-    print(f"L3: RHIZO_ADB_ROOT ignored -- {GSI} sets ro.debuggable=1 itself",
+    print(f"L3: RHIZO_ADB_ROOT ignored with ro.debuggable=1 in {GSI}/build.prop",
           file=sys.stderr, flush=True)
 RHIZO_PERMISSIVE = os.environ.get("RHIZO_PERMISSIVE") == "1"
 RHIZO_ENFORCING = not RHIZO_PERMISSIVE
@@ -151,7 +152,7 @@ RHIZO_SELINUX_MODE = os.environ.get("RHIZO_SELINUX_MODE", "namespace")
 
 
 def host_selinux_mode():
-    """return True when the policy loads host-wide"""
+    """return whether RHIZO_SELINUX_MODE is host"""
     return os.environ.get("RHIZO_SELINUX_MODE", "namespace") == "host"
 
 
@@ -214,7 +215,7 @@ libc=ctypes.CDLL("libc.so.6", use_errno=True)
 
 _KMSG_FD = None
 def _kmsg_fd():
-    """open /dev/kmsg for writing once and return its fd"""
+    """open /dev/kmsg for writing unless _KMSG_FD is set and return _KMSG_FD"""
     global _KMSG_FD
     if _KMSG_FD is None:
         try:
@@ -230,7 +231,7 @@ def gsi_bootstrap_cmd(binary, args=""):
 
 
 def kmsg(m):
-    """write a message to /dev/kmsg and print it"""
+    """write m to /dev/kmsg and stdout"""
     fd = _kmsg_fd()
     if fd >= 0:
         try: os.write(fd, f"<5>L3: {m}\n".encode())
@@ -261,7 +262,7 @@ def _copy_pipe_to_file(pipe_read_fd, file_fd, kmsg_fd):
                 view = view[os.write(file_fd, view):]
             except OSError as e:
                 if not dropped:
-                    _report_log_pump(kmsg_fd, f"write to fd {file_fd} failed: {e}")
+                    _report_log_pump(kmsg_fd, f"failed to write fd {file_fd} ({e})")
                 dropped += len(view)
                 break
     if dropped:
@@ -301,7 +302,7 @@ def _run_log_pump(pipe_read_fd, file_fd, kmsg_fd, ready_fd):
         _copy_pipe_to_file(pipe_read_fd, file_fd, kmsg_fd)
         status = 0
     except BaseException as e:
-        _report_log_pump(kmsg_fd, f"stopped: {e!r}")
+        _report_log_pump(kmsg_fd, f"failed ({e!r})")
     finally:
         os._exit(status)
 
@@ -350,7 +351,7 @@ def route_stdio_through_pipe(log_path=None):
             _, wait_status = os.waitpid(pump, 0)
             for fd in (pipe_read_fd, pipe_write_fd, file_fd):
                 os.close(fd)
-            raise OSError(errno.EPIPE, f"the log pump {pump} ended at start with wait status {wait_status}")
+            raise OSError(errno.EPIPE, f"log pump {pump} exited with wait status {wait_status}")
         pumps.append(pump)
         os.close(pipe_read_fd)
         os.close(file_fd)
@@ -367,14 +368,23 @@ def phase(layer, name):
 def unshare(f):
     """unshare the given namespaces"""
     if libc.unshare(f)!=0:
-        kmsg(f"unshare FAIL {os.strerror(ctypes.get_errno())}"); os._exit(1)
+        kmsg(f"unshare failed ({os.strerror(ctypes.get_errno())})"); os._exit(1)
 def mount(s,t,fs,fl,d=None):
     """call mount(2) and log a failure"""
     if libc.mount(s.encode() if s else None,t.encode(),fs.encode() if fs else None,fl,
                   d.encode() if d else None)!=0:
-        kmsg(f"mount {t}: {os.strerror(ctypes.get_errno())}"); return False
+        kmsg(f"mount {t} failed ({os.strerror(ctypes.get_errno())})"); return False
     return True
 def pivot_root(new,old): return libc.syscall(155,new.encode(),old.encode())==0
+def mount_setattr(path,attr_set=0,attr_clr=0,recursive=False):
+    """call mount_setattr(2) on path and return whether mount_setattr returned 0"""
+    nr=MOUNT_SETATTR_NR.get(HOST_ARCH)
+    if nr is None:
+        ctypes.set_errno(errno.ENOSYS); return False
+    attr=struct.pack("=QQQQ",attr_set,attr_clr,0,0)
+    buf=ctypes.create_string_buffer(attr,len(attr))
+    flags=AT_SYMLINK_NOFOLLOW|(AT_RECURSIVE if recursive else 0)
+    return libc.syscall(nr,AT_FDCWD,path.encode(),flags,ctypes.byref(buf),len(attr))==0
 
 LOOP_CTL_GET_FREE = 0x4C82
 LOOP_CONFIGURE = 0x4C0A
@@ -437,7 +447,7 @@ def loop_backing_id(dev):
 
 
 def loops_backed_by(path, sysblock="/sys/block", backing_id=loop_backing_id):
-    """find the loops backing path"""
+    """return the loop devices with backing file path"""
     try:
         st = os.stat(path)
         want = (st.st_dev, st.st_ino)
@@ -482,7 +492,7 @@ def _kmsg_parse(rec):
 
 
 def kmsg_records(follow=False, backlog=None, path="/dev/kmsg"):
-    """yield the ring's last records, then new ones"""
+    """yield the last backlog kmsg records, then follow /dev/kmsg when follow is set"""
     fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
     try:
         ring = None if backlog is None else collections.deque(maxlen=backlog)
@@ -534,7 +544,7 @@ def module_entry(name, kver=None, root="/lib/modules"):
 
 
 def _current_fsuid():
-    """return this thread's filesystem uid"""
+    """return the fsuid field of the Uid line in /proc/self/status"""
     try:
         with open("/proc/self/status") as f:
             for line in f:
@@ -545,35 +555,34 @@ def _current_fsuid():
     return None
 
 def set_fsuid(uid, log=kmsg):
-    """switch this thread's fsuid and verify it"""
+    """call setfsuid(uid) and compare _current_fsuid() with uid"""
     prev = libc.setfsuid(uid)
     now = _current_fsuid()
     if now != uid:
-        log(f"setfsuid({uid}) did not take (still {now}, was {prev}) -- "
-            "CAP_SETUID missing or refused")
+        log(f"setfsuid({uid}) failed with fsuid {now}, previous fsuid {prev}")
         return None
     return prev
 
 def get_dumpable():
-    """return this process's dumpable flag from prctl(PR_GET_DUMPABLE)"""
+    """return prctl(PR_GET_DUMPABLE)"""
     return libc.prctl(PR_GET_DUMPABLE, 0, 0, 0, 0)
 
 def restore_dumpable(was, log=kmsg):
-    """restore the dumpable flag an fsuid switch changed"""
+    """call prctl(PR_SET_DUMPABLE, was) when get_dumpable() != was"""
     if was not in (0, 1) or get_dumpable() == was:
         return
     if libc.prctl(PR_SET_DUMPABLE, was, 0, 0, 0) != 0:
-        log(f"prctl(PR_SET_DUMPABLE, {was}) failed: {os.strerror(ctypes.get_errno())}")
+        log(f"prctl(PR_SET_DUMPABLE, {was}) failed ({os.strerror(ctypes.get_errno())})")
 
 def _dirname_owner(path):
-    """return the uid owning path's parent directory"""
+    """return st_uid of the parent directory of path"""
     try:
         return os.stat(os.path.dirname(path) or "/").st_uid
     except OSError:
         return None
 
 def stat_as_owner(path, log=kmsg):
-    """stat path as its parent directory's owner"""
+    """stat path with fsuid set to the parent directory owner"""
     try:
         return os.stat(path)
     except PermissionError:
@@ -596,10 +605,10 @@ def stat_as_owner(path, log=kmsg):
         restore_dumpable(dumpable, log)
 
 def bind_as_owner(src, dst, log=kmsg):
-    """bind-mount src onto dst as src's directory owner"""
+    """bind-mount src onto dst with fsuid set to the src parent directory owner"""
     owner = _dirname_owner(src)
     if owner is None:
-        log(f"{src}: cannot learn its own directory's owner, binding as-is")
+        log(f"failed to stat the parent directory of {src}")
         return mount(src, dst, None, MS_BIND)
     dumpable = get_dumpable()
     prev = set_fsuid(owner, log)
@@ -621,8 +630,7 @@ def load_needed_modules(run=subprocess.run):
     for mod in ANDROID_NEEDED_MODULES:
         r = run(["modprobe", mod], capture_output=True, text=True)
         if r.returncode:
-            kmsg(f"WARNING: module {mod} not loaded ({(r.stderr or '').strip() or 'modprobe failed'})"
-                 f" -- Android's policy refuses its autoload")
+            kmsg(f"failed to load module {mod} ({(r.stderr or '').strip() or 'modprobe failed'})")
 
 
 
@@ -638,12 +646,12 @@ def product_build_prop_source():
 
 
 def beside(*parts):
-    """return a path next to the launcher, from name or path segments"""
+    """return the path of parts under the launcher directory"""
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), *parts)
 
 
 def release_hal_bin(gfx_src, name, release=None, exists=os.path.exists):
-    """return the HAL binary a boot of release stages for name"""
+    """return the HAL binary path for name and release"""
     if (RHIZO_RELEASE if release is None else release) == "a15" and name == "rhizo-power-service":
         own = beside("rel", "a15", "rhizo-power-service")
         if exists(own):
@@ -656,7 +664,7 @@ AUDIO_SET_RELEASES = ("a16", "a17", "a15")
 
 
 def release_skips(name, release=None):
-    """return whether a boot of release leaves the shipped file name out"""
+    """return whether release is outside AUDIO_SET_RELEASES and name is in A16_ONLY_PAYLOAD"""
     return (RHIZO_RELEASE if release is None else release) not in AUDIO_SET_RELEASES and name in A16_ONLY_PAYLOAD
 
 
@@ -688,31 +696,30 @@ def gsi_libs_dir():
 
 
 def stock_patches_dir():
-    """return this GSI tree's host-derived stock patches directory"""
+    """return the derived stock patches directory for GSI"""
     root = os.path.join(RHIZO_DERIVED_DIR, "patches")
     d = os.path.join(root, os.path.basename(os.path.normpath(GSI)))
     return d if os.path.isdir(d) else None
 
 
 def gsi_derived_missing():
-    """return every GSI-derived file a boot links and cannot find"""
+    """return the KEYMINT_GSI_LIBS paths missing from gsi_libs_dir()"""
     d = gsi_libs_dir()
     return [os.path.join(d, n) for n in KEYMINT_GSI_LIBS if not os.path.isfile(os.path.join(d, n))]
 
 
 def gsi_derived_mismatch():
-    """return why the derived library set was not copied from the booting tree"""
+    """return the gsi_libs source mismatch for GSI, or None"""
     d = gsi_libs_dir()
     if os.path.dirname(d) != os.path.join(RHIZO_DERIVED_DIR, "gsi_libs"):
         return None
     if not GSI_FINGERPRINT:
-        return (f"{GSI} carries no ro.system.build.fingerprint or ro.build.fingerprint, so {d} "
-                f"cannot be shown to be copied from it")
+        return f"{GSI}/build.prop has no ro.system.build.fingerprint or ro.build.fingerprint"
     try:
         with open(os.path.join(d, GSI_LIBS_SOURCE)) as f:
             stamp = dict(l.rstrip("\n").split("=", 1) for l in f if "=" in l)
     except OSError:
-        return f"{d} has no {GSI_LIBS_SOURCE} stamp, so its copy never finished"
+        return f"failed to read {d}/{GSI_LIBS_SOURCE}"
     if stamp.get("fingerprint", "") != GSI_FINGERPRINT:
         return (f"{d} was copied from {stamp.get('tree', '?')} ({stamp.get('fingerprint', '')!r}), "
                 f"not from {GSI} ({GSI_FINGERPRINT!r})")
@@ -724,7 +731,7 @@ VBMETA_LOOP_DEV = None
 
 
 def set_vbmeta_loop_dev(dev):
-    """record the loop device vbmeta.img is attached to"""
+    """set the loop device of vbmeta.img"""
     global VBMETA_LOOP_DEV
     VBMETA_LOOP_DEV = dev
 
@@ -733,7 +740,7 @@ WRITE_PRIMER_SCRIPT = None
 
 
 def set_write_primer_script(fn):
-    """record the function that writes the host primer script"""
+    """set the function that writes the host primer script"""
     global WRITE_PRIMER_SCRIPT
     WRITE_PRIMER_SCRIPT = fn
 
@@ -742,13 +749,13 @@ RELABELLER_DONE_FD = -1
 
 
 def set_relabeller_done_fd(fd):
-    """record the write end of the relabeller's done pipe"""
+    """set the write end of the relabeller done pipe"""
     global RELABELLER_DONE_FD
     RELABELLER_DONE_FD = fd
 
 
 def swap_kmsg_fd(new_fd):
-    """point kmsg() at a new /dev/kmsg fd and return the old one"""
+    """set _KMSG_FD to new_fd and return the previous fd"""
     global _KMSG_FD
     old, _KMSG_FD = _KMSG_FD, new_fd
     return old
@@ -760,23 +767,67 @@ _UINPUT_FILTERED = [False]
 
 
 def set_input_supervisor(sock):
-    """hold the socket to this instance's rhizo-inputd supervisor"""
+    """set the rhizo-inputd supervisor socket"""
     _INPUT_SUPERVISOR[0] = sock
 
 
 def set_uinput_filtered(flag):
-    """record whether init's process must filter UI_DEV_CREATE"""
+    """set the UI_DEV_CREATE filter flag"""
     _UINPUT_FILTERED[0] = bool(flag)
 
 
 def uinput_filtered():
-    """return the flag set_uinput_filtered() holds"""
+    """return the set_uinput_filtered() flag"""
     return _UINPUT_FILTERED[0]
 
 
 def input_supervisor():
-    """return the socket set_input_supervisor() holds, or None"""
+    """return the set_input_supervisor() socket, or None"""
     return _INPUT_SUPERVISOR[0]
+
+
+_DEVICE_FILTER_MAP = [None]
+
+
+def set_device_filter_map(devmap):
+    """set the cgroup device filter map"""
+    _DEVICE_FILTER_MAP[0] = devmap
+
+
+def device_filter_map():
+    """return the set_device_filter_map() map, or None"""
+    return _DEVICE_FILTER_MAP[0]
+
+
+_DEVICE_FILTER_LINK = [-1]
+
+
+def set_device_filter_link(fd):
+    """set the cgroup device filter bpf_link fd and close the previous fd"""
+    old = _DEVICE_FILTER_LINK[0]
+    _DEVICE_FILTER_LINK[0] = fd
+    if old >= 0 and old != fd:
+        try:
+            os.close(old)
+        except OSError:
+            pass
+
+
+def device_filter_link():
+    """return the set_device_filter_link() fd, or -1"""
+    return _DEVICE_FILTER_LINK[0]
+
+
+def drop_device_filter_link():
+    """close the device filter bpf_link fd and set _DEVICE_FILTER_LINK to -1"""
+    fd = _DEVICE_FILTER_LINK[0]
+    _DEVICE_FILTER_LINK[0] = -1
+    if fd >= 0:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
 
 def cgroup_write(path, value):
     """write a value to a cgroup file through an unbuffered fd"""
@@ -788,14 +839,14 @@ def cgroup_write(path, value):
 
 
 def _host_mem_total_bytes():
-    """return this host's total ram in bytes"""
+    """return MemTotal from /proc/meminfo in bytes"""
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
                     return int(line.split()[1]) * 1024
     except (OSError, ValueError) as e:
-        kmsg(f"WARNING: cannot read /proc/meminfo for memory.max ({e}) -- using the floor")
+        kmsg(f"failed to read /proc/meminfo ({e})")
     return 0
 
 
@@ -804,7 +855,7 @@ def _host_threads_max():
     try:
         return int(open("/proc/sys/kernel/threads-max").read().strip())
     except (OSError, ValueError) as e:
-        kmsg(f"WARNING: cannot read /proc/sys/kernel/threads-max for pids.max ({e}) -- using the floor")
+        kmsg(f"failed to read /proc/sys/kernel/threads-max ({e})")
         return 0
 
 
@@ -826,13 +877,13 @@ _RECORDED_COPIES = []
 
 
 def set_prepared(key):
-    """record the accepted prepared tree's key for this launch"""
+    """set the prepared tree key"""
     global _PREPARED_KEY
     _PREPARED_KEY = key
 
 
 def prepared_key():
-    """return the accepted prepared tree's key, or None on the copy path"""
+    """return the prepared tree key, or None"""
     return _PREPARED_KEY
 
 
@@ -840,13 +891,13 @@ _WIFI_ARMED = False
 
 
 def set_wifi_armed(armed):
-    """record whether this launch gives Android the wireless pair"""
+    """set the Wi-Fi armed flag"""
     global _WIFI_ARMED
     _WIFI_ARMED = bool(armed)
 
 
 def wifi_armed():
-    """return whether this launch gives Android the wireless pair"""
+    """return the Wi-Fi armed flag"""
     return _WIFI_ARMED
 
 
@@ -855,12 +906,12 @@ _HOST_BATTERY = [None]
 
 
 def set_host_battery(data):
-    """record host-battery's first bytes"""
+    """set the host-battery bytes"""
     _HOST_BATTERY[0] = data
 
 
 def host_battery():
-    """return the bytes set_host_battery() holds"""
+    """return the set_host_battery() bytes"""
     return _HOST_BATTERY[0]
 
 
@@ -868,12 +919,12 @@ _STAGED_BATTERY_SOURCE = ["off"]
 
 
 def set_staged_battery_source(source):
-    """record the battery source the health HAL was staged with"""
+    """set the staged health HAL battery source"""
     _STAGED_BATTERY_SOURCE[0] = source
 
 
 def staged_battery_source():
-    """return the battery source set_staged_battery_source() holds"""
+    """return the set_staged_battery_source() source"""
     return _STAGED_BATTERY_SOURCE[0]
 
 
@@ -888,18 +939,18 @@ _SENSORS_PLAN = ()
 
 
 def set_sensors_plan(sensors):
-    """record the sensors this launch declares to Android"""
+    """set the sensors plan"""
     global _SENSORS_PLAN
     _SENSORS_PLAN = tuple(sensors)
 
 
 def sensors_plan():
-    """return the sensors this launch declares to Android"""
+    """return the sensors plan"""
     return _SENSORS_PLAN
 
 
 def sensors_armed():
-    """return whether this launch declares the sensors HAL"""
+    """return whether _SENSORS_PLAN is non-empty"""
     return bool(_SENSORS_PLAN)
 
 
@@ -915,23 +966,23 @@ _CODEC2_COMPONENTS = ()
 
 
 def set_codec2_components(components):
-    """record the c2.rhizo.* components this launch declares"""
+    """set the c2.rhizo.* components"""
     global _CODEC2_COMPONENTS
     _CODEC2_COMPONENTS = tuple(components or ())
 
 
 def codec2_components():
-    """return the c2.rhizo.* components this launch declares"""
+    """return the c2.rhizo.* components"""
     return _CODEC2_COMPONENTS
 
 
 def codec2_armed():
-    """return whether this launch declares the hardware Codec2 store"""
+    """return whether _CODEC2_COMPONENTS is non-empty"""
     return bool(_CODEC2_COMPONENTS)
 
 
 def codec2_release(release=None):
-    """return whether a release may carry the Codec2 store"""
+    """return whether release is in CODEC2_RELEASES"""
     return (RHIZO_RELEASE if release is None else release) in CODEC2_RELEASES
 
 
@@ -953,7 +1004,6 @@ def va_driver_links(tree):
     out = []
     for name in sorted(os.listdir(d)):
         path = os.path.join(d, name)
-        # a copy of libgallium_dri.so would load a second Mesa beside GBM's
         if not VA_DRIVER_NAME.fullmatch(name) or not os.path.islink(path):
             continue
         text = os.readlink(path)
@@ -967,9 +1017,9 @@ def va_driver_links(tree):
 
 
 def stage_link(text, dst):
-    """make dst a symlink reading text"""
+    """create symlink dst with target text"""
     if is_prepared_bind_path(dst):
-        assert os.path.islink(dst) and os.readlink(dst) == text, f"stage_link: prepared bind lacks {dst} -> {text}"
+        assert os.path.islink(dst) and os.readlink(dst) == text, f"no symlink {dst} -> {text} in the prepared bind"
         return
     try:
         os.unlink(dst)
@@ -986,13 +1036,13 @@ def restorecon_line(exe_path):
 
 
 def early_init_restorecon(exe_path):
-    """return the early-init trigger holding restorecon_line()"""
+    """return an on early-init block with restorecon_line()"""
     line = restorecon_line(exe_path)
     return f"on early-init\n{line}" if line else ""
 
 
 def set_prepare_recording(on):
-    """turn recording of staged copies on or off"""
+    """set _PREPARE_RECORDING and clear _RECORDED_COPIES when on is true"""
     global _PREPARE_RECORDING, _RECORDED_COPIES
     _PREPARE_RECORDING = on
     if on:
@@ -1005,7 +1055,7 @@ def recorded_copies():
 
 
 def is_prepared_bind_path(dst):
-    """return whether dst lies under a prepared bind subtree"""
+    """return whether dst is under a PREPARED_BINDS subtree"""
     if not _PREPARED_KEY:
         return False
     for sub in PREPARED_BINDS:
@@ -1022,9 +1072,9 @@ def record_prepare_input(src, dst):
 
 
 def stage_bulk(src, dst, mode):
-    """copy src to dst and chmod it"""
+    """copy src to dst and chmod dst"""
     if is_prepared_bind_path(dst):
-        assert os.path.exists(dst), f"stage_bulk: prepared bind is missing {dst}"
+        assert os.path.exists(dst), f"no {dst} in the prepared bind"
         return
     import shutil
     shutil.copy(src, dst)
@@ -1033,7 +1083,7 @@ def stage_bulk(src, dst, mode):
 
 
 def own_domain():
-    """return this process's selinux context"""
+    """return /proc/self/attr/current"""
     try:
         with open("/proc/self/attr/current") as f:
             return f.read().strip("\0").strip()
@@ -1046,12 +1096,12 @@ def bind_private(src, dst, log=kmsg):
     if not mount(src, dst, None, MS_BIND):
         return False
     if not mount(None, dst, None, MS_PRIVATE):
-        log(f"bind of {src} at {dst}: could not make it private")
+        log(f"failed to set MS_PRIVATE on {dst} for {src}")
     return True
 
 
 def mounts_under(path):
-    """return every mount point below path, deepest first"""
+    """return the mount points below path, deepest first"""
     prefix = path.rstrip("/") + "/"
     found = []
     try:
@@ -1091,15 +1141,15 @@ def mounts_reaching(path, rows):
     path = os.path.realpath(path)
 
     def within(p, d):
-        """return whether path p is d or lies under it"""
+        """return whether p is d or under d"""
         return p == d or p.startswith(d if d == "/" else d + "/")
 
     def rel(p, m):
-        """return p relative to mount point m, empty when they are equal"""
+        """return p relative to mount point m, or an empty string for p == m"""
         return "" if p == m else p[1:] if m == "/" else p[len(m) + 1:]
 
     def join(a, r):
-        """join path a with relative path r, giving a when r is empty"""
+        """return a joined with relative path r, or a when r is empty"""
         return a if r == "" else "/" + r if a == "/" else a + "/" + r
 
     by_id = {r[0]: r for r in rows}
@@ -1128,16 +1178,16 @@ def mount_points_at_or_under(path, rows):
 
 
 def umount_tree(path, log=kmsg):
-    """unmount path and its submounts, returning failures"""
+    """unmount path and the submounts of path and return the failures"""
     rows = read_mountinfo()
     if rows is None:
-        return [f"{path}: /proc/self/mountinfo is unreadable"]
+        return [f"failed to read /proc/self/mountinfo for {path}"]
     failed = []
     for point in mount_points_at_or_under(path, rows):
         if libc.umount2(point.encode(), 0) != 0:
-            failed.append(f"{point}: {os.strerror(ctypes.get_errno())}")
+            failed.append(f"{point} ({os.strerror(ctypes.get_errno())})")
     for line in failed:
-        log(f"umount {line}")
+        log(f"failed to unmount {line}")
     return failed
 
 
@@ -1145,7 +1195,7 @@ def is_mount_point(path):
     """return whether mountinfo lists path as a mount point"""
     rows = read_mountinfo()
     if rows is None:
-        raise OSError(errno.EIO, "/proc/self/mountinfo is unreadable")
+        raise OSError(errno.EIO, "failed to read /proc/self/mountinfo")
     real = os.path.realpath(path)
     return any(row[4] == real for row in rows)
 
@@ -1153,22 +1203,22 @@ def is_mount_point(path):
 def share_run_dir(path):
     """make path a shared mount point"""
     if not is_mount_point(path) and not mount(path, path, None, MS_BIND | MS_REC):
-        raise OSError(ctypes.get_errno(), f"bind of {path} onto itself failed")
+        raise OSError(ctypes.get_errno(), f"self-bind of {path} failed")
     if not mount(None, path, None, MS_SHARED):
-        raise OSError(ctypes.get_errno(), f"making {path} shared failed")
+        raise OSError(ctypes.get_errno(), f"failed to set MS_SHARED on {path}")
 
 
 def unmount_under(path, log=kmsg):
-    """unmount every mount below path and return how many went"""
+    """unmount the mounts below path and return the count"""
     n = 0
     for m in mounts_under(path):
         if libc.umount2(m.encode(), 0) == 0 or libc.umount2(m.encode(), 2) == 0:
             n += 1
         else:
-            log(f"{path}: a mount at {m} would not unmount -- refusing to remove through it")
+            log(f"failed to unmount {m} under {path}")
             return -1
     if n:
-        log(f"{path}: {n} mount(s) unmounted before removal")
+        log(f"unmounted {n} mounts under {path}")
     return n
 
 
@@ -1211,7 +1261,7 @@ def output_meta(path):
 
 
 def _check_input(path, meta):
-    """check a prepared-tree input against its record"""
+    """return an input-changed reason when path differs from meta"""
     try:
         st = os.lstat(path)
     except OSError:
@@ -1229,7 +1279,7 @@ def _check_input(path, meta):
 
 
 def _check_output(tree, rel, meta):
-    """check a prepared-tree output against its record"""
+    """return an output-tampered reason when tree/rel differs from meta"""
     path = os.path.join(tree, rel)
     try:
         st = os.lstat(path)
@@ -1247,7 +1297,7 @@ _SOFTWARE_RENDERING = {}
 
 
 def _file_version(path):
-    """return a path with its mtime and size"""
+    """return (path, st_mtime_ns, st_size)"""
     try:
         st = os.stat(path)
     except OSError:
@@ -1256,29 +1306,28 @@ def _file_version(path):
 
 
 def software_rendering():
-    """tell whether the host policy turns devices.dri off"""
+    """return whether devices.dri is off in the host policy"""
     from sandbox import capabilities
     key = _file_version(capabilities.config_path())
     if key not in _SOFTWARE_RENDERING:
         policy, err = capabilities.read_policy()
         if policy is None:
-            kmsg(f"{err} -- devices.dri cannot be read")
+            kmsg(f"failed to read devices.dri ({err})")
         _SOFTWARE_RENDERING[key] = policy is not None and not policy.allows("devices.dri")
     return _SOFTWARE_RENDERING[key]
 
 
 def host_policy_refusal():
-    """name why the host policy file stops a launch"""
+    """return the host-policy-error reason, or None"""
     from sandbox import capabilities
     err = capabilities.read_policy()[1]
     if err is None:
         return None
-    return (f"host-policy-error ({err}; devices.dri cannot be read: "
-            "fix /etc/rhizo/policy.conf, whose error rhizo doctor names)")
+    return f"host-policy-error ({err})"
 
 
 def instance_overlay_error():
-    """return why this instance's policy overlay is refused"""
+    """return the read_policy error of the instance overlay, or None"""
     from sandbox import capabilities
     overlay = capabilities.instance_config_path(SANDBOX_ID)
     if overlay is None or capabilities.read_policy()[0] is None:
@@ -1292,14 +1341,14 @@ CAMERA_SERVICE_DISABLED = "config.disable_cameraservice=true"
 
 
 def camera_armed(provider=None):
-    """return whether devices.camera is on and the camera provider ships"""
+    """return whether devices.camera is on and the camera provider exists"""
     from sandbox import capabilities
     return (capabilities.policy_or_deny(log=kmsg, instance_id=SANDBOX_ID).allows("devices.camera")
             and os.path.exists(provider or CAMERA_PROVIDER_SRC))
 
 
 def drop_prop_line(path, line):
-    """remove all copies of a line from a prop file"""
+    """delete the lines equal to line from a prop file and return the count"""
     with open(path) as f:
         lines = f.read().splitlines(keepends=True)
     kept = [l for l in lines if l.rstrip("\n") != line]
@@ -1313,12 +1362,12 @@ GPU_DRIVER_32_DIR_CHOICES = ("gpu_driver_32", "gpu_driver_amd_32")
 
 
 def amd_driver_tree(isdir=os.path.isdir):
-    """return whether the payload carries the amd driver set"""
+    """return whether gpu_driver_amd/egl and gpu_driver_amd/lib exist"""
     return isdir(beside("gpu_driver_amd", "egl")) and isdir(beside("gpu_driver_amd", "lib"))
 
 
 def gpu_driver_dir():
-    """get the share/ directory of the GPU driver set this launch stages"""
+    """return the share/ directory of the staged GPU driver set"""
     if os.environ.get("RHIZO_GPU_DRIVER_DIR"):
         return os.environ["RHIZO_GPU_DRIVER_DIR"]
     if software_rendering():
@@ -1331,7 +1380,7 @@ def gpu_driver_dir():
 
 
 def gpu_driver_32_dir():
-    """get the share/ directory of the 32-bit GPU driver set"""
+    """return the share/ directory of the 32-bit GPU driver set"""
     if gpu_driver_dir() == "gpu_driver_amd" and os.path.isdir(beside("gpu_driver_amd_32")):
         return "gpu_driver_amd_32"
     return "gpu_driver_32"
@@ -1341,7 +1390,7 @@ POLICY_MODE_STATE = "/run/rhizo-policy-mode"
 
 
 def record_policy_mode():
-    """write dri=on or dri=off"""
+    """write dri=on or dri=off to POLICY_MODE_STATE"""
     mode = "off" if software_rendering() else "on"
     tmp = os.path.join(os.path.dirname(POLICY_MODE_STATE), ".%s.tmp" % os.path.basename(POLICY_MODE_STATE))
     try:
@@ -1349,14 +1398,14 @@ def record_policy_mode():
             f.write("dri=%s\n" % mode)
         os.replace(tmp, POLICY_MODE_STATE)
     except OSError as e:
-        kmsg(f"could not record the policy's devices.dri in {POLICY_MODE_STATE}: {e}")
+        kmsg(f"failed to write {POLICY_MODE_STATE} ({e})")
         return False
     kmsg(f"RHIZO_MARKER policy_dri={mode}")
     return True
 
 
 def loaded_policy_dri():
-    """return the dri mode recorded for the loaded policy"""
+    """return the dri value in POLICY_MODE_STATE"""
     try:
         with open(POLICY_MODE_STATE) as f:
             lines = f.read().splitlines()
@@ -1369,30 +1418,27 @@ def loaded_policy_dri():
 
 
 def gpu_refusal(render_node_found, loaded_dri=None):
-    """name why this launch cannot render"""
+    """return the GPU refusal reason, or None"""
     host_err = host_policy_refusal()
     if host_err:
         return host_err
     wanted = "off" if software_rendering() else "on"
     if loaded_dri is not None and loaded_dri != wanted:
-        return (f"policy-reload-needed (devices.dri is {wanted}, but the policy loaded this host boot is for dri = "
-                f"{loaded_dri}; reboot the host to switch)")
+        return f"policy-reload-needed (devices.dri={wanted} loaded_dri={loaded_dri})"
     if software_rendering():
         if os.environ.get("RHIZO_ABI32") == "1":
-            return "software-abi32 (the software driver set is 64-bit only; unset RHIZO_ABI32 or set [devices] dri = on)"
+            return "software-abi32 (RHIZO_ABI32=1 with devices.dri=off)"
         return None
     overlay_err = instance_overlay_error()
     if overlay_err:
-        return (f"instance-policy-error ({overlay_err}; a refused overlay denies this instance every optional "
-                "capability, its render node among them)")
+        return f"instance-policy-error ({overlay_err})"
     if not render_node_found:
-        return ("no-render-node (devices.dri is on and the host has no render node; set [devices] dri = off "
-                "in /etc/rhizo/policy.conf to render in software)")
+        return "no-render-node (devices.dri=on)"
     return None
 
 
 def validate_prepared():
-    """validate the prepared tree for this boot"""
+    """return the prepared tree key and refusal reason"""
     try:
         key = os.path.basename(os.readlink(f"{PREPARED_ROOT}/current"))
         with open(f"{PREPARED_ROOT}/{key}/manifest.json") as f:
@@ -1437,14 +1483,14 @@ REPREPARE_REASONS = ("manifest-unreadable", "layout-version", "gsi-fingerprint",
 
 
 def prepare_unit_enabled():
-    """return whether systemctl reports rhizo-prepare.service enabled"""
+    """return whether systemctl is-enabled rhizo-prepare.service prints enabled or enabled-runtime"""
     r = subprocess.run(["systemctl", "is-enabled", "rhizo-prepare.service"], capture_output=True, text=True,
                        timeout=30)
     return r.stdout.strip() in ("enabled", "enabled-runtime")
 
 
 def _replace_file(path, text):
-    """write text beside path and rename it over path"""
+    """write text to path.tmp and rename path.tmp to path"""
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         f.write(text)
@@ -1453,7 +1499,7 @@ def _replace_file(path, text):
 
 def request_reprepare(reason, prepared_root=PREPARED_ROOT, request=PREPARE_REQUEST,
                       unit_enabled=prepare_unit_enabled):
-    """record a refused prepared tree and request a rebuild"""
+    """write the prepared refusal record and the PREPARE_REQUEST file"""
     kind = reason.split(":", 1)[0]
     if kind not in REPREPARE_REASONS:
         return "not-repairable"
@@ -1507,7 +1553,7 @@ BINDER_DEVICES = "binder,hwbinder,vndbinder"
 
 
 def kernel_lacks():
-    """return what the running kernel lacks"""
+    """return the missing built-in binder, ASHMEM_DEVICE and PROC_CONFIG entries"""
     lacks = []
     if not os.path.exists(BINDER_DEVICES_FILE):
         lacks.append("built-in binder")
@@ -1522,7 +1568,7 @@ def kernel_lacks():
 
 
 def _write_manifest(path, text):
-    """replace manifest.json whole"""
+    """write manifest.json through fsync and rename"""
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         f.write(text)
@@ -1537,7 +1583,7 @@ def _write_manifest(path, text):
 
 
 def rekey_prepared_kernel():
-    """move the prepared tree onto this boot's kernel"""
+    """set the prepared manifest kernel to os.uname().release and validate the tree"""
     try:
         key = os.path.basename(os.readlink(f"{PREPARED_ROOT}/current"))
         path = f"{PREPARED_ROOT}/{key}/manifest.json"

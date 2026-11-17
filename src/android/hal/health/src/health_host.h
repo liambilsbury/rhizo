@@ -37,7 +37,7 @@ inline constexpr int64_t kInt32Max = std::numeric_limits<int32_t>::max();
 inline constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
 inline constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
 
-// host-battery v1 reading with optional values
+// the parsed host-battery v1 keys
 struct Reading {
   bool present = false;
   int32_t level = 0;
@@ -61,7 +61,7 @@ struct Reading {
   std::optional<int32_t> maxChargingVoltageUv;
 };
 
-// result of a host-battery file read
+// result of ReadLocked
 enum class Read { kText, kAbsent, kUnreadable };
 
 // content kind of a host-battery file
@@ -113,7 +113,7 @@ inline bool ParseInt(const std::string& s, int64_t lo, int64_t hi, int64_t* out)
   return true;
 }
 
-// parse an integer key into its optional field
+// parse an integer key into an optional field
 template <typename T>
 inline void TakeInt(const std::map<std::string, std::string>& kv, const char* key, int64_t lo, int64_t hi,
                     std::optional<T>* field, std::string* bad) {
@@ -139,7 +139,7 @@ inline void TakeFlag(const std::map<std::string, std::string>& kv, const char* k
   }
 }
 
-// parse host-battery text into a reading
+// parse host-battery text into a Reading
 inline Verdict Parse(const std::string& text, Reading* out, std::string* why) {
   std::map<std::string, std::string> kv;
   size_t start = 0;
@@ -158,11 +158,11 @@ inline Verdict Parse(const std::string& text, Reading* out, std::string* why) {
     kv[line.substr(0, eq)] = line.substr(eq + 1);
   }
   if (after_end == std::string::npos) {
-    *why = "torn (no end=1 line)";
+    *why = "no end=1 line";
     return Verdict::kTorn;
   }
   if (after_end != text.size()) {
-    *why = "torn (content after end=1)";
+    *why = "content after end=1";
     return Verdict::kTorn;
   }
   auto version = kv.find("version");
@@ -171,7 +171,7 @@ inline Verdict Parse(const std::string& text, Reading* out, std::string* why) {
     return Verdict::kNoBattery;
   }
   if (version->second != "1") {
-    *why = "version " + version->second.substr(0, 16) + ", want 1";
+    *why = "version " + version->second.substr(0, 16) + " is not 1";
     return Verdict::kNoBattery;
   }
   auto present = kv.find("present");
@@ -212,7 +212,7 @@ inline Verdict Parse(const std::string& text, Reading* out, std::string* why) {
   TakeFlag(kv, "wireless_online", &out->wirelessOnline, &bad);
   TakeInt(kv, "max_charging_current_ua", kInt32Min, kInt32Max, &out->maxChargingCurrentUa, &bad);
   TakeInt(kv, "max_charging_voltage_uv", kInt32Min, kInt32Max, &out->maxChargingVoltageUv, &bad);
-  if (!bad.empty()) *why = "ignoring bad " + bad;
+  if (!bad.empty()) *why = "invalid " + bad;
   return Verdict::kReading;
 }
 
@@ -235,7 +235,7 @@ inline Read ReadLocked(const char* path, int retries, int retry_ms, std::string*
       usleep(static_cast<useconds_t>(retry_ms) * 1000);
       continue;
     }
-    *why = errno == EWOULDBLOCK ? "locked by its writer past " + std::to_string(retries) + " retries"
+    *why = errno == EWOULDBLOCK ? "still locked after " + std::to_string(retries) + " retries"
                                 : "unreadable (flock errno=" + std::to_string(errno) + ")";
     close(fd);
     return Read::kUnreadable;
@@ -285,14 +285,14 @@ inline BatteryStatus StatusOf(const std::string& token) {
   return BatteryStatus::UNKNOWN;
 }
 
-// return the charging state a battery health implies
+// map a battery health to a battery charging state
 inline BatteryChargingState ChargingStateOf(BatteryHealth health) {
   if (health == BatteryHealth::OVERHEAT) return BatteryChargingState::TOO_HOT;
   if (health == BatteryHealth::COLD) return BatteryChargingState::TOO_COLD;
   return BatteryChargingState::NORMAL;
 }
 
-// return a present battery's capacity level
+// return the capacity level for present=1
 inline BatteryCapacityLevel CapacityLevelOf(const Reading& r) {
   if (r.level == 0 && !r.acOnline && !r.usbOnline && !r.wirelessOnline) return BatteryCapacityLevel::CRITICAL;
   if (r.level == 100) return BatteryCapacityLevel::FULL;
@@ -305,7 +305,7 @@ inline int32_t DesignCapacityOf(const std::optional<int64_t>& uah) {
   return static_cast<int32_t>(*uah);
 }
 
-// return the health info of a reading
+// return the health info of a Reading
 inline HealthInfo InfoOf(const Reading& r) {
   HealthInfo h = NoBatteryInfo();
   if (!r.present) return h;
@@ -335,7 +335,7 @@ inline HealthInfo InfoOf(const Reading& r) {
   return h;
 }
 
-// answer a getter from a host value or as unsupported
+// return EX_NONE with a host value, or EX_UNSUPPORTED_OPERATION
 template <typename T>
 inline binder_exception_t Answer(const Reading& r, const std::optional<T>& v, T* out) {
   if (!r.present || !v) return EX_UNSUPPORTED_OPERATION;
@@ -343,22 +343,22 @@ inline binder_exception_t Answer(const Reading& r, const std::optional<T>& v, T*
   return EX_NONE;
 }
 
-// answer getChargeCounterUah from a reading
+// return the getChargeCounterUah value of a Reading
 inline binder_exception_t ChargeCounterUah(const Reading& r, int32_t* out) {
   return Answer(r, r.chargeCounterUah, out);
 }
 
-// answer getCurrentNowMicroamps from a reading
+// return the getCurrentNowMicroamps value of a Reading
 inline binder_exception_t CurrentNowMicroamps(const Reading& r, int32_t* out) {
   return Answer(r, r.currentNowUa, out);
 }
 
-// answer getCurrentAverageMicroamps from a reading
+// return the getCurrentAverageMicroamps value of a Reading
 inline binder_exception_t CurrentAverageMicroamps(const Reading& r, int32_t* out) {
   return Answer(r, r.currentAvgUa, out);
 }
 
-// answer getEnergyCounterNwh from a reading's energy in uWh
+// return the getEnergyCounterNwh value of a Reading from energy_now_uwh
 inline binder_exception_t EnergyCounterNwh(const Reading& r, int64_t* out) {
   int64_t uwh = 0;
   binder_exception_t ex = Answer(r, r.energyNowUwh, &uwh);
@@ -366,14 +366,14 @@ inline binder_exception_t EnergyCounterNwh(const Reading& r, int64_t* out) {
   return ex;
 }
 
-// host battery read from the relay's file
+// reader of the host-battery file
 class Source {
  public:
-  // read path with lock retries
+  // store the path, the log function and the lock retry settings
   Source(std::string path, std::function<void(const char*)> log, int retries = kLockRetries,
          int retry_ms = kLockRetryMs)
       : path_(std::move(path)), log_(std::move(log)), retries_(retries), retry_ms_(retry_ms) {}
-  // return the current or last complete reading
+  // return the parsed, last complete or empty Reading
   Reading read() {
     Reading r;
     std::string text, why;
@@ -382,11 +382,11 @@ class Source {
     std::lock_guard<std::mutex> lg(mutex_);
     if (got == Read::kUnreadable || verdict == Verdict::kTorn) {
       r = have_last_ ? last_ : Reading();
-      note(why + (have_last_ ? ", reporting the last complete reading" : ", reporting no battery"));
+      note(why + (have_last_ ? " have_last=1" : " have_last=0"));
     } else if (verdict == Verdict::kNoBattery) {
       r = Reading();
       have_last_ = false;
-      note(why + ", reporting no battery");
+      note(why + " have_last=0");
     } else {
       last_ = r;
       have_last_ = true;
@@ -396,10 +396,10 @@ class Source {
   }
 
  private:
-  // log a changed read status
+  // log why when why differs from logged_
   void note(const std::string& why) {
     if (why == logged_) return;
-    std::string line = why.empty() ? "host-battery read as v1 again" : "host-battery " + why;
+    std::string line = why.empty() ? "host-battery parsed as v1" : "host-battery " + why;
     logged_ = why;
     log_(line.c_str());
   }

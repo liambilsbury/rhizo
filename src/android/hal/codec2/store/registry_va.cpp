@@ -1,4 +1,4 @@
-// the registry of driver-offered components whose cores are linked in
+// the registry of QueryComponents results with a linked core
 
 #include <string.h>
 
@@ -52,7 +52,7 @@ void ConfigureRuntime(int argc, char** argv) {
   for (int i = 1; i + 1 < argc; i++) {
     if (strcmp(argv[i], "--node") == 0) {
       c2va::VaDevice::Get().SetNode(argv[i + 1]);
-      klogf("registry: render node %s", argv[i + 1]);
+      klogf("render node %s", argv[i + 1]);
     }
   }
 }
@@ -61,15 +61,15 @@ std::vector<ComponentEntry> BuildRegistry() {
   c2va::Status st = c2va::Status::kOk;
   std::vector<c2va::ComponentCaps> all = c2va::QueryComponents(c2va::VaDevice::Get(), &st);
   if (st != c2va::Status::kOk) {
-    klogf("registry: VA could not be opened (%d), so no component is offered", static_cast<int>(st));
+    klogf("QueryComponents failed (%d)", static_cast<int>(st));
     return {};
   }
   std::map<std::string, uint64_t> capacity = LoadCapacity(kCapacityPath);
-  if (capacity.empty()) klogf("registry: no throughput capacities at %s: throughput is not published", kCapacityPath);
+  if (capacity.empty()) klogf("no throughput capacities at %s", kCapacityPath);
   std::vector<ComponentEntry> out;
   for (const c2va::ComponentCaps& caps : all) {
     if (!CoreLinked(caps)) {
-      klogf("registry: %s is offered by the driver but its core is not in this build", caps.name.c_str());
+      klogf("no core linked for driver component %s", caps.name.c_str());
       continue;
     }
     out.push_back(caps.kind == c2va::Kind::kDecoder ? DecoderEntry(caps) : EncoderEntry(caps));

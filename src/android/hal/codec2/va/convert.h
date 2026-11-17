@@ -35,7 +35,7 @@ void CopySrcToSemiPlanar(const YuvSrc& src, const SemiPlanar& dst);
 void RgbaToSemiPlanar(const uint8_t* rgba, int32_t row_stride, int32_t width, int32_t height, Matrix matrix,
                       bool full_range, const SemiPlanar& dst);
 
-// convert a semi-planar image to scaled full-range RGBA
+// convert a semi-planar image to scaled 0-255 RGBA
 void SemiPlanarToRgba(const SemiPlanar& src, Matrix matrix, bool full_range, uint8_t* rgba, int32_t row_stride,
                       int32_t dst_width, int32_t dst_height);
 

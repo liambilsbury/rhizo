@@ -1,16 +1,16 @@
 #!/bin/bash
-# update, roll back or abort the Android release
+# Android release update, rollback and abort
 set -uo pipefail
 
 PROG=rhizo-gsi-update
 log() { echo "[$PROG] $*" >&2; }
 # print a refusal reason and exit 1
-refuse() { local t="$1"; shift; log "REFUSED: $*"; echo "RHIZO_GSI_UPDATE_REFUSED reason=$t"; exit 1; }
+refuse() { local t="$1"; shift; log "$*"; echo "RHIZO_GSI_UPDATE_REFUSED reason=$t"; exit 1; }
 # print a failure reason and exit 1
-failstop() { local t="$1"; shift; log "FAILED: $*"; echo "RHIZO_GSI_UPDATE_FAILED reason=$t"; exit 1; }
+failstop() { local t="$1"; shift; log "$*"; echo "RHIZO_GSI_UPDATE_FAILED reason=$t"; exit 1; }
 # print the usage text
 usage() {
-  echo "usage: gsi-update.sh update|rollback|abort|status|begin-boot|confirm|kernel-check|adopt [--release R] [--tries N] [--timeout S]"
+  echo "gsi-update.sh update|rollback|abort|status|begin-boot|confirm|kernel-check|adopt [--release R] [--tries N] [--timeout S]"
 }
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -40,7 +40,7 @@ release_tree() {
     *) return 1 ;;
   esac
 }
-# return success when the release has a known tree
+# return whether release_tree returns 0 for the release
 release_known() { release_tree "$1" >/dev/null 2>&1; }
 
 KALLSYMS="${RHIZO_KALLSYMS:-/proc/kallsyms}"
@@ -51,22 +51,21 @@ release_kernel_unsupported() {
   local need="${KERNEL_NEEDS[$1]:-}" have name missing=""
   [[ -n "$need" ]] || return 1
   if ! have=$(awk '{print $3}' "$KALLSYMS" 2>&1) || [[ -z "$have" ]]; then
-    printf 'cannot read %s to find %s (%s)' "$KALLSYMS" "$need" "${have:-empty}"
+    printf 'failed to read %s (%s)' "$KALLSYMS" "${have:-empty}"
     return 0
   fi
   for name in $need; do
     grep -qxF "$name" <<<"$have" || missing+=" $name"
   done
   [[ -n "$missing" ]] || return 1
-  printf '%s has no%s -- %s needs a kernel built with Rhizo'"'"'s netd BPF patches' \
-    "$KALLSYMS" "$missing" "$1"
+  printf '%s has no%s' "$KALLSYMS" "$missing"
   return 0
 }
 
-# check for a staged release tree
+# return whether the release tree has a non-empty bin/init
 tree_staged() { local t; t=$(release_tree "$1") && [[ -s "$t/bin/init" ]]; }
 
-# derive a release's GSI libraries from its tree
+# run fetch-gsi.sh --derive-only for a release
 derive_release_libs() {
   "$FETCH_SH" --release "$1" --derive-only >&2
 }
@@ -74,11 +73,11 @@ derive_release_libs() {
 # write the launch environment for a release
 launch_release() {
   derive_release_libs "$1" \
-    || log "could not derive $1's GSI libraries from its tree -- keeping its current set"
+    || log "fetch-gsi.sh --derive-only failed for $1"
   write_launch_env "$1" ""
 }
 
-# check for Android's policy loaded host-wide on this boot
+# return whether Android's policy is loaded host-wide
 policy_loaded() {
   local ctx
   ctx=$(tr -d '\0' < "${RHIZO_ATTR_CURRENT:-/proc/self/attr/current}" 2>/dev/null) || return 1
@@ -96,11 +95,11 @@ state_get() {
 
 # write key=value lines to the state file
 state_write() {
-  mkdir -p "$UPDATE_DIR" || failstop "state-dir" "cannot create $UPDATE_DIR"
+  mkdir -p "$UPDATE_DIR" || failstop "state-dir" "failed to create $UPDATE_DIR"
   local body="" kv
   for kv in "$@"; do
-    [[ "$kv" == *=* ]] || failstop "state-key" "not a key=value: $kv"
-    [[ "${kv#*=}" == *$'\n'* ]] && failstop "state-key" "newline in value: $kv"
+    [[ "$kv" == *=* ]] || failstop "state-key" "'$kv' is not key=value"
+    [[ "${kv#*=}" == *$'\n'* ]] && failstop "state-key" "newline in the value of $kv"
     body+="$kv"$'\n'
   done
   RHIZO_STATE_BODY="$body" python3 -c '
@@ -119,7 +118,7 @@ try:
     os.fsync(d)
 finally:
     os.close(d)
-' "$STATE" || failstop "state-write" "could not write $STATE"
+' "$STATE" || failstop "state-write" "failed to write $STATE"
 }
 
 # remove the trial fields from the state file
@@ -147,7 +146,7 @@ write_launch_env() {
   mkdir -p "$(dirname "$RUNTIME_ENV")"
   if [[ -f "$RUNTIME_ENV" ]]; then
     grep -Ev "^($OWNED_KEYS)=" "$RUNTIME_ENV" > "$RUNTIME_ENV.rhizo-gsi-update.tmp" || [[ $? -eq 1 ]] \
-      || failstop "env-write" "could not read $RUNTIME_ENV"
+      || failstop "env-write" "failed to read $RUNTIME_ENV"
   else
     : > "$RUNTIME_ENV.rhizo-gsi-update.tmp"
   fi
@@ -159,8 +158,8 @@ write_launch_env() {
     [[ -n "$change" ]] && printf 'RHIZO_DATA_RELEASE_CHANGE=1\n'
   } >> "$RUNTIME_ENV.rhizo-gsi-update.tmp"
   mv "$RUNTIME_ENV.rhizo-gsi-update.tmp" "$RUNTIME_ENV" \
-    || failstop "env-write" "could not replace $RUNTIME_ENV"
-  log "launch env: release=$rel tree=$tree data=${img:-$DATA_IMG} in $RUNTIME_ENV"
+    || failstop "env-write" "failed to replace $RUNTIME_ENV"
+  log "wrote release=$rel tree=$tree data=${img:-$DATA_IMG} to $RUNTIME_ENV"
 }
 
 # remove the trial image files
@@ -168,9 +167,9 @@ discard_trial_artifacts() {
   rm -f "$TRIAL_IMG" "$TRIAL_IMG.part" "$TRIAL_IMG.meta" "$TRIAL_IMG.meta.tmp"
 }
 
-# run e2fsck on a trial image
+# return whether e2fsck -fn exits with bit 4 or 8 on a trial image
 trial_image_corrupt() {
-  command -v "$E2FSCK" >/dev/null 2>&1 || { log "$E2FSCK not found, arming $1 unchecked"; return 1; }
+  command -v "$E2FSCK" >/dev/null 2>&1 || { log "no $E2FSCK, $1 unchecked"; return 1; }
   "$E2FSCK" -fn "$1" >/dev/null 2>&1
   (( ($? & 12) != 0 ))
 }
@@ -181,8 +180,8 @@ copy_data_image() {
   [[ -s "$src" ]] || failstop "no-data-img" "$src is missing or empty"
   rm -f "$dst.part"
   cp --sparse=always "$src" "$dst.part" \
-    || failstop "data-copy" "could not copy $src to $dst.part"
-  mv "$dst.part" "$dst" || failstop "data-copy" "could not rename $dst.part to $dst"
+    || failstop "data-copy" "failed to copy $src to $dst.part"
+  mv "$dst.part" "$dst" || failstop "data-copy" "failed to rename $dst.part to $dst"
 }
 
 # write the release to data.img.meta
@@ -192,8 +191,8 @@ write_data_meta() {
   template=$(sed -n 's/^template=//p' "$meta" 2>/dev/null | tail -1)
   printf 'release=%s\nvariant=%s\ntemplate=%s\nprovenance=gsi-update\n' \
     "$rel" "$variant" "$template" > "$meta.tmp" \
-    || failstop "meta-write" "could not write $meta.tmp"
-  mv "$meta.tmp" "$meta" || failstop "meta-write" "could not replace $meta"
+    || failstop "meta-write" "failed to write $meta.tmp"
+  mv "$meta.tmp" "$meta" || failstop "meta-write" "failed to replace $meta"
 }
 
 # print the summary line
@@ -206,7 +205,7 @@ final_line() {
   echo "RHIZO_GSI_UPDATE current=$good candidate=$trial tries=$tries previous=$prev"
 }
 
-# return success when the sandbox service is active
+# return whether androidd.service is active
 sandbox_running() {
   [[ "$(systemctl is-active androidd.service 2>/dev/null)" == active ]]
 }
@@ -233,14 +232,13 @@ current_release_guess() {
 fetch_gapps_payload() {
   local rel="$1" out rc line
   [[ -e "$GAPPS_ENABLED" ]] || return 0
-  log "Google's apps are enabled: fetching LiteGapps' payload for $rel before anything changes"
   out=$(RHIZO_STATE_DIR="$STATE_DIR" "$FETCH_APP" litegapps --release "$rel"); rc=$?
   line=$(grep '^RHIZO_APP_' <<<"$out" | tail -1)
   [[ $rc -eq 0 && "$line" == RHIZO_APP_FETCHED* ]] && return 0
   [[ "$line" == RHIZO_APP_REFUSED* ]] && refuse "gapps-unavailable" \
-    "Google's apps are enabled and LiteGapps has no payload for $rel ($line): stay on this release, or run 'sudo rhizo gapps disable' first"
+    "no LiteGapps payload for $rel with Google's apps enabled ($line)"
   refuse "gapps-fetch-failed" \
-    "Google's apps are enabled and LiteGapps' payload for $rel could not be fetched (${line:-$FETCH_APP exited $rc}): nothing changed; try again, or run 'sudo rhizo gapps disable' first"
+    "failed to fetch the LiteGapps payload for $rel (${line:-$FETCH_APP failed with exit status $rc})"
 }
 
 # arm a trial of another release
@@ -253,34 +251,33 @@ cmd_update() {
       *) failstop "usage" "unknown argument '$1'" ;;
     esac
   done
-  [[ -n "$rel" ]] || refuse "no-release" "update needs --release <a15|a16|a17>"
-  release_known "$rel" || refuse "unknown-release" "no such release: $rel"
+  [[ -n "$rel" ]] || refuse "no-release" "update without --release <a15|a16|a17>"
+  release_known "$rel" || refuse "unknown-release" "unknown release $rel"
   local why
   why=$(release_kernel_unsupported "$rel") && refuse "kernel-unsupported" "$why"
-  [[ "$tries" =~ ^[1-9][0-9]*$ ]] || refuse "bad-tries" "--tries wants a positive integer, got '$tries'"
+  [[ "$tries" =~ ^[1-9][0-9]*$ ]] || refuse "bad-tries" "--tries '$tries' is not a positive integer"
   sandbox_running && refuse "sandbox-running" \
-    "androidd.service is active -- stop it before swapping the image underneath it"
+    "androidd.service is active"
   [[ -s "$PREPARE_REQUEST" ]] && refuse "prepare-pending" \
-    "a prepare of $(sed -n 's/^release=//p' "$PREPARE_REQUEST" | tail -1) runs on the next boot -- reboot first"
+    "a prepare of $(sed -n 's/^release=//p' "$PREPARE_REQUEST" | tail -1) is pending in $PREPARE_REQUEST"
   local armed; armed=$(state_get trial_release) || armed=""
   [[ -n "$armed" ]] && refuse "trial-in-flight" \
-    "a trial of $armed is already armed -- let it finish or run abort"
+    "a trial of $armed is armed"
 
   local good; good=$(state_get good_release) || good=$(current_release_guess)
-  [[ "$rel" == "$good" ]] && refuse "already-current" "$rel is already the current release"
+  [[ "$rel" == "$good" ]] && refuse "already-current" "$rel is the current release"
   fetch_gapps_payload "$rel"
 
-  log "fetching and verifying $rel"
   local tree; tree=$(release_tree "$rel")
   if ! tree_staged "$rel" && policy_loaded; then
-    "$FETCH_SH" --release "$rel" --fetch-only >&2 || failstop "fetch" "could not fetch the $rel image"
-    log "$tree stages on the next boot, before the SELinux policy loads -- that boot's login waits for the copy"
+    "$FETCH_SH" --release "$rel" --fetch-only >&2 || failstop "fetch" "fetch-gsi.sh --fetch-only failed for $rel"
+    log "rhizo-update-begin.service stages $tree at the next boot"
   else
-    "$FETCH_SH" --release "$rel" >&2 || failstop "fetch" "could not stage the $rel image"
-    tree_staged "$rel" || failstop "not-staged" "$tree carries no bin/init after the fetch"
+    "$FETCH_SH" --release "$rel" >&2 || failstop "fetch" "fetch-gsi.sh failed for $rel"
+    tree_staged "$rel" || failstop "not-staged" "$tree has no bin/init after fetch-gsi.sh"
   fi
 
-  mkdir -p "$UPDATE_DIR" || failstop "state-dir" "cannot create $UPDATE_DIR"
+  mkdir -p "$UPDATE_DIR" || failstop "state-dir" "failed to create $UPDATE_DIR"
   rm -f "$PREVIOUS_IMG" "$PREVIOUS_IMG.meta"
   copy_data_image "$DATA_IMG" "$TRIAL_IMG"
   [[ -f "$DATA_IMG.meta" ]] && cp -f "$DATA_IMG.meta" "$TRIAL_IMG.meta"
@@ -291,49 +288,49 @@ cmd_update() {
                 "trial_started=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
   [[ -n "$prev" ]] && fields+=("previous_release=$prev")
   state_write "${fields[@]}"
-  log "armed: $rel gets $tries tries, $good stays current until one of them completes a boot"
+  log "armed $rel with $tries tries, current $good"
   final_line
 }
 
 # abort the armed trial and relaunch the good release
 cmd_abort() {
   local trial; trial=$(state_get trial_release) || refuse "no-trial" "no trial is armed"
-  sandbox_running && refuse "sandbox-running" "stop androidd.service first"
+  sandbox_running && refuse "sandbox-running" "androidd.service is active"
   local good; good=$(state_get good_release)
   rm -f "$TRIAL_IMG" "$TRIAL_IMG.part"
   state_clear_trial
   launch_release "$good"
-  log "dropped the $trial trial, $good stays current"
+  log "removed the $trial trial, current $good"
   final_line
 }
 
-# restore the previous release and its data.img
+# restore the previous release and PREVIOUS_IMG
 cmd_rollback() {
-  sandbox_running && refuse "sandbox-running" "stop androidd.service first"
+  sandbox_running && refuse "sandbox-running" "androidd.service is active"
   local armed; armed=$(state_get trial_release) || armed=""
   [[ -n "$armed" ]] && refuse "trial-in-flight" \
-    "a trial of $armed is armed -- run abort first, or let it spend its tries"
+    "a trial of $armed is armed"
   local prev good
   prev=$(state_get previous_release) || refuse "no-previous" \
-    "no previous release is recorded"
+    "no previous_release in $STATE"
   good=$(state_get good_release) || failstop "state-missing" "no good_release in $STATE"
   [[ -s "$PREVIOUS_IMG" ]] || refuse "no-previous-data" \
-    "$PREVIOUS_IMG is gone, and $good has already migrated the live /data forward"
+    "no $PREVIOUS_IMG"
   derive_release_libs "$prev" || failstop "gsi-libs" \
-    "could not derive $prev's GSI libraries from its tree -- nothing changed, $good stays current"
-  mv "$PREVIOUS_IMG" "$DATA_IMG" || failstop "data-restore" "could not restore $DATA_IMG"
+    "fetch-gsi.sh --derive-only failed for $prev"
+  mv "$PREVIOUS_IMG" "$DATA_IMG" || failstop "data-restore" "failed to move $PREVIOUS_IMG to $DATA_IMG"
   rm -f "$PREVIOUS_IMG.meta"
   write_data_meta "$DATA_IMG" "$prev"
   state_write "good_release=$prev"
   write_launch_env "$prev" ""
-  log "rolled back to $prev with the /data it last wrote"
+  log "rolled back to $prev and $PREVIOUS_IMG"
   final_line
 }
 
 # print the update state
 cmd_status() {
   if [[ ! -f "$STATE" ]]; then
-    log "no update state, so androidd.service boots whatever it is configured for"
+    log "no $STATE"
     echo "RHIZO_GSI_UPDATE current=$(current_release_guess) candidate=- tries=- previous=-"
     return 0
   fi
@@ -342,27 +339,27 @@ cmd_status() {
   trial=$(state_get trial_release) || trial=""
   tries=$(state_get trial_tries) || tries=""
   prev=$(state_get previous_release) || prev=""
-  log "current      : $good"
+  log "current=$good"
   if [[ -n "$trial" ]]; then
     started=$(state_get trial_started) || started="?"
-    log "candidate    : $trial, $tries left, armed $started"
-    tree_staged "$trial" || log "               its tree stages on the next boot, before the policy loads"
+    log "candidate=$trial tries=$tries armed=$started"
+    tree_staged "$trial" || log "rhizo-update-begin.service stages the $trial tree at the next boot"
   else
-    log "candidate    : none"
+    log "candidate=none"
   fi
-  keeps=""; [[ -s "$PREVIOUS_IMG" ]] && keeps=", its /data kept"
-  log "previous     : ${prev:-none}$keeps"
+  keeps=""; [[ -s "$PREVIOUS_IMG" ]] && keeps=" data=$PREVIOUS_IMG"
+  log "previous=${prev:-none}$keeps"
   final_line
 }
 
 # write the launch environment for a boot
 cmd_begin_boot() {
   if [[ ! -f "$STATE" ]]; then
-    log "no update state, leaving the launch environment alone"
+    log "no $STATE"
     return 0
   fi
   if [[ -s "$PREPARE_REQUEST" ]]; then
-    log "a prepare of $(sed -n 's/^release=//p' "$PREPARE_REQUEST" | tail -1) is pending in $PREPARE_REQUEST; rhizo-prepare.service points this boot at it, and no try is spent"
+    log "a prepare of $(sed -n 's/^release=//p' "$PREPARE_REQUEST" | tail -1) is pending in $PREPARE_REQUEST"
     final_line
     return 0
   fi
@@ -377,7 +374,7 @@ cmd_begin_boot() {
   tries=$(state_get trial_tries) || tries=0
   local boot
   boot=$(tr -d '[:space:]' < "$BOOT_ID_FILE" 2>/dev/null)
-  [[ -n "$boot" ]] || failstop "boot-id" "cannot read $BOOT_ID_FILE to tell this boot from the last"
+  [[ -n "$boot" ]] || failstop "boot-id" "failed to read $BOOT_ID_FILE"
   if [[ "$(state_get trial_boot || true)" == "$boot" ]]; then
     write_launch_env "$trial" "$TRIAL_IMG" change
     log "RHIZO_MARKER gsi_update_try_this_boot=$trial left=$tries"
@@ -385,7 +382,7 @@ cmd_begin_boot() {
     return 0
   fi
   if (( tries <= 0 )); then
-    log "$trial has no tries left, putting $good back"
+    log "$trial has no tries left, launching $good"
     rm -f "$TRIAL_IMG" "$TRIAL_IMG.part"
     state_clear_trial
     launch_release "$good"
@@ -395,7 +392,7 @@ cmd_begin_boot() {
   fi
   local why
   if why=$(release_kernel_unsupported "$trial"); then
-    log "$why; discarding the $trial trial and putting $good back"
+    log "$why, discarding the $trial trial and launching $good"
     discard_trial_artifacts
     state_clear_trial
     launch_release "$good"
@@ -404,7 +401,7 @@ cmd_begin_boot() {
     return 0
   fi
   if trial_image_corrupt "$TRIAL_IMG"; then
-    log "$trial's trial image failed a read-only fsck, discarding it and putting $good back"
+    log "$E2FSCK -fn $TRIAL_IMG failed, discarding the $trial trial and launching $good"
     discard_trial_artifacts
     state_clear_trial
     launch_release "$good"
@@ -414,15 +411,14 @@ cmd_begin_boot() {
   fi
   if ! tree_staged "$trial"; then
     if policy_loaded; then
-      log "$trial's tree stages only before the policy loads, so $good starts this time and no try is spent -- reboot to run the trial"
+      log "the $trial tree is not staged and the policy is loaded, launching $good"
       launch_release "$good"
       log "RHIZO_MARKER gsi_update_stage_waiting=$trial"
       final_line
       return 0
     fi
-    log "staging $trial's tree from the zip update verified"
     if ! "$FETCH_SH" --release "$trial" --offline >&2 || ! tree_staged "$trial"; then
-      log "$trial's tree could not be staged, discarding the trial and putting $good back"
+      log "failed to stage the $trial tree, discarding the trial and launching $good"
       discard_trial_artifacts
       state_clear_trial
       launch_release "$good"
@@ -432,7 +428,7 @@ cmd_begin_boot() {
     fi
   fi
   if ! derive_release_libs "$trial"; then
-    log "$trial's GSI libraries could not be derived from its tree, discarding the trial and putting $good back"
+    log "fetch-gsi.sh --derive-only failed for $trial, discarding the trial and launching $good"
     discard_trial_artifacts
     state_clear_trial
     launch_release "$good"
@@ -452,7 +448,7 @@ cmd_begin_boot() {
   final_line
 }
 
-# check this boot ran the trial
+# return whether trial_boot matches the boot_id for trial $1
 trial_ran_this_boot() {
   local boot armed
   boot=$(tr -d '[:space:]' < "$BOOT_ID_FILE" 2>/dev/null)
@@ -460,7 +456,7 @@ trial_ran_this_boot() {
   if [[ -n "$boot" && "$armed" == "$1" && "$(state_get trial_boot || true)" == "$boot" ]]; then
     return 0
   fi
-  log "this boot did not run the $1 trial, so its completion promotes nothing"
+  log "trial_boot does not match the boot_id for the $1 trial"
   log "RHIZO_MARKER gsi_update_confirm_not_trial_boot=$1"
   return 1
 }
@@ -475,24 +471,23 @@ cmd_confirm() {
     esac
   done
   local trial
-  trial=$(state_get trial_release) || { log "no trial armed, nothing to confirm"; return 0; }
+  trial=$(state_get trial_release) || { log "no trial_release in $STATE"; return 0; }
   trial_ran_this_boot "$trial" || return 0
-  log "waiting up to ${timeout}s for this boot's completion marker"
   if ! python3 "$AWAIT_PY" --timeout "$timeout"; then
-    log "$trial reported no completed boot within ${timeout}s, its remaining tries stand"
+    log "no boot completion marker for $trial within ${timeout}s"
     return 0
   fi
   trial_ran_this_boot "$trial" || return 0
   local good; good=$(state_get good_release) || failstop "state-missing" "no good_release in $STATE"
-  mv "$DATA_IMG" "$PREVIOUS_IMG" || failstop "promote-data" "could not set $PREVIOUS_IMG aside"
+  mv "$DATA_IMG" "$PREVIOUS_IMG" || failstop "promote-data" "failed to move $DATA_IMG to $PREVIOUS_IMG"
   [[ -f "$DATA_IMG.meta" ]] && mv "$DATA_IMG.meta" "$PREVIOUS_IMG.meta"
-  mv "$TRIAL_IMG" "$DATA_IMG" || failstop "promote-data" "could not move $TRIAL_IMG into place"
+  mv "$TRIAL_IMG" "$DATA_IMG" || failstop "promote-data" "failed to move $TRIAL_IMG to $DATA_IMG"
   [[ -f "$TRIAL_IMG.meta" ]] && mv "$TRIAL_IMG.meta" "$DATA_IMG.meta"
   write_data_meta "$DATA_IMG" "$trial"
   state_write "good_release=$trial" "previous_release=$good"
   write_launch_env "$trial" ""
   log "RHIZO_MARKER gsi_update_good=$trial"
-  log "$trial completed a boot and is now current, $good is the rollback target"
+  log "current $trial, previous $good"
   final_line
 }
 
@@ -505,15 +500,15 @@ cmd_adopt() {
       *) failstop "usage" "unknown argument '$1'" ;;
     esac
   done
-  release_known "$rel" || refuse "unknown-release" "no such release: '$rel'"
+  release_known "$rel" || refuse "unknown-release" "unknown release '$rel'"
   armed=$(state_get trial_release) || armed=""
-  [[ -n "$armed" ]] && refuse "trial-in-flight" "a trial of $armed is armed -- run abort first"
+  [[ -n "$armed" ]] && refuse "trial-in-flight" "a trial of $armed is armed"
   good=$(state_get good_release) || good=""
   if [[ -f "$STATE" && "$good" != "$rel" ]]; then
     rm -f "$PREVIOUS_IMG" "$PREVIOUS_IMG.meta"
     discard_trial_artifacts
     state_write "good_release=$rel"
-    log "$rel is current after a prepare; the rollback /data of ${good:-no release} is dropped"
+    log "current $rel, removed the ${good:-no release} rollback data"
   fi
   final_line
 }
@@ -527,7 +522,7 @@ cmd_kernel_check() {
       *) failstop "usage" "unknown argument '$1'" ;;
     esac
   done
-  release_known "$rel" || refuse "unknown-release" "no such release: '$rel'"
+  release_known "$rel" || refuse "unknown-release" "unknown release '$rel'"
   why=$(release_kernel_unsupported "$rel") && refuse "kernel-unsupported" "$why"
   echo "RHIZO_GSI_KERNEL_OK release=$rel"
 }

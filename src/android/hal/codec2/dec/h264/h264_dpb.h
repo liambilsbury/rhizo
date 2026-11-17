@@ -97,15 +97,15 @@ class Dpb {
  public:
   explicit Dpb(DpbSink* sink) : sink_(sink) {}
 
-  // set the sequence parameters after a flush
+  // set the DPB size, the reorder depth and the SPS fields
   void SetSequence(const Sps& sps, uint32_t dpb_size, uint32_t reorder_depth);
 
-  // start a picture and compute its POC
+  // start a picture and compute the picture's POC
   bool StartPicture(const SliceHeader& sh, bool random_access_start, CurrentPicture* cur);
   // build the reference lists of a slice
   bool BuildRefLists(const SliceHeader& sh, const CurrentPicture& cur, std::vector<RefEntry>* l0,
                      std::vector<RefEntry>* l1);
-  // derive the picture's marking from its first slice
+  // derive the marking of the current picture from the first slice
   void PredictMarking(const SliceHeader& sh, CurrentPicture* cur) const;
   // mark, store and output the decoded picture
   uint64_t FinishPicture(const SliceHeader& sh, CurrentPicture* cur, VASurfaceID surface, bool output, uint64_t tag,
@@ -113,7 +113,7 @@ class Dpb {
 
   // empty the DPB
   void Flush(bool output);
-  // output all waiting pictures and keep the references
+  // output all waiting pictures without unmarking the references
   void OutputAll();
   // close a pending first field as a non-paired field
   void ClosePendingField();
@@ -126,7 +126,7 @@ class Dpb {
   int slots() const { return kStoreSlots; }
   bool pending_field() const { return pending_ >= 0; }
   uint32_t max_long_term_frame_idx() const { return max_long_term_frame_idx_; }
-  // count the stores holding a reference field or frame
+  // count the stores with a reference field or frame
   int RefCount() const;
 
  private:

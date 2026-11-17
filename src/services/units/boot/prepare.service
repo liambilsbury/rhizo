@@ -1,5 +1,5 @@
 [Unit]
-Description=Rhizo first-boot setup
+Description=Rhizo GSI preparation
 ConditionPathExists=|!/var/lib/rhizo/.prepared
 ConditionDirectoryNotEmpty=|!/var/lib/rhizo/prepared
 ConditionPathExists=|/var/lib/rhizo/prepare-request

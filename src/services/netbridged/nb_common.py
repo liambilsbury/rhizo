@@ -6,7 +6,7 @@ LOG_PREFIX = "[netbridged]"
 
 
 def log(fmt, *args):
-    """write a log line to stderr"""
+    """write LOG_PREFIX and the formatted line to stderr"""
     msg = fmt % args if args else fmt
     print(f"{LOG_PREFIX} {msg}", file=sys.stderr, flush=True)
 
@@ -57,7 +57,7 @@ class Service:
         """run the periodic work"""
 
     def close(self):
-        """close every socket, ignoring errors"""
+        """close each socket, ignoring OSError"""
         for s in self.sockets():
             try:
                 s.close()
@@ -66,7 +66,7 @@ class Service:
 
 
 def read_first_existing(paths):
-    """return the first readable path and its text"""
+    """return the first readable path and the path text"""
     for p in paths:
         try:
             with open(p) as f:

@@ -1,4 +1,4 @@
-// read a sensor's IIO channel files
+// IIO channel file reader for a sensor
 #ifndef RHIZO_SENSORS_IIO_READER_H
 #define RHIZO_SENSORS_IIO_READER_H
 
@@ -41,7 +41,7 @@ class IioChannels {
   std::vector<double> offset_;
 };
 
-// log each change between paused and resumed
+// read failure tracker that logs each pause and resume
 class ReadHealth {
  public:
   explicit ReadHealth(std::string sensorName) : name_(std::move(sensorName)) {}

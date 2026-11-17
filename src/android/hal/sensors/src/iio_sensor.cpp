@@ -1,4 +1,4 @@
-// poll an IIO sensor at its batch period on a thread
+// thread that polls an IIO sensor at the batch period
 #include "iio_sensor.h"
 
 #include <errno.h>
@@ -28,7 +28,7 @@ void setRealtime() {
   sched_param p{};
   p.sched_priority = 1;
   if (sched_setscheduler(0, SCHED_FIFO, &p) != 0 && !warned.exchange(true)) {
-    klogf("SCHED_FIFO refused (%s); polling at normal priority", strerror(errno));
+    klogf("sched_setscheduler(SCHED_FIFO) failed (%s)", strerror(errno));
   }
 }
 
@@ -43,7 +43,7 @@ void armTimer(int fd, int64_t deadlineNs) {
 
 }
 
-// clamp a requested period to the sensor's delays
+// clamp requestedNs to conf.minDelayUs and conf.maxDelayUs
 int64_t IioSensor::clampPeriodNs(const SensorConf& conf, int64_t requestedNs) {
   int64_t lo = static_cast<int64_t>(conf.minDelayUs) * 1000;
   if (lo <= 0) lo = conf.mode == Mode::OnChange ? kOnChangePollFloorNs : kContinuousFloorNs;
@@ -61,7 +61,7 @@ IioSensor::IioSensor(const SensorConf& conf, std::string name, SampleSink* sink)
   wakeFd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
   timerFd_ = timerfd_create(CLOCK_BOOTTIME, TFD_CLOEXEC | TFD_NONBLOCK);
   if (wakeFd_ < 0 || timerFd_ < 0) {
-    klogf("%s: no eventfd or CLOCK_BOOTTIME timerfd (%s); it will never report", name_.c_str(), strerror(errno));
+    klogf("eventfd or timerfd_create(CLOCK_BOOTTIME) failed for %s (%s)", name_.c_str(), strerror(errno));
     return;
   }
   thread_ = std::thread([this] { run(); });
@@ -102,7 +102,7 @@ void IioSensor::reset() {
   wake();
 }
 
-// set the sampling period from a batch request
+// set periodNs_ to the clamped requestedNs
 void IioSensor::setPeriodNs(int64_t requestedNs) {
   std::lock_guard<std::mutex> lk(mu_);
   int64_t p = clampPeriodNs(conf_, requestedNs);
@@ -131,7 +131,7 @@ int64_t IioSensor::periodNs() const {
   return periodNs_;
 }
 
-// return true while reads fail
+// return paused_
 bool IioSensor::paused() const {
   std::lock_guard<std::mutex> lk(mu_);
   return paused_;
@@ -215,7 +215,7 @@ void IioSensor::run() {
     pollfd pfd[2] = {{wakeFd_, POLLIN, 0}, {timerFd_, POLLIN, 0}};
     if (poll(pfd, 2, -1) < 0) {
       if (errno == EINTR) continue;
-      klogf("%s: poll failed (%s); it stops reporting", name_.c_str(), strerror(errno));
+      klogf("poll failed for %s (%s)", name_.c_str(), strerror(errno));
       break;
     }
     uint64_t count = 0;

@@ -29,7 +29,7 @@ class HeadroomLink {
   using ClockFn = rhizo_link::ClockFn;
   using ConnectFn = rhizo_link::ConnectFn;
 
-  // store the link settings and try the first connect
+  // store the link settings and call link_.Connect
   HeadroomLink(std::string path, LogFn log, ClockFn now = MonotonicNs, ConnectFn connect_fn = ::connect)
       : dir_(path.substr(0, path.rfind('/'))),
         link_(std::move(path), "power_headroom", log, now, connect_fn, kTimeoutUs) {
@@ -37,7 +37,7 @@ class HeadroomLink {
     link_.Connect();
   }
 
-  // return whether the socket directory is bound into the sandbox
+  // return whether dir_ is a directory
   bool Supported() {
     std::lock_guard<std::mutex> lock(mu_);
     EnsureLocked();
@@ -46,16 +46,16 @@ class HeadroomLink {
     return supported_;
   }
 
-  // ask for the CPU headroom, reconnecting once on failure
+  // call link_.Send with "headroom average|min window_ms" and return ReplyLocked
   float Query(bool average, int32_t window_ms) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!EnsureLocked()) return NAN;
     char req[48];
     snprintf(req, sizeof(req), "headroom %s %d", average ? "average" : "min", window_ms);
     if (!link_.Send(req)) {
-      DropLocked("send", errno);
+      DropLocked("send()", errno);
       if (!link_.Connect()) return NAN;
-      if (!link_.Send(req)) return DropLocked("send", errno);
+      if (!link_.Send(req)) return DropLocked("send()", errno);
     }
     return ReplyLocked();
   }
@@ -64,7 +64,7 @@ class HeadroomLink {
   // return whether the link is up, connecting when due
   bool EnsureLocked() { return link_.fd() >= 0 || (link_.Due() && link_.Connect()); }
 
-  // read the reply and return its headroom, or NaN
+  // read the reply and return the headroom value, or NaN
   float ReplyLocked() {
     char rep[128];
     ssize_t n = recv(link_.fd(), rep, sizeof(rep) - 1, 0);
@@ -79,10 +79,10 @@ class HeadroomLink {
     return DropLocked(rep, 0);
   }
 
-  // log the failed exchange and close the socket
+  // log what and err, close the socket and return NaN
   float DropLocked(const char* what, int err) {
     char buf[200];
-    snprintf(buf, sizeof(buf), "headroom link FAILED %s errno=%d (%s), link down", what, err,
+    snprintf(buf, sizeof(buf), "headroom link failed on %s errno=%d (%s)", what, err,
              err ? strerror(err) : "none");
     link_.Log(buf);
     link_.Close();

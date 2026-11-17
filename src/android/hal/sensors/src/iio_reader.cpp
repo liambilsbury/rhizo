@@ -1,4 +1,4 @@
-// read a sensor's IIO channel files
+// IIO channel file reader for a sensor
 #include "iio_reader.h"
 
 #include <errno.h>
@@ -16,7 +16,7 @@ namespace rhizo::sensors {
 
 namespace {
 
-// read a file from offset 0, returning bytes or -errno
+// pread fd from offset 0 and return the byte count or -errno
 ssize_t preadAll(int fd, char* buf, size_t cap) {
   for (;;) {
     ssize_t n = pread(fd, buf, cap, 0);
@@ -92,14 +92,14 @@ void IioChannels::start() {
       if (readNumberFile(c.scalePath, &v) && v != 0) {
         scale_[i] = v * unitFactor(conf_.kind);
       } else {
-        klogf("%s: %s unreadable, using the launch-time scale %g", conf_.name.c_str(), c.scalePath.c_str(), c.scale);
+        klogf("%s scalePath=%s unreadable or 0 scale=%g", conf_.name.c_str(), c.scalePath.c_str(), c.scale);
       }
     }
     if (!c.offsetPath.empty()) {
       if (readNumberFile(c.offsetPath, &v)) {
         offset_[i] = v;
       } else {
-        klogf("%s: %s unreadable, using the launch-time offset %g", conf_.name.c_str(), c.offsetPath.c_str(), c.offset);
+        klogf("%s offsetPath=%s unreadable offset=%g", conf_.name.c_str(), c.offsetPath.c_str(), c.offset);
       }
     }
   }
@@ -113,7 +113,7 @@ void IioChannels::stop() {
   }
 }
 
-// read the channels, returning 0 or the first failure's errno
+// read the channels and return 0 or the errno of the first failed read
 int IioChannels::read(Reading* out, std::string* failedPath) {
   double raw[3] = {0, 0, 0};
   size_t n = conf_.channels.size();
@@ -155,11 +155,11 @@ int IioChannels::read(Reading* out, std::string* failedPath) {
   return 0;
 }
 
-// record a read's result
+// set paused_ from err and log each pause and resume
 void ReadHealth::note(int err, const std::string& failedPath) {
   if (err && !paused_) {
     paused_ = true;
-    klogf("%s paused: %s: %s", name_.c_str(), failedPath.c_str(), strerror(err));
+    klogf("%s paused path=%s (%s)", name_.c_str(), failedPath.c_str(), strerror(err));
   } else if (!err && paused_) {
     paused_ = false;
     klogf("%s resumed", name_.c_str());

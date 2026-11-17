@@ -95,7 +95,7 @@ inline std::vector<std::pair<int, Span>> NestList(Span s) {
   return out;
 }
 
-// generic netlink request under construction
+// nlmsghdr, genlmsghdr and nlattr buffer
 class Msg {
  public:
   Msg(uint16_t family, uint8_t cmd, uint16_t flags) {
@@ -194,7 +194,7 @@ class Socket {
     return setsockopt(fd_, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group, sizeof(group)) == 0;
   }
 
-  // send a request and return 0 or a negative errno
+  // call sendto with m and return 0 or a negative errno
   int Request(Msg& m, const std::function<void(const Reply&)>& on_reply) {
     std::lock_guard<std::mutex> lg(mu_);
     if (fd_ < 0) return -EBADF;
@@ -398,10 +398,10 @@ inline void ParseIes(const std::vector<uint8_t>& ies, Bss* b) {
   }
 }
 
-// nl80211 requests over a socket
+// nl80211 commands over a Socket
 class Nl80211 {
  public:
-  // open the request socket and resolve the family
+  // open sock_ and resolve NL80211_GENL_NAME
   int Init() {
     if (!sock_.Open(4000)) return -errno;
     return ResolveFamily(sock_, NL80211_GENL_NAME, &family_);

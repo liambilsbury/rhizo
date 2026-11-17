@@ -1,5 +1,5 @@
 diff --git a/security/selinux/global_sidtab.c b/security/selinux/global_sidtab.c
-index dfe535f77..898486aef 100644
+index d3c63815e..6cf7d6e64 100644
 --- a/security/selinux/global_sidtab.c
 +++ b/security/selinux/global_sidtab.c
 @@ -40,6 +40,69 @@ int global_sidtab_init(void)
@@ -69,10 +69,16 @@ index dfe535f77..898486aef 100644
 +	return true;
 +}
 +
- static int global_sid_to_context(u32 sid, const char **scontext, u32 *scontext_len)
+ static int global_sid_to_context(u32 sid, char **scontext, u32 *scontext_len)
  {
  	struct context *ctx;
-@@ -53,7 +116,9 @@ static int global_sid_to_context(u32 sid, const char **scontext, u32 *scontext_l
+@@ -48,11 +111,19 @@ static int global_sid_to_context(u32 sid, char **scontext, u32 *scontext_len)
+ 	ctx = sidtab_search_force(&global_sidtab, sid);
+ 	if (!ctx) {
+ 		rcu_read_unlock();
+-		*scontext = NULL;
++		if (scontext)
++			*scontext = NULL;
  		*scontext_len = 0;
  		return -EINVAL;
  	}
@@ -80,10 +86,15 @@ index dfe535f77..898486aef 100644
 +	/* report the primary only, without its namespace records */
 +	*scontext_len = context_has_records(ctx) ? strlen(ctx->str) + 1 :
 +						   ctx->len;
- 	if (scontext)
- 		*scontext = ctx->str;
- 
-@@ -85,6 +150,11 @@ static int global_context_to_sid(struct selinux_state *state, u32 ss_sid,
++	/* a caller asking only for the length, as secid_to_secctx may */
++	if (!scontext) {
++		rcu_read_unlock();
++		return 0;
++	}
+ 	/*
+ 	 * Could eliminate allocation + copy if callers do not free
+ 	 * since the global sidtab entries are never freed.
+@@ -95,6 +166,11 @@ static int global_context_to_sid(struct selinux_state *state, u32 ss_sid,
  	str = kmemdup_nul(scontext, scontext_len, gfp);
  	if (!str)
  		return -ENOMEM;
@@ -94,8 +105,8 @@ index dfe535f77..898486aef 100644
 +	}
  
  	ctx.str = str;
- 	ctx.len = strlen(str)+1;
-@@ -131,6 +201,17 @@ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
+ 	ctx.len = strlen(str) + 1;
+@@ -141,6 +217,17 @@ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
  		rcu_read_unlock();
  		return 0;
  	}
@@ -112,21 +123,23 @@ index dfe535f77..898486aef 100644
 +	}
  #if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
  	cache = &entry->ss_sid_cache;
- 	for (i = cache->first; i >= 0 && i <= cache->last; i++) {
-@@ -147,6 +228,10 @@ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
+ 	last = READ_ONCE(cache->last);
+@@ -169,6 +256,12 @@ static int map_global_sid_to_ss(struct selinux_state *state, u32 sid,
  	if (rc)
  		return rc;
  
 +	/* not cached, so a later policy load that defines it takes effect */
-+	if (outside_subject_to_ss(state, scontext, scontext_len, ss_sid))
++	if (outside_subject_to_ss(state, scontext, scontext_len, ss_sid)) {
++		kfree(scontext);
 +		return 0;
++	}
 +
  	rc = selinux_ss_context_to_sid_force(state, scontext,
  					     scontext_len, ss_sid, gfp);
  #if CONFIG_SECURITY_SELINUX_SS_SID_CACHE_SIZE > 0
-@@ -223,10 +308,30 @@ static int map_ss_sid_to_global(struct selinux_state *state, u32 ss_sid,
+@@ -256,10 +349,36 @@ static int map_ss_sid_to_global(struct selinux_state *state, u32 ss_sid,
  int security_sid_to_context(struct selinux_state *state, u32 sid,
- 			    const char **scontext, u32 *scontext_len)
+ 			    char **scontext, u32 *scontext_len)
  {
 +	u32 rec;
 +
@@ -140,30 +153,36 @@ index dfe535f77..898486aef 100644
 +		return security_sid_to_context(state, rec, scontext,
 +					       scontext_len);
 +	if (selinux_initialized(state) && state->parent) {
++		char *str, **strp = scontext ? scontext : &str;
 +		u32 ss_sid;
-+		int rc = global_sid_to_context(sid, scontext, scontext_len);
++		int rc = global_sid_to_context(sid, strp, scontext_len);
 +
 +		if (rc)
 +			return rc;
-+		if (outside_subject_to_ss(state, *scontext, *scontext_len,
-+					  &ss_sid))
++		if (outside_subject_to_ss(state, *strp, *scontext_len,
++					  &ss_sid)) {
++			kfree(*strp);
 +			return selinux_ss_sid_to_context(state, ss_sid,
 +							 scontext,
 +							 scontext_len);
++		}
++		if (!scontext)
++			kfree(str);
++		return 0;
 +	}
 +
  	return global_sid_to_context(sid, scontext, scontext_len);
  }
  
-@@ -251,6 +356,7 @@ int security_sid_to_context_valid(struct selinux_state *state, u32 sid,
+@@ -284,6 +403,7 @@ int security_sid_to_context_valid(struct selinux_state *state, u32 sid,
  int security_sid_to_context_force(struct selinux_state *state, u32 sid,
- 				  const char **scontext, u32 *scontext_len)
+ 				  char **scontext, u32 *scontext_len)
  {
 +	sid = security_sid_for_state(sid, state);
  	// initial SID contexts have to be obtained from the policy, if initialized
  	if (sid <= SECINITSID_NUM && selinux_initialized(state))
  		return selinux_ss_sid_to_context_force(state, sid, scontext, scontext_len);
-@@ -837,3 +943,117 @@ int security_netlbl_sid_to_secattr(struct selinux_state *state, u32 sid,
+@@ -985,3 +1105,123 @@ int security_netlbl_sid_to_secattr(struct selinux_state *state, u32 sid,
  	return 0;
  }
  #endif
@@ -197,16 +216,19 @@ index dfe535f77..898486aef 100644
 +/* return whether @state's policy defines @sid's context */
 +bool security_sid_defined(struct selinux_state *state, u32 sid)
 +{
-+	const char *scontext;
++	char *scontext;
 +	u32 len, ss_sid;
++	int rc;
 +
 +	sid = security_sid_for_state(sid, state);
 +	if (sid <= SECINITSID_NUM || !selinux_initialized(state))
 +		return true;
 +	if (global_sid_to_context(sid, &scontext, &len))
 +		return true;
-+	return !selinux_ss_context_to_sid(state, scontext, len, &ss_sid,
-+					  GFP_ATOMIC);
++	rc = selinux_ss_context_to_sid(state, scontext, len, &ss_sid,
++				       GFP_ATOMIC);
++	kfree(scontext);
++	return !rc;
 +}
 +
 +/* return in @out_sid @sid's primary with a record per pair of @ids and @sids */
@@ -215,7 +237,7 @@ index dfe535f77..898486aef 100644
 +{
 +	u8 order[SELINUX_RECORDS_MAX + 1];
 +	struct context ctx = {};
-+	const char *primary;
++	char *primary;
 +	u32 primary_len, len;
 +	char *str;
 +	int i, j, rc;
@@ -237,9 +259,12 @@ index dfe535f77..898486aef 100644
 +		return rc;
 +	len = primary_len + (n + 1) * 34 + 1;
 +	str = kmalloc(len, GFP_ATOMIC);
-+	if (!str)
++	if (!str) {
++		kfree(primary);
 +		return -ENOMEM;
++	}
 +	memcpy(str, primary, primary_len);
++	kfree(primary);
 +	ctx.len = primary_len;
 +	ctx.len += scnprintf(str + ctx.len, len - ctx.len, "%c0:%u",
 +			     SELINUX_RECORD_MARK, sid);
@@ -282,10 +307,10 @@ index dfe535f77..898486aef 100644
 +	return security_sid_with_records(sid, ids, sids, n, out_sid);
 +}
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
-index 706277dfd..99a2a54e5 100644
+index c6df90072..c2e1ac144 100644
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -555,6 +555,199 @@ static int cred_obj_sb_associate(const struct cred *cred, u32 ssid,
+@@ -556,6 +556,199 @@ static int cred_obj_sb_associate(const struct cred *cred, u32 ssid,
  	return 0;
  }
  
@@ -482,10 +507,10 @@ index 706277dfd..99a2a54e5 100644
 +	return out;
 +}
 +
- static int selinux_is_genfs_special_handling(struct super_block *sb)
+ static int selinux_is_genfs_special_handling(struct super_block *sb,
+ 					     struct selinux_state *state)
  {
- 	/* Special handling. Genfs but also in-core setxattr handler */
-@@ -1564,6 +1757,9 @@ static int inode_doinit_use_xattr(struct selinux_state *state,
+@@ -1573,6 +1766,9 @@ static int inode_doinit_use_xattr(struct selinux_state *state,
  
  	rc = security_context_to_sid_default(state, context, rc, sid,
  					     def_sid, GFP_NOFS);
@@ -495,7 +520,7 @@ index 706277dfd..99a2a54e5 100644
  	if (rc) {
  		char *dev = inode->i_sb->s_id;
  		u64 ino = inode->i_ino;
-@@ -1689,6 +1885,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+@@ -1698,6 +1894,7 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
  					     NULL, &sid);
  		if (rc)
  			goto out;
@@ -503,8 +528,8 @@ index 706277dfd..99a2a54e5 100644
  		break;
  	case SECURITY_FS_USE_MNTPOINT:
  		sid = sbsec->mntpoint_sid;
-@@ -1738,13 +1935,19 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
- 			     (selinux_policycap_cgroupseclabel() &&
+@@ -1747,13 +1944,19 @@ static int inode_doinit_with_dentry(struct inode *inode, struct dentry *opt_dent
+ 			     (selinux_policycap_cgroupseclabel(state) &&
  			      (!strcmp(sb->s_type->name, "cgroup") ||
  			       !strcmp(sb->s_type->name, "cgroup2"))))) {
 +				u32 xsid = sid;
@@ -524,7 +549,7 @@ index 706277dfd..99a2a54e5 100644
  			}
  			dput(dentry);
  		}
-@@ -1945,9 +2148,16 @@ static int __file_has_perm(const struct cred *cred, const struct file *file,
+@@ -1963,9 +2166,16 @@ static int __file_has_perm(const struct cred *cred, const struct file *file,
  		ad.u.file = file;
  	}
  
@@ -544,7 +569,7 @@ index 706277dfd..99a2a54e5 100644
  		if (rc)
  			return rc;
  	}
-@@ -1992,19 +2202,38 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
+@@ -2010,19 +2220,38 @@ selinux_determine_inode_label(const struct cred_security_struct *crsec,
  	const struct superblock_security_struct *sbsec =
  						selinux_superblock(dir->i_sb);
  
@@ -588,7 +613,7 @@ index 706277dfd..99a2a54e5 100644
  	return 0;
  }
  
-@@ -2253,9 +2482,8 @@ static int selinux_binder_transfer_file(const struct cred *from,
+@@ -2271,9 +2500,8 @@ static int selinux_binder_transfer_file(const struct cred *from,
  	ad.type = LSM_AUDIT_DATA_PATH;
  	ad.u.path = file->f_path;
  
@@ -600,7 +625,7 @@ index 706277dfd..99a2a54e5 100644
  		if (rc)
  			return rc;
  	}
-@@ -3111,7 +3339,7 @@ static int selinux_fs_context_parse_param(struct fs_context *fc,
+@@ -3129,7 +3357,7 @@ static int selinux_fs_context_parse_param(struct fs_context *fc,
  static int selinux_inode_alloc_security(struct inode *inode)
  {
  	struct inode_security_struct *isec = selinux_inode(inode);
@@ -609,7 +634,7 @@ index 706277dfd..99a2a54e5 100644
  
  	spin_lock_init(&isec->lock);
  	INIT_LIST_HEAD(&isec->list);
-@@ -3287,15 +3515,22 @@ static int selinux_inode_init_security_anon(struct inode *inode,
+@@ -3282,15 +3510,22 @@ static int selinux_inode_init_security_anon(struct inode *inode,
  		isec->sclass = context_isec->sclass;
  		isec->sid = context_isec->sid;
  	} else {
@@ -632,7 +657,7 @@ index 706277dfd..99a2a54e5 100644
  	}
  
  	isec->initialized = LABEL_INITIALIZED;
-@@ -3716,6 +3951,7 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
+@@ -3710,6 +3945,7 @@ static int selinux_inode_setxattr(struct mnt_idmap *idmap,
  	if (rc)
  		return rc;
  
@@ -640,7 +665,7 @@ index 706277dfd..99a2a54e5 100644
  	rc = cred_tsid_has_perm(cred, newsid, isec->sclass, FILE__RELABELTO,
  				&ad);
  	if (rc)
-@@ -3800,6 +4036,7 @@ static void selinux_inode_post_setxattr(struct dentry *dentry, const char *name,
+@@ -3794,6 +4030,7 @@ static void selinux_inode_post_setxattr(struct dentry *dentry, const char *name,
  	}
  
  	isec = backing_inode_security(dentry);
@@ -648,7 +673,7 @@ index 706277dfd..99a2a54e5 100644
  	spin_lock(&isec->lock);
  	isec->sclass = inode_mode_to_security_class(inode->i_mode);
  	isec->sid = newsid;
-@@ -3993,6 +4230,7 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
+@@ -3985,6 +4222,7 @@ static int selinux_inode_setsecurity(struct inode *inode, const char *name,
  	if (rc)
  		return rc;
  
@@ -656,7 +681,7 @@ index 706277dfd..99a2a54e5 100644
  	spin_lock(&isec->lock);
  	isec->sclass = inode_mode_to_security_class(inode->i_mode);
  	isec->sid = newsid;
-@@ -4186,6 +4424,7 @@ static int selinux_file_alloc_security(struct file *file)
+@@ -4160,6 +4398,7 @@ static int selinux_file_alloc_security(struct file *file)
  
  	fsec->sid = sid;
  	fsec->cred = get_cred(current_cred());
@@ -664,7 +689,7 @@ index 706277dfd..99a2a54e5 100644
  
  	return 0;
  }
-@@ -4206,6 +4445,7 @@ static void selinux_file_free_security(struct file *file)
+@@ -4237,6 +4476,7 @@ static void selinux_file_free_security(struct file *file)
  	struct file_security_struct *fsec = selinux_file(file);
  
  	put_cred(fsec->cred);
@@ -672,7 +697,7 @@ index 706277dfd..99a2a54e5 100644
  }
  
  /*
-@@ -4230,9 +4470,8 @@ static int ioctl_has_perm(const struct cred *cred, struct file *file,
+@@ -4261,9 +4501,8 @@ static int ioctl_has_perm(const struct cred *cred, struct file *file,
  	ad.u.op->cmd = cmd;
  	ad.u.op->path = file->f_path;
  
@@ -684,7 +709,7 @@ index 706277dfd..99a2a54e5 100644
  		if (rc)
  			goto out;
  	}
-@@ -4802,9 +5041,8 @@ static int selinux_kernel_load_from_file(struct file *file, u32 requested)
+@@ -4894,9 +5133,8 @@ static int selinux_kernel_load_from_file(struct file *file, u32 requested)
  	ad.u.file = file;
  
  	fsec = selinux_file(file);
@@ -696,7 +721,7 @@ index 706277dfd..99a2a54e5 100644
  		if (rc)
  			return rc;
  	}
-@@ -5004,8 +5242,14 @@ static void selinux_task_to_inode(struct task_struct *p,
+@@ -5096,8 +5334,14 @@ static void selinux_task_to_inode(struct task_struct *p,
  				  struct inode *inode)
  {
  	struct inode_security_struct *isec = selinux_inode(inode);
@@ -712,7 +737,7 @@ index 706277dfd..99a2a54e5 100644
  	spin_lock(&isec->lock);
  	isec->sclass = inode_mode_to_security_class(inode->i_mode);
  	isec->sid = sid;
-@@ -5279,10 +5523,14 @@ static int selinux_conn_sid(u32 sk_sid, u32 skb_sid,
+@@ -5371,10 +5615,14 @@ static int selinux_conn_sid(u32 sk_sid, u32 skb_sid,
  {
  	int err = 0;
  
@@ -729,7 +754,7 @@ index 706277dfd..99a2a54e5 100644
  
  	return err;
  }
-@@ -5292,13 +5540,20 @@ static int selinux_conn_sid(u32 sk_sid, u32 skb_sid,
+@@ -5384,13 +5632,20 @@ static int selinux_conn_sid(u32 sk_sid, u32 skb_sid,
  static int socket_sockcreate_sid(const struct cred_security_struct *crsec,
  				 u16 secclass, u32 *socksid)
  {
@@ -756,7 +781,7 @@ index 706277dfd..99a2a54e5 100644
  }
  
  static bool sock_skip_has_perm(u32 sid)
-@@ -5745,10 +6000,19 @@ static int selinux_socket_unix_stream_connect(struct sock *sock,
+@@ -5855,10 +6110,19 @@ static int selinux_socket_unix_stream_connect(struct sock *sock,
  
  	/* server child socket */
  	sksec_new->peer_sid = sksec_sock->sid;
@@ -777,7 +802,7 @@ index 706277dfd..99a2a54e5 100644
  
  	/* connecting socket */
  	sksec_sock->peer_sid = sksec_new->sid;
-@@ -6345,7 +6609,7 @@ static int selinux_tun_dev_alloc_security(void *security)
+@@ -6442,7 +6706,7 @@ static int selinux_tun_dev_alloc_security(void *security)
  {
  	struct tun_security_struct *tunsec = selinux_tun_dev(security);
  
@@ -786,7 +811,7 @@ index 706277dfd..99a2a54e5 100644
  	return 0;
  }
  
-@@ -6403,7 +6667,7 @@ static int selinux_tun_dev_open(void *security)
+@@ -6500,7 +6764,7 @@ static int selinux_tun_dev_open(void *security)
  				 TUN_SOCKET__RELABELTO, NULL);
  	if (err)
  		return err;
@@ -795,7 +820,7 @@ index 706277dfd..99a2a54e5 100644
  
  	return 0;
  }
-@@ -6775,7 +7039,7 @@ static int selinux_netlink_send(struct sock *sk, struct sk_buff *skb)
+@@ -6877,7 +7141,7 @@ static int selinux_netlink_send(struct sock *sk, struct sk_buff *skb)
  static void ipc_init_security(struct ipc_security_struct *isec, u16 sclass)
  {
  	isec->sclass = sclass;
@@ -804,7 +829,7 @@ index 706277dfd..99a2a54e5 100644
  }
  
  static int ipc_has_perm(struct kern_ipc_perm *ipc_perms,
-@@ -6881,10 +7145,16 @@ static int selinux_msg_queue_msgsnd(struct kern_ipc_perm *msq, struct msg_msg *m
+@@ -6983,10 +7247,16 @@ static int selinux_msg_queue_msgsnd(struct kern_ipc_perm *msq, struct msg_msg *m
  		 * Compute new sid based on current process and
  		 * message queue this message will be stored in
  		 */
@@ -821,7 +846,7 @@ index 706277dfd..99a2a54e5 100644
  	}
  
  	ad.type = LSM_AUDIT_DATA_IPC;
-@@ -7555,6 +7825,7 @@ static int selinux_key_alloc(struct key *k, const struct cred *cred,
+@@ -7643,6 +7913,7 @@ static int selinux_key_alloc(struct key *k, const struct cred *cred,
  		ksec->sid = crsec->keycreate_sid;
  	else
  		ksec->sid = crsec->sid;
@@ -829,7 +854,7 @@ index 706277dfd..99a2a54e5 100644
  
  	return 0;
  }
-@@ -7685,7 +7956,7 @@ static int selinux_ib_alloc_security(void *ib_sec)
+@@ -7769,7 +8040,7 @@ static int selinux_ib_alloc_security(void *ib_sec)
  {
  	struct ib_security_struct *sec = selinux_ib(ib_sec);
  
@@ -838,7 +863,7 @@ index 706277dfd..99a2a54e5 100644
  	return 0;
  }
  #endif
-@@ -7804,7 +8075,7 @@ static int selinux_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
+@@ -7871,7 +8142,7 @@ static int selinux_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
  	u32 ssid;
  
  	bpfsec = selinux_bpf_map_security(map);
@@ -847,7 +872,7 @@ index 706277dfd..99a2a54e5 100644
  
  	if (!token)
  		ssid = bpfsec->sid;
-@@ -7823,7 +8094,7 @@ static int selinux_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
+@@ -7890,7 +8161,7 @@ static int selinux_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
  	u32 ssid;
  
  	bpfsec = selinux_bpf_prog_security(prog);
@@ -856,16 +881,16 @@ index 706277dfd..99a2a54e5 100644
  
  	if (!token)
  		ssid = bpfsec->sid;
-@@ -7847,7 +8118,7 @@ static int selinux_bpf_token_create(struct bpf_token *token,
- 	int err;
+@@ -7916,7 +8187,7 @@ static int selinux_bpf_token_create(struct bpf_token *token,
+ 	sbsec = selinux_superblock(path->dentry->d_sb);
  
  	bpfsec = selinux_bpf_token_security(token);
 -	bpfsec->sid = current_sid();
 +	bpfsec->sid = current_obj_sid();
- 	bpfsec->grantor_sid = sid;
+ 	bpfsec->grantor_sid = sbsec->creator_sid;
  
  	bpfsec->perms = 0;
-@@ -7946,7 +8217,7 @@ static int selinux_perf_event_alloc(struct perf_event *event)
+@@ -8016,7 +8287,7 @@ static int selinux_perf_event_alloc(struct perf_event *event)
  	struct perf_event_security_struct *perfsec;
  
  	perfsec = selinux_perf_event(event->security);
@@ -874,7 +899,7 @@ index 706277dfd..99a2a54e5 100644
  
  	return 0;
  }
-@@ -8370,6 +8641,9 @@ unsigned int selinux_maxnsdepth = CONFIG_SECURITY_SELINUX_MAXNSDEPTH;
+@@ -8441,6 +8712,9 @@ unsigned int selinux_maxnsdepth = CONFIG_SECURITY_SELINUX_MAXNSDEPTH;
  
  static atomic_t selinux_nsnum = ATOMIC_INIT(0);
  
@@ -884,7 +909,7 @@ index 706277dfd..99a2a54e5 100644
  int selinux_state_create(const struct cred *cred)
  {
  	struct cred_security_struct *crsec = selinux_cred(cred);
-@@ -8384,7 +8658,9 @@ int selinux_state_create(const struct cred *cred)
+@@ -8455,7 +8729,9 @@ int selinux_state_create(const struct cred *cred)
  		goto err;
  	}
  
@@ -895,7 +920,7 @@ index 706277dfd..99a2a54e5 100644
  		rc = -ENOSPC;
  		goto err;
  	}
-@@ -8407,6 +8683,7 @@ int selinux_state_create(const struct cred *cred)
+@@ -8478,6 +8754,7 @@ int selinux_state_create(const struct cred *cred)
  	if (rc)
  		goto err;
  
@@ -904,36 +929,36 @@ index 706277dfd..99a2a54e5 100644
  		/*
  		 * The reference to the new state replaces the reference
 diff --git a/security/selinux/include/context.h b/security/selinux/include/context.h
-index 0e8d34a26..fddcd43e1 100644
+index dd3b9b5b5..55687118f 100644
 --- a/security/selinux/include/context.h
 +++ b/security/selinux/include/context.h
-@@ -160,7 +160,11 @@ static inline int context_cpy(struct context *dst, const struct context *src)
- 	dst->user = src->user;
+@@ -161,7 +161,11 @@ static inline int context_cpy(struct context *dst, const struct context *src)
  	dst->role = src->role;
  	dst->type = src->type;
--	dst->str = kstrdup(src->str, GFP_ATOMIC);
-+	/* keep namespace records stored after the primary's NUL */
-+	if (src->str && src->len > strlen(src->str) + 1)
-+		dst->str = kmemdup(src->str, src->len, GFP_ATOMIC);
-+	else
-+		dst->str = kstrdup(src->str, GFP_ATOMIC);
- 	if (!dst->str)
- 		return -ENOMEM;
- 	dst->len = src->len;
-@@ -187,7 +191,7 @@ static inline bool context_equal(const struct context *c1,
+ 	if (src->str) {
+-		dst->str = kstrdup(src->str, GFP_ATOMIC);
++		/* keep namespace records stored after the primary's NUL */
++		if (src->len > strlen(src->str) + 1)
++			dst->str = kmemdup(src->str, src->len, GFP_ATOMIC);
++		else
++			dst->str = kstrdup(src->str, GFP_ATOMIC);
+ 		if (!dst->str)
+ 			return -ENOMEM;
+ 		dst->len = src->len;
+@@ -192,7 +196,7 @@ static inline bool context_equal(const struct context *c1,
  				 const struct context *c2)
  {
- 	if (!c1->user && !c2->user)
+ 	if (c1->len && c2->len)
 -		return (c1->len == c2->len && !strcmp(c1->str, c2->str));
 +		return (c1->len == c2->len && !memcmp(c1->str, c2->str, c1->len));
- 	if (!c1->user || !c2->user)
+ 	if (c1->len || c2->len)
  		return 0;
  	return ((c1->user == c2->user) && (c1->role == c2->role) &&
 diff --git a/security/selinux/include/objsec.h b/security/selinux/include/objsec.h
-index 0509e41c7..dcc783069 100644
+index 7d9f7385f..e32f339fa 100644
 --- a/security/selinux/include/objsec.h
 +++ b/security/selinux/include/objsec.h
-@@ -39,6 +39,10 @@ struct avdc_entry {
+@@ -37,6 +37,10 @@ struct avdc_entry {
  };
  
  struct task_security_struct {
@@ -944,16 +969,16 @@ index 0509e41c7..dcc783069 100644
  #define TSEC_AVDC_DIR_SIZE (1 << 2)
  	struct {
  		u32 sid; /* current SID for cached entries */
-@@ -83,6 +87,7 @@ struct file_security_struct {
+@@ -81,6 +85,7 @@ struct file_security_struct {
  	u32 pseqno; /* Policy seqno at the time of file open */
  	u32 reset_generation; /* AVC resets in all namespaces at file open */
  	const struct cred *cred; /* cred for file owner (for SIGIO) */
 +	const struct cred *open_cred; /* opener's cred, never replaced */
  };
  
- struct backing_file_security_struct {
+ struct backing_file_security_layer {
 diff --git a/security/selinux/include/security.h b/security/selinux/include/security.h
-index b3a1e4950..08b42f2e9 100644
+index fb1bf7ade..cba2cd4ed 100644
 --- a/security/selinux/include/security.h
 +++ b/security/selinux/include/security.h
 @@ -114,6 +114,7 @@ struct selinux_state {
@@ -964,7 +989,7 @@ index b3a1e4950..08b42f2e9 100644
  	unsigned short depth;
  } __randomize_layout;
  
-@@ -350,6 +351,11 @@ struct extended_perms {
+@@ -344,6 +345,11 @@ struct extended_perms {
  #define AVD_FLAGS_PERMISSIVE 0x0001
  #define AVD_FLAGS_NEVERAUDIT  0x0002
  
@@ -976,9 +1001,9 @@ index b3a1e4950..08b42f2e9 100644
  #ifdef CONFIG_SECURITY_SELINUX_NS
  
  void security_compute_av(struct selinux_state *state, u32 ssid, u32 tsid,
-@@ -373,6 +379,12 @@ int security_sid_to_context_valid(struct selinux_state *state, u32 sid,
+@@ -380,6 +386,12 @@ int security_sid_to_context_valid(struct selinux_state *state, u32 sid,
  int security_sid_to_context_force(struct selinux_state *state, u32 sid,
- 				  const char **scontext, u32 *scontext_len);
+ 				  char **scontext, u32 *scontext_len);
  
 +u32 security_sid_for_state(u32 sid, const struct selinux_state *state);
 +u32 security_sid_primary(u32 sid);
@@ -987,9 +1012,9 @@ index b3a1e4950..08b42f2e9 100644
 +			      int n, u32 *out_sid);
 +int security_sid_with_records_of(u32 sid, u32 from, u32 *out_sid);
  int security_sid_to_context_inval(struct selinux_state *state, u32 sid,
- 				  const char **scontext, u32 *scontext_len);
+ 				  char **scontext, u32 *scontext_len);
  
-@@ -438,6 +450,37 @@ security_compute_xperms_decision(struct selinux_state *state, u32 ssid,
+@@ -455,6 +467,37 @@ security_compute_xperms_decision(struct selinux_state *state, u32 ssid,
  					   base_perm, xpermd);
  }
  
@@ -1028,10 +1053,10 @@ index b3a1e4950..08b42f2e9 100644
  					  u32 tsid, u16 tclass,
  					  const struct qstr *qstr, u32 *out_sid)
 diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
-index 59698109a..269e28762 100644
+index 67aeb0b06..ecb13edf8 100644
 --- a/security/selinux/selinuxfs.c
 +++ b/security/selinux/selinuxfs.c
-@@ -440,7 +440,7 @@ static ssize_t sel_write_maxnsdepth(struct file *file, const char __user *buf,
+@@ -407,7 +407,7 @@ static ssize_t sel_write_maxnsdepth(struct file *file, const char __user *buf,
  	if (length)
  		goto out;
  

@@ -1,5 +1,5 @@
 #!/bin/bash
-# build RhizoSettingsRro.apk
+# var/share/RhizoSettingsRro.apk RHIZO_ANDROID_SDK=
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 SRC="$(cd "src/android/apps/settings-rro" && pwd)"
@@ -9,10 +9,9 @@ source ./tools/build/toolchain/android-sdk.sh
 android_sdk_resolve || exit 1
 KEYDIR="$(pwd)/aosp-android16-qpr2/build/make/target/product/security"
 [[ -f "$KEYDIR/testkey.pk8" && -f "$KEYDIR/testkey.x509.pem" ]] \
-  || { echo "missing AOSP testkey under $KEYDIR" >&2; exit 1; }
+  || { echo "no testkey.pk8 or testkey.x509.pem in $KEYDIR" >&2; exit 1; }
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 
-echo "[build-settings-rro] aapt2 compile + link"
 mkdir -p "$WORK/compiled"
 "$AAPT2" compile -o "$WORK/compiled" "$SRC/res/values/strings.xml"
 "$AAPT2" link -o "$WORK/base.apk" --manifest "$SRC/AndroidManifest.xml" \
@@ -25,11 +24,11 @@ mkdir -p "$WORK/compiled"
 
 manifest=$("$AAPT2" dump xmltree --file AndroidManifest.xml "$WORK/signed.apk")
 grep -q 'targetPackage.*="com.android.settings"' <<<"$manifest" \
-  || { echo "[build-settings-rro] FAIL: overlay does not target com.android.settings" >&2; exit 1; }
-grep -q 'isStatic.*=true' <<<"$manifest" || { echo "[build-settings-rro] FAIL: overlay is not static" >&2; exit 1; }
+  || { echo "<overlay> targetPackage is not com.android.settings" >&2; exit 1; }
+grep -q 'isStatic.*=true' <<<"$manifest" || { echo "<overlay> isStatic is not true" >&2; exit 1; }
 grep -A1 "string/about_settings" <<<"$("$AAPT2" dump resources "$WORK/signed.apk")" | grep -qF '"About device"' \
-  || { echo "[build-settings-rro] FAIL: about_settings is not \"About device\" in the overlay" >&2; exit 1; }
+  || { echo "string/about_settings is not \"About device\"" >&2; exit 1; }
 
 cp --remove-destination "$WORK/signed.apk" "$SHARE/RhizoSettingsRro.apk"
-echo "[build-settings-rro] OK -> var/share/RhizoSettingsRro.apk"
+echo "wrote var/share/RhizoSettingsRro.apk"
 ./tools/build/stamps.py stamp RhizoSettingsRro.apk

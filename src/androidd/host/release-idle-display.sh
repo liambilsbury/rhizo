@@ -1,5 +1,5 @@
 #!/bin/sh
-# release the idle spare display
+# idle spare display release on pool_idle_armed markers
 set -eu
 
 MARK='RHIZO_MARKER pool_idle_armed release_at='
@@ -8,20 +8,20 @@ PROBE_CLIENT=""
 for _pc in /root/share/rhizo-probe-client "$(dirname "$0")/rhizo-probe-client"; do
   [ -x "$_pc" ] && { PROBE_CLIENT="$_pc"; break; }
 done
-[ -n "$PROBE_CLIENT" ] || { logger -t rhizo-display-pool-release "no rhizo-probe-client in /root/share or $(dirname "$0") -- refusing to watch"; exit 1; }
+[ -n "$PROBE_CLIENT" ] || { logger -t rhizo-display-pool-release "no rhizo-probe-client in /root/share or $(dirname "$0")"; exit 1; }
 HOSTOPS=""
 for _h in "$(dirname "$0")/hostops.py" /usr/lib/rhizo/hostops.py; do
   [ -s "$_h" ] && { HOSTOPS="$_h"; break; }
 done
-[ -n "$HOSTOPS" ] || { logger -t rhizo-display-pool-release "no hostops.py beside $0 or in /usr/lib/rhizo -- refusing to watch"; exit 1; }
+[ -n "$HOSTOPS" ] || { logger -t rhizo-display-pool-release "no hostops.py in $(dirname "$0") or /usr/lib/rhizo"; exit 1; }
 for _dl_lib in /root/rhizo-display-list.sh /root/share/rhizo-display-list.sh "$(dirname "$0")/tools/rhizo-display-list.sh"; do
   # shellcheck source=/dev/null
   [ -r "$_dl_lib" ] && { . "$_dl_lib"; break; }
 done
-command -v rhizo_dl_spares >/dev/null 2>&1 || { logger -t rhizo-display-pool-release "no rhizo-display-list.sh in $(dirname "$0")/tools or /root -- refusing to read the pool"; exit 1; }
+command -v rhizo_dl_spares >/dev/null 2>&1 || { logger -t rhizo-display-pool-release "no rhizo-display-list.sh in /root, /root/share or $(dirname "$0")/tools"; exit 1; }
 DEADLINE_FILE=/run/rhizo-display-pool-release.deadline
 
-# send a shell command to rhizo-probed
+# run a shell command through rhizo-probe-client
 probe() {
   "$PROBE_CLIENT" "$PROBE_SOCK" "$1" \
     "export PATH=/system/bin:/system/xbin:/vendor/bin; $2" 2>/dev/null || true

@@ -13,7 +13,7 @@ namespace rhizo::c2va::av1 {
 
 enum class ParseError { kNone, kBad, kUnsupported };
 
-// read the OBUs of a low-overhead format stream
+// OBU reader for the low overhead bitstream format
 class ObuReader {
  public:
   ObuReader(const uint8_t* data, size_t size, Trace* trace = nullptr) : data_(data), size_(size), trace_(trace) {}

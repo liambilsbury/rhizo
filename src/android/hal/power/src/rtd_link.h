@@ -36,7 +36,7 @@ class RtdLink {
   using ClockFn = rhizo_link::ClockFn;
   using ConnectFn = rhizo_link::ConnectFn;
 
-  // store the link settings and try the first connect
+  // store the link settings and call ConnectLocked
   RtdLink(std::string path, LogFn log, ClockFn now = MonotonicNs, ConnectFn connect_fn = ::connect)
       : link_(std::move(path), "power_sessions", log, now, connect_fn) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -49,7 +49,7 @@ class RtdLink {
     return EnsureLocked();
   }
 
-  // record a session and send its open
+  // record a session and call Deliver with the open line
   void Open(int32_t sid, int32_t tgid, int32_t uid, int64_t target_ns, const std::vector<int32_t>& tids) {
     std::lock_guard<std::mutex> lock(mu_);
     Session& s = sessions_[sid];
@@ -57,7 +57,7 @@ class RtdLink {
     Deliver(OpenLine(sid, s), true);
   }
 
-  // record a session's target duration and send it
+  // record a session's target duration and call Deliver with the target line
   void Target(int32_t sid, int64_t target_ns) {
     std::lock_guard<std::mutex> lock(mu_);
     auto it = sessions_.find(sid);
@@ -66,7 +66,7 @@ class RtdLink {
     Deliver("target " + std::to_string(sid) + " " + std::to_string(target_ns), true);
   }
 
-  // record a session's thread ids and send them
+  // record a session's thread ids and call Deliver with the threads line
   void Threads(int32_t sid, const std::vector<int32_t>& tids) {
     std::lock_guard<std::mutex> lock(mu_);
     auto it = sessions_.find(sid);
@@ -75,7 +75,7 @@ class RtdLink {
     Deliver("threads " + std::to_string(sid) + " " + JoinCsv(tids), true);
   }
 
-  // record a session's pause state and send it
+  // record a session's pause state and call Deliver with the pause or resume line
   void SetPaused(int32_t sid, bool paused) {
     std::lock_guard<std::mutex> lock(mu_);
     auto it = sessions_.find(sid);
@@ -84,14 +84,14 @@ class RtdLink {
     Deliver((paused ? "pause " : "resume ") + std::to_string(sid), true);
   }
 
-  // send a session's actual work durations
+  // call Deliver with the actual line for a session
   void Actual(int32_t sid, const std::vector<int64_t>& durations_ns) {
     std::lock_guard<std::mutex> lock(mu_);
     if (sessions_.find(sid) == sessions_.end()) return;
     Deliver("actual " + std::to_string(sid) + " " + JoinCsv(durations_ns), false);
   }
 
-  // forget a session and send its close
+  // erase a session and call Deliver with the close line
   bool Close(int32_t sid) {
     std::lock_guard<std::mutex> lock(mu_);
     if (sessions_.erase(sid) == 0) return false;
@@ -140,7 +140,7 @@ class RtdLink {
     }
     if (!sessions_.empty()) {
       char buf[96];
-      snprintf(buf, sizeof(buf), "rtd link reopened %zu session(s)", sessions_.size());
+      snprintf(buf, sizeof(buf), "rtd link reopened %zu sessions", sessions_.size());
       link_.Log(buf);
     }
     return true;
@@ -148,15 +148,15 @@ class RtdLink {
 
   bool SendLocked(const std::string& msg) { return link_.Send(msg); }
 
-  // log the failed send and close the socket
+  // log the send() errno and close the socket
   void DropLocked(int err) {
     char buf[160];
-    snprintf(buf, sizeof(buf), "rtd send FAILED errno=%d (%s), link down", err, strerror(err));
+    snprintf(buf, sizeof(buf), "rtd link failed on send() errno=%d (%s)", err, strerror(err));
     link_.Log(buf);
     link_.Close();
   }
 
-  // send a message, reconnecting once on failure
+  // call SendLocked with msg, and ConnectLocked on failure
   void Deliver(const std::string& msg, bool recorded) {
     if (link_.fd() >= 0) {
       if (SendLocked(msg)) return;

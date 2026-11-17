@@ -15,9 +15,9 @@ public class TokenProvider extends ContentProvider {
     static final String METHOD_MINT = "mint";
     static final String METHOD_START = "start";
     static final String KEY_TOKEN = "token";
-    private static final String ONLY_CALL = "the token provider serves call() only";
+    private static final String ONLY_CALL = "TokenProvider implements call() only";
 
-    // report the provider as ready
+    // return true
     @Override
     public boolean onCreate() {
         return true;
@@ -28,7 +28,7 @@ public class TokenProvider extends ContentProvider {
     public Bundle call(String method, String arg, Bundle extras) {
         int uid = Binder.getCallingUid();
         if (uid != Process.ROOT_UID && uid != Process.SHELL_UID) {
-            throw new SecurityException("uid " + uid + " may not reach the bridge credentials");
+            throw new SecurityException("uid " + uid + " is not ROOT_UID or SHELL_UID");
         }
         Bundle reply = new Bundle();
         if (METHOD_MINT.equals(method)) {
@@ -37,7 +37,7 @@ public class TokenProvider extends ContentProvider {
             try {
                 creds = DeskCreds.mint(getContext(), port);
             } catch (IOException e) {
-                throw new IllegalStateException("could not persist the bridge credentials: " + e);
+                throw new IllegalStateException("DeskCreds.mint failed with " + e);
             }
             Logs.i("RHIZO_DESK_TOKEN_MINTED port=" + port);
             reply.putString(KEY_TOKEN, creds.token);
@@ -46,10 +46,10 @@ public class TokenProvider extends ContentProvider {
         if (METHOD_START.equals(method)) {
             try {
                 if (DeskCreds.load(getContext()) == null) {
-                    throw new IllegalStateException("start before any mint: no bridge credentials yet");
+                    throw new IllegalStateException("DeskCreds.load returned null");
                 }
             } catch (IOException e) {
-                throw new IllegalStateException("unreadable bridge credentials: " + e);
+                throw new IllegalStateException("DeskCreds.load failed with " + e);
             }
             BridgeService.start(getContext());
             reply.putBoolean("started", true);
@@ -64,40 +64,40 @@ public class TokenProvider extends ContentProvider {
         try {
             port = Integer.parseInt(arg);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("mint wants a port, got " + arg);
+            throw new IllegalArgumentException("failed to parse mint port " + arg);
         }
         if (port <= 0 || port > 65535) {
-            throw new IllegalArgumentException("mint wants a port, got " + port);
+            throw new IllegalArgumentException("mint port is outside 1-65535 port=" + port);
         }
         return port;
     }
 
-    // reject queries
+    // throw UnsupportedOperationException
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
         throw new UnsupportedOperationException(ONLY_CALL);
     }
 
-    // reject type lookups
+    // throw UnsupportedOperationException
     @Override
     public String getType(Uri uri) {
         throw new UnsupportedOperationException(ONLY_CALL);
     }
 
-    // reject inserts
+    // throw UnsupportedOperationException
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         throw new UnsupportedOperationException(ONLY_CALL);
     }
 
-    // reject deletes
+    // throw UnsupportedOperationException
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         throw new UnsupportedOperationException(ONLY_CALL);
     }
 
-    // reject updates
+    // throw UnsupportedOperationException
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         throw new UnsupportedOperationException(ONLY_CALL);

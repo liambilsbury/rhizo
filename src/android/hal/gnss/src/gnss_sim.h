@@ -17,7 +17,7 @@ inline constexpr int64_t kDefaultSvIntervalMs = 1000;
 inline constexpr int64_t kMinMeasurementIntervalMs = 1000;
 inline constexpr int64_t kMinPositionIntervalMs = 100;
 
-// satellite seen from a fix
+// satellite visible from a fix
 struct Sat {
   int svid;
   double azimuthDeg;
@@ -100,7 +100,7 @@ inline std::vector<Sat> visible(double latDeg, double lonDeg, double gpsSeconds)
   return out;
 }
 
-// active report streams and their intervals
+// active report streams and the stream intervals
 struct Request {
   bool locationActive;
   int64_t locationMs;

@@ -1,4 +1,4 @@
-"""relay the host's power supplies into the host-battery file"""
+"""host power supply relay to the host-battery file"""
 import errno
 import fcntl
 import json
@@ -85,7 +85,7 @@ def read_attr(root, rel):
 
 
 def supply_names(root):
-    """return the supply names under root, sorted"""
+    """return the sorted entries of root, dotfiles excluded"""
     try:
         return sorted(n for n in os.listdir(root) if not n.startswith("."))
     except OSError:
@@ -96,7 +96,7 @@ def scan(root, denied=None):
     """return the counted batteries and chargers under root"""
 
     def get(rel):
-        """read an attribute under root"""
+        """return the text and error status of rel under root"""
         return read_attr_status(root, rel, denied)
 
     batteries, chargers = [], []
@@ -181,7 +181,7 @@ def battery_values(attrs, dropped=None):
         c = num[key]
         if c is None and num[rate] is not None and volts_now:
             c = _round(num[rate] * 1e6 / volts_now)
-        # ACPI reports an unsigned current while discharging
+        # ACPI current_now is unsigned while discharging
         v[key] = -c if c is not None and c > 0 and status == "discharging" else c
     health = attrs.get("health")
     v["health"] = _token(health) if health else None
@@ -233,7 +233,7 @@ def _max_charging(chargers):
 
 
 def _online(attrs):
-    """return true when a charger reads online"""
+    """return whether the charger online attribute is greater than 0"""
     online = _int(attrs.get("online"))
     return online is not None and online > 0
 
@@ -272,9 +272,9 @@ def render(pairs):
 def describe(pairs, batteries=0):
     """return the log line of a write"""
     if not pairs:
-        return "rhizo-battery: present=0 batteries=%d" % batteries
+        return "rhizo-battery present=0 batteries=%d" % batteries
     kv = dict(pairs)
-    return "rhizo-battery: level=%s status=%s ac=%s batteries=%s" % (
+    return "rhizo-battery level=%s status=%s ac=%s batteries=%s" % (
         kv.get("level", "-"), kv.get("status", "-"), kv.get("ac_online", "-"), kv.get("batteries", "-"))
 
 
@@ -314,22 +314,22 @@ def drop_privileges(uid=NOBODY, gid=NOBODY, ops=os, no_new_privs=None, status_pa
     ops.setresgid(gid, gid, gid)
     ops.setresuid(uid, uid, uid)
     if (no_new_privs or _no_new_privs)() != 0:
-        raise OSError(errno.EPERM, "no_new_privs refused")
+        raise OSError(errno.EPERM, "prctl(PR_SET_NO_NEW_PRIVS) failed")
     if ops.getresuid() != (uid, uid, uid) or ops.getresgid() != (gid, gid, gid) or ops.getgroups():
-        raise OSError(errno.EPERM, "the drop to %d:%d did not hold" % (uid, gid))
+        raise OSError(errno.EPERM, "getresuid, getresgid or getgroups is not %d:%d" % (uid, gid))
     with open(status_path) as handle:
         caps = {k: v.strip() for k, _, v in (l.partition(":") for l in handle) if k in ("CapPrm", "CapEff", "CapAmb")}
     if len(caps) != 3 or any(int(v, 16) for v in caps.values()):
-        raise OSError(errno.EPERM, "capabilities survived the drop: %s" % caps)
+        raise OSError(errno.EPERM, "CapPrm, CapEff or CapAmb is not 0 (%s)" % caps)
 
 
 def _no_new_privs():
-    """set no_new_privs on this process"""
+    """call prctl(PR_SET_NO_NEW_PRIVS, 1)"""
     return core.libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
 
 
 def _serve(sock, supplies_fd, parent, drop, scan_fn, timer, keep=()):
-    """run the scan helper as nobody, scanning per request"""
+    """run the scan helper as nobody with one scan per recv"""
     core.libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
     if os.getppid() != parent:
         return 1
@@ -365,7 +365,7 @@ def _serve(sock, supplies_fd, parent, drop, scan_fn, timer, keep=()):
 
 
 class ScanHelper:
-    """a forked process that scans the supplies dirfd as nobody"""
+    """forked scan helper for the supplies dirfd as nobody"""
 
     def __init__(self, supplies_fd, timer=time.monotonic, scan_fn=None, drop=True, keep=()):
         """fork the helper over a seqpacket pair"""
@@ -387,7 +387,7 @@ class ScanHelper:
         self.pid, self.owner, self.sock, self.fd = pid, parent, ours, ours.fileno()
 
     def submit(self):
-        """send the helper a scan request"""
+        """write b"s" to the helper socket"""
         try:
             self.sock.send(b"s")
         except (BrokenPipeError, ConnectionResetError):
@@ -406,13 +406,13 @@ class ScanHelper:
         reply = json.loads(raw)
         ms = reply.get("ms")
         if not isinstance(ms, int) or ms < 0:
-            raise ValueError("the scan helper sent no scan time")
+            raise ValueError("no ms in the scan helper reply")
         if "error" in reply:
-            return RuntimeError("scan helper: %s" % reply["error"]), ms
+            return RuntimeError("scan helper error=%s" % reply["error"]), ms
         data, pairs, batteries = reply.get("data"), reply.get("pairs"), reply.get("batteries")
         if not (isinstance(data, str) and len(data) <= FILE_MAX and data.startswith("version=1\npresent=")
                 and data.endswith("\nend=1\n") and isinstance(batteries, int) and batteries >= 0):
-            raise ValueError("the scan helper sent a malformed reading")
+            raise ValueError("malformed reading in the scan helper reply")
         dropped, denied = set(reply.get("dropped") or ()), set(reply.get("denied") or ())
         return (data.encode("ascii"), [tuple(p) for p in pairs] if pairs else None, batteries, dropped, denied), ms
 
@@ -451,8 +451,7 @@ class BatteryRelay:
         if not staged:
             self.failed = "unstaged"
             self.close()
-            self.log("RHIZO_MARKER battery_relay=failed reason=unstaged -- no host-battery was staged, "
-                     "Android reports no battery")
+            self.log("RHIZO_MARKER battery_relay=failed reason=unstaged")
         return staged
 
     def fds(self):
@@ -500,7 +499,7 @@ class BatteryRelay:
             self.due = at if self.last_start is None else max(at, self.last_start + COALESCE_S)
 
     def _drain(self):
-        """return true when a queued uevent names a power supply"""
+        """return true when a queued uevent has SUBSYSTEM=power_supply"""
         hit = False
         for _ in range(DRAIN_MAX):
             try:
@@ -520,7 +519,7 @@ class BatteryRelay:
         return hit
 
     def _landed(self, result, ms):
-        """log a finished scan and write it when it changed"""
+        """log a finished scan and write host-battery when data differs from self.written"""
         self.in_flight = False
         if isinstance(result, Exception):
             raise result
@@ -528,9 +527,9 @@ class BatteryRelay:
         if ms > SLOW_SCAN_MS:
             self.log(f"RHIZO_MARKER battery_relay=slow scan_ms={ms}")
         for name in sorted(dropped - self.dropped):
-            self.log(f"rhizo-battery: ignoring {name}, outside what a battery reports")
+            self.log(f"rhizo-battery {name} outside the plausible range")
         for name in sorted(denied - self.dropped):
-            self.log(f"RHIZO_MARKER battery_relay=denied attr={name} -- the scan helper, as nobody, may not read it")
+            self.log(f"RHIZO_MARKER battery_relay=denied attr={name}")
         self.dropped |= dropped | denied
         if self.batteries is None:
             self.log(f"RHIZO_MARKER battery_relay=listening batteries={batteries} "
@@ -541,7 +540,7 @@ class BatteryRelay:
             self._write(data, pairs)
 
     def _write(self, data, pairs):
-        """rewrite host-battery in place, retrying while it is locked"""
+        """rewrite host-battery in place and retry while flock fails"""
         try:
             wrote = write_in_place(self.state_fd, HOST_BATTERY_FILE, data)
         except OSError as e:
@@ -585,10 +584,10 @@ class BatteryRelay:
         return None
 
     def _finish(self, state):
-        """end the relay and log what host-battery holds now"""
+        """end the relay and log the host-battery state"""
         self.done, self.clear_at = True, None
         self.close()
-        self.log(f"RHIZO_MARKER battery_relay=stopped host_battery={state} -- {FINISHED[state]}")
+        self.log(f"RHIZO_MARKER battery_relay=stopped host_battery={state}")
 
     def _close_sources(self):
         """close the uevent socket and the scan worker"""
@@ -608,11 +607,6 @@ class BatteryRelay:
         self.done = True
 
 
-FINISHED = {"no-battery": "host-battery reads no battery, Android reports no battery",
-            "absent": "host-battery is gone, Android reports no battery",
-            "last-reading": "host-battery still holds the last reading written, which Android keeps showing"}
-
-
 def open_uevent_socket():
     """return a nonblocking socket on the kernel's uevent group"""
     sock = socket.socket(socket.AF_NETLINK, socket.SOCK_DGRAM | socket.SOCK_NONBLOCK | socket.SOCK_CLOEXEC,
@@ -627,7 +621,7 @@ def open_uevent_socket():
 
 def open_relay(supplies=SUPPLY_CLASS, state_dir=RHIZO_DEVICE_STATE_DIR, state_root=RHIZO_STATE_DIR, log=kmsg,
                open_socket=open_uevent_socket, clock=time.monotonic, worker_fn=ScanHelper):
-    """return a relay over newly opened host handles, or None"""
+    """open the host handles and return a relay, or None"""
     opened, sock, step = [], None, "supplies"
     try:
         supplies_fd = os.open(supplies, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
@@ -649,7 +643,7 @@ def open_relay(supplies=SUPPLY_CLASS, state_dir=RHIZO_DEVICE_STATE_DIR, state_ro
         if sock is not None:
             sock.close()
         why = str(e) if isinstance(e, ValueError) else _errname(e)
-        log(f"RHIZO_MARKER battery_relay=failed reason=open:{step}:{why} -- Android reports no battery")
+        log(f"RHIZO_MARKER battery_relay=failed reason=open:{step}:{why}")
         return None
     return BatteryRelay(sock, state_fd, worker, NO_BATTERY, log=log, clock=clock)
 
@@ -661,7 +655,7 @@ def arm(source, host_mode=False, domain="", log=kmsg, open_fn=None):
         return None
     core.set_host_battery(NO_BATTERY)
     if host_mode and (domain == "kernel" or domain.startswith("u:r:kernel:")):
-        log("RHIZO_MARKER battery_relay=failed reason=host-mode-kernel-domain -- Android reports no battery")
+        log("RHIZO_MARKER battery_relay=failed reason=host-mode-kernel-domain")
         return None
     return (open_fn or open_relay)(log=log)
 
@@ -672,16 +666,16 @@ SHUTDOWN_MAX = 128
 
 
 class ShutdownReason:
-    """the shutdown reason Android's init persists under /metadata"""
+    """shutdown reason file of Android init under /metadata"""
 
     def __init__(self, metadata_dir, log=kmsg):
-        """open the sandbox's /metadata and stamp the reason file"""
+        """open metadata_dir and set self.before to _stamp()"""
         self.log = log
         try:
             self.fd = os.open(metadata_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         except OSError as e:
             self.fd = -1
-            log(f"shutdown reason: {metadata_dir} unopenable ({_errname(e)}) -- no android_shutdown marker")
+            log(f"failed to open {metadata_dir} ({_errname(e)})")
         self.before = self._stamp()
 
     def _open(self):
@@ -715,7 +709,7 @@ class ShutdownReason:
             os.close(fd)
 
     def reason(self):
-        """return the reason when the file changed during this launch"""
+        """return the reason when the reason file differs from self.before"""
         fd = self._open()
         if fd < 0:
             return None

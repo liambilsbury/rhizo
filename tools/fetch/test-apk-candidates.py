@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# print the F-Droid index's test APK candidates, smallest first
+# F-Droid index-v2.json test APK candidate list, smallest first
 import json, sys
 
 DANGEROUS = {

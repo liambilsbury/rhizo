@@ -1,4 +1,4 @@
-// register a rhizo instance's input devices with its input fence
+// uinput and uhid device registration with a rhizo instance input fence
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
@@ -40,7 +40,7 @@
 #elif defined(__aarch64__)
 #define THIS_AUDIT_ARCH AUDIT_ARCH_AARCH64
 #else
-#error "rhizo-inputd's seccomp filter names x86_64 and aarch64 only"
+#error "no THIS_AUDIT_ARCH outside __x86_64__ and __aarch64__"
 #endif
 #ifndef __NR_pidfd_open
 #define __NR_pidfd_open 434
@@ -68,13 +68,13 @@ static void rz_log(const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	fprintf(stderr, "rhizo-inputd %s: ", g_mode);
+	fprintf(stderr, "[rhizo-inputd %s] ", g_mode);
 	vfprintf(stderr, fmt, ap);
 	fputc('\n', stderr);
 	va_end(ap);
 }
 
-// send a seqpacket message with an optional fd
+// call sendmsg with text and an optional fd
 static int send_msg(int s, const char *text, int fd)
 {
 	struct iovec iov = { .iov_base = (void *)text, .iov_len = strlen(text) };
@@ -94,7 +94,7 @@ static int send_msg(int s, const char *text, int fd)
 	return sendmsg(s, &m, MSG_NOSIGNAL) < 0 ? -1 : 0;
 }
 
-// receive a message and an optional fd
+// call recvmsg for text and an optional fd
 static ssize_t recv_msg(int s, char *buf, size_t len, int *fd)
 {
 	char cbuf[CMSG_SPACE(sizeof(int))];
@@ -186,7 +186,7 @@ static const char *prop(const char *body, size_t len, const char *key, char *out
 	return NULL;
 }
 
-// send a sd_notify message with an optional fd
+// call sendmsg on NOTIFY_SOCKET with text and an optional fd
 static int sd_notify_fd(const char *text, int fd)
 {
 	const char *path = getenv("NOTIFY_SOCKET");
@@ -224,7 +224,7 @@ static int sd_notify_fd(const char *text, int fd)
 	return r < 0 ? -1 : 0;
 }
 
-// hand a descriptor to the systemd fd store
+// write FDSTORE=1 or FDSTOREREMOVE=1 for name to NOTIFY_SOCKET
 static int fdstore(const char *name, int fd)
 {
 	char text[128];
@@ -233,7 +233,7 @@ static int fdstore(const char *name, int fd)
 	return sd_notify_fd(text, fd);
 }
 
-// take back the fds systemd kept for this unit
+// adopt the LISTEN_FDS listener and cuse fds
 static void adopt_stored(int *listener, int *cuse)
 {
 	const char *pid = getenv("LISTEN_PID"), *n = getenv("LISTEN_FDS"), *names = getenv("LISTEN_FDNAMES");
@@ -287,7 +287,7 @@ static int read_ctx(const char *path, char *out, size_t len)
 	return 0;
 }
 
-// read the recorded SELinux mode
+// parse RHIZO_SELINUX_MODE_FILE or /run/rhizo-selinux-mode
 static int selinux_namespace_mode(void)
 {
 	const char *path = getenv("RHIZO_SELINUX_MODE_FILE");
@@ -384,13 +384,12 @@ static void exit_if_kernel_after_load(void)
 	}
 	if (strcmp(cur, "u:r:kernel:s0"))
 		return;
-	rz_log("RHIZO_MARKER input_owner=failed reason=domain-kernel-after-load want=%s"
-	       " -- exiting", g_deferred_ctx);
+	rz_log("RHIZO_MARKER input_owner=failed reason=domain-kernel-after-load want=%s", g_deferred_ctx);
 	exit(1);
 }
 
 
-// pending uhid create reported by the broker
+// pending uhid create from the broker
 struct pending_hid {
 	int used;
 	int client;
@@ -422,7 +421,7 @@ static int owned_index(const char *devpath)
 	return -1;
 }
 
-// return whether devpath is an owned device or sits under one
+// return whether devpath is a g_owned entry or under one
 static int owned_covers(const char *devpath)
 {
 	for (int i = 0; i < MAX_OWNED; i++) {
@@ -433,7 +432,7 @@ static int owned_covers(const char *devpath)
 	return 0;
 }
 
-// send a line to the fence
+// call send_msg with a line to the fence
 static void fence_send(const char *verb, const char *devpath)
 {
 	char line[MSG_MAX];
@@ -480,7 +479,7 @@ static void save_state(void)
 		rz_log("RHIZO_MARKER input_owner=failed reason=state:%d path=%s", errno, g_state_path);
 }
 
-// read back the saved owned set
+// read the owned set from the state file
 static void load_state(void)
 {
 	char line[PATH_LEN], path[PATH_LEN * 2];
@@ -530,7 +529,7 @@ static void disown(const char *devpath)
 	fence_send("del", devpath);
 }
 
-// match a hid device to its pending create
+// match a hid device to a pending create by HID_PHYS
 static struct pending_hid *match_hid(const char *devpath, const char *body, size_t len)
 {
 	char phys[65];
@@ -547,7 +546,7 @@ static struct pending_hid *match_hid(const char *devpath, const char *body, size
 	return NULL;
 }
 
-// get the uhid directory a device path sits in
+// write the /devices/virtual/misc/uhid/ directory of devpath to out
 static int uhid_parent(const char *devpath, char *out, size_t outlen)
 {
 	static const char pre[] = "/devices/virtual/misc/uhid/";
@@ -604,7 +603,7 @@ static int tgid_of(int tid)
 	return tgid > 0 ? tgid : -1;
 }
 
-// create the caller's uinput device and register it
+// call UI_DEV_CREATE on the caller's uinput fd and register the device
 static void handle_notification(int listener)
 {
 	struct seccomp_notif *req = calloc(1, g_sizes.seccomp_notif);
@@ -618,7 +617,7 @@ static void handle_notification(int listener)
 	}
 	if (ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, req) < 0) {
 		if (errno != ENOENT)
-			rz_log("notification receive failed: errno=%d", errno);
+			rz_log("SECCOMP_IOCTL_NOTIF_RECV failed errno=%d", errno);
 		goto out;
 	}
 	resp->id = req->id;
@@ -662,7 +661,7 @@ static void handle_notification(int listener)
 		}
 	}
 	if (ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, resp) < 0 && errno != ENOENT)
-		rz_log("notification reply failed: errno=%d", errno);
+		rz_log("SECCOMP_IOCTL_NOTIF_SEND failed errno=%d", errno);
 out:
 	if (target >= 0)
 		close(target);
@@ -703,7 +702,7 @@ static void handle_uevent(int nl)
 	}
 }
 
-// record a uhid create under a new token
+// record a uhid create under a random token
 static int add_pending(const char *tag, int client, char *out, size_t outlen)
 {
 	struct pending_hid p = { .used = 1, .client = client };
@@ -747,7 +746,7 @@ static int peer_uid(int c)
 #define SO_PEERPIDFD 77
 #endif
 
-// return the pid a pidfd names, or -1
+// return the Pid: field of the pidfd fdinfo, or -1
 static int pidfd_pid(int pidfd)
 {
 	char path[64], line[128];
@@ -764,7 +763,7 @@ static int pidfd_pid(int pidfd)
 	return pid > 0 ? pid : -1;
 }
 
-// return whether the peer is this instance's uhid broker
+// return whether the peer is the uhid broker of g_instance
 static int peer_is_broker(int c)
 {
 	struct ucred cr = { .pid = -1 };
@@ -799,11 +798,11 @@ out:
 	return ok;
 }
 
-// open the CUSE channel and answer CUSE_INIT
+// open the CUSE channel and reply to CUSE_INIT
 static int cuse_open_init(const char *path, int fd)
 {
 	static _Alignas(8) uint8_t buf[FUSE_MIN_READ_BUFFER];
-	_Static_assert(sizeof(buf) >= FUSE_MIN_READ_BUFFER, "a CUSE read buffer below FUSE_MIN_READ_BUFFER");
+	_Static_assert(sizeof(buf) >= FUSE_MIN_READ_BUFFER, "sizeof(buf) >= FUSE_MIN_READ_BUFFER");
 	char info[64];
 
 	if (fd < 0)
@@ -986,7 +985,7 @@ static int run_supervise(const char *sock_path, const char *owned_path, int nl, 
 		if (poll(pf, 4 + MAX_CLIENTS, -1) < 0) {
 			if (errno == EINTR)
 				continue;
-			rz_log("poll failed: errno=%d", errno);
+			rz_log("poll failed errno=%d", errno);
 			return 1;
 		}
 		exit_if_kernel_after_load();
@@ -1063,13 +1062,13 @@ static int g_cuse = -1, g_sup = -1;
 static const char *g_uhid_path = "/dev/uhid";
 static unsigned g_instance;
 
-// send a reply for a FUSE request
+// call fuse_wire_reply for a FUSE unique
 static void reply(uint64_t unique, int error, const void *data, uint32_t len)
 {
 	struct iovec iov = { .iov_base = (void *)data, .iov_len = len };
 
 	if (fuse_wire_reply(g_cuse, unique, error, &iov, len ? 1 : 0) < 0 && errno != ENOENT)
-		rz_log("reply to %" PRIu64 " failed: errno=%d", unique, errno);
+		rz_log("fuse_wire_reply failed for unique %" PRIu64 " errno=%d", unique, errno);
 }
 
 // wake a poller of the CUSE device
@@ -1101,7 +1100,7 @@ static void tag_of(uint64_t fh, char *out, size_t len)
 	snprintf(out, len, "uhid%u:%d:%" PRIu64, g_instance, (int)getpid(), fh);
 }
 
-// send a line to the supervisor and read its answer
+// write a line to the supervisor and read the ok reply
 static int sup_send(const char *line, char *ack, size_t acklen)
 {
 	char a[80] = { 0 };
@@ -1117,7 +1116,7 @@ static int sup_send(const char *line, char *ack, size_t acklen)
 	}
 	if (fd >= 0)
 		close(fd);
-	rz_log("RHIZO_MARKER input_owner=unsent to the supervisor (%s): %.80s", a[0] ? a : "no answer", line);
+	rz_log("RHIZO_MARKER input_owner=unsent reply='%s' line='%.80s'", a[0] ? a : "none", line);
 	return -1;
 }
 
@@ -1146,7 +1145,7 @@ static int report_create(uint64_t fh, uint8_t *ev, size_t size)
 	return 0;
 }
 
-// tell the supervisor a handle is done
+// write done <tag> to the supervisor
 static void report_done(uint64_t fh)
 {
 	char tag[64], line[128];
@@ -1205,7 +1204,7 @@ static void op_write(uint64_t unique, const struct fuse_write_in *wi, uint8_t *d
 	reply(unique, 0, &wo, sizeof(wo));
 }
 
-// answer a read if the kernel has an event
+// reply to a read if the uhid fd has an event
 static int try_read(uint64_t unique, uint64_t fh, uint32_t size)
 {
 	static uint8_t buf[sizeof(struct uhid_event)];
@@ -1220,7 +1219,7 @@ static int try_read(uint64_t unique, uint64_t fh, uint32_t size)
 	return 1;
 }
 
-// answer or queue a read of the device
+// reply to or queue a read of the device
 static void op_read(uint64_t unique, const struct fuse_read_in *ri)
 {
 	if (ri->fh >= MAX_HANDLES || !g_h[ri->fh].used) {
@@ -1278,7 +1277,7 @@ static void op_release(uint64_t unique, const struct fuse_release_in *ri)
 	reply(unique, 0, NULL, 0);
 }
 
-// report poll readiness or arm a wakeup
+// reply with poll revents and arm a wakeup
 static void op_poll(uint64_t unique, const struct fuse_poll_in *pi)
 {
 	if (pi->fh >= MAX_HANDLES || !g_h[pi->fh].used) {
@@ -1294,7 +1293,7 @@ static void op_poll(uint64_t unique, const struct fuse_poll_in *pi)
 	reply(unique, 0, &po, sizeof(po));
 }
 
-// answer a queued read that was interrupted
+// reply EINTR to an interrupted queued read
 static void op_interrupt(const struct fuse_interrupt_in *ii)
 {
 	for (int i = 0; i < MAX_READS; i++)
@@ -1304,12 +1303,12 @@ static void op_interrupt(const struct fuse_interrupt_in *ii)
 		}
 }
 
-// handle a request from /dev/cuse
+// handle a FUSE message from /dev/cuse
 static int cuse_request(void)
 {
 	static _Alignas(8) uint8_t buf[sizeof(struct fuse_in_header) + sizeof(struct fuse_write_in) +
 				       sizeof(struct uhid_event) + 4096];
-	_Static_assert(sizeof(buf) >= FUSE_MIN_READ_BUFFER, "a CUSE read buffer below FUSE_MIN_READ_BUFFER");
+	_Static_assert(sizeof(buf) >= FUSE_MIN_READ_BUFFER, "sizeof(buf) >= FUSE_MIN_READ_BUFFER");
 	ssize_t n = read(g_cuse, buf, sizeof(buf));
 
 	if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == ENOENT))
@@ -1401,7 +1400,7 @@ static int install_uhid_seccomp(void)
 	return (int)syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &prog);
 }
 
-// get this instance's CUSE channel from the supervisor
+// get the CUSE channel of g_instance from the supervisor
 static int take_cuse(void)
 {
 	char a[16];
@@ -1451,7 +1450,7 @@ static int run_uhid(const char *sup_path, int no_seccomp)
 		}
 		exit_if_kernel_after_load();
 		if (pf[1 + MAX_HANDLES].revents) {
-			rz_log("RHIZO_MARKER input_owner=failed reason=supervisor-gone -- exiting");
+			rz_log("RHIZO_MARKER input_owner=failed reason=supervisor-gone");
 			return 1;
 		}
 		for (int i = 0; i < MAX_HANDLES; i++) {
@@ -1474,7 +1473,7 @@ static int run_uhid(const char *sup_path, int no_seccomp)
 }
 
 
-// exit 0 when any instance's supervisor owns devpath
+// return 0 when an "owned devpath" query on a socket in pattern returns yes
 static int run_owned(const char *devpath, const char *pattern)
 {
 	glob_t g;
@@ -1502,14 +1501,14 @@ static int run_owned(const char *devpath, const char *pattern)
 static int usage(void)
 {
 	fprintf(stderr,
-		"usage: rhizo-inputd supervise --instance N --socket PATH --fence PATH [--state PATH]\n"
-		"                              [--owned-socket PATH] [--owned-uid UID]\n"
-		"                              [--cuse PATH | --cuse-fd N] [--uinput-rdev MAJ:MIN] [--sys ROOT]\n"
-		"                              [--broker-cgroup SUFFIX] [--listener-uid UID] [--uevents FIXTURE-SOCKET]\n"
-		"                              [--attr DIR] [--selinuxfs DIR]\n"
-		"       rhizo-inputd uhid --instance N --supervisor PATH [--uhid PATH] [--no-seccomp]\n"
-		"                         [--attr DIR] [--selinuxfs DIR]\n"
-		"       rhizo-inputd owned DEVPATH [--sockets GLOB]\n");
+		"rhizo-inputd supervise --instance N --socket PATH --fence PATH [--state PATH]\n"
+		"                       [--owned-socket PATH] [--owned-uid UID]\n"
+		"                       [--cuse PATH | --cuse-fd N] [--uinput-rdev MAJ:MIN] [--sys ROOT]\n"
+		"                       [--broker-cgroup SUFFIX] [--listener-uid UID] [--uevents FIXTURE-SOCKET]\n"
+		"                       [--attr DIR] [--selinuxfs DIR]\n"
+		"rhizo-inputd uhid --instance N --supervisor PATH [--uhid PATH] [--no-seccomp]\n"
+		"                  [--attr DIR] [--selinuxfs DIR]\n"
+		"rhizo-inputd owned DEVPATH [--sockets GLOB]\n");
 	return 2;
 }
 

@@ -1,7 +1,7 @@
 #ifndef RHIZO_C2_AOSP_HIDL_BUFFERQUEUE_V2_0_IGRAPHICBUFFERPRODUCER_H
 #define RHIZO_C2_AOSP_HIDL_BUFFERQUEUE_V2_0_IGRAPHICBUFFERPRODUCER_H
 
-// declare the HIDL IGraphicBufferProducer
+// forward declaration of the HIDL IGraphicBufferProducer
 
 #include <utils/StrongPointer.h>
 
